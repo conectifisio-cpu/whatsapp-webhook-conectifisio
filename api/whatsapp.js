@@ -1,9 +1,5 @@
-// ===== Memória simples (funciona bem em teste; em produção a gente troca por banco/KV) =====
-const processedMessageIds = new Set();
-const lastChoiceByUser = new Map(); // { waId: "menu" | "humano" | ... }
-
 export default async function handler(req, res) {
-  // 1) Verificação do webhook (Meta chama via GET)
+  // ===== 1) Verificação do webhook (GET) =====
   if (req.method === "GET") {
     const mode = req.query["hub.mode"];
     const token = req.query["hub.verify_token"];
@@ -15,104 +11,62 @@ export default async function handler(req, res) {
     return res.status(403).send("Forbidden");
   }
 
-  // 2) Recebimento de eventos (Meta chama via POST)
+  // ===== 2) Recebimento de eventos (POST) =====
   if (req.method === "POST") {
     try {
-      const entry = req.body?.entry?.[0];
-      const change = entry?.changes?.[0];
-      const value = change?.value;
+      // Vercel às vezes entrega body como string
+      const body =
+        typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-      // Ignora evento vazio
-      if (!value) return res.status(200).send("OK");
+      console.log("[WEBHOOK][POST] received");
 
-      // Ignora status (delivered/read/etc.)
-      if (value.statuses?.length) return res.status(200).send("OK");
+      // Percorre entries/changes (pode vir mais de um)
+      const entries = body?.entry || [];
+      for (const entry of entries) {
+        const changes = entry?.changes || [];
+        for (const change of changes) {
+          const value = change?.value;
+          if (!value) continue;
 
-      const msg = value.messages?.[0];
-      if (!msg) return res.status(200).send("OK");
+          // (Opcional) se quiser, você pode validar que o evento é do seu phone_number_id
+          const incomingPhoneNumberId = value?.metadata?.phone_number_id;
+          const myPhoneNumberId = process.env.PHONE_NUMBER_ID;
 
-      const from = msg.from;        // ex: "5511971904516"
-      const msgId = msg.id;         // id único
-      const type = msg.type;
+          // Se vier um payload de teste com phone_number_id fake, isso evita confusão.
+          // MAS NÃO impede o teste do painel (ele só precisa de 200 OK).
+          if (incomingPhoneNumberId && myPhoneNumberId && incomingPhoneNumberId !== myPhoneNumberId) {
+            console.log(
+              `[WEBHOOK] ignoring event for phone_number_id=${incomingPhoneNumberId} (expected ${myPhoneNumberId})`
+            );
+            continue;
+          }
 
-      // Dedupe básico (Meta pode reenviar)
-      if (msgId && processedMessageIds.has(msgId)) {
-        return res.status(200).send("OK");
-      }
-      if (msgId) processedMessageIds.add(msgId);
+          const messages = value?.messages || [];
+          for (const msg of messages) {
+            const from = msg?.from; // ex: "5511999999999"
+            const type = msg?.type;
 
-      // Só texto por enquanto
-      if (type !== "text") {
-        await sendText(from, "Por enquanto eu entendo apenas mensagens de texto 🙂\nDigite 0 para ver o menu.");
-        return res.status(200).send("OK");
-      }
+            if (!from) continue;
 
-      const text = (msg.text?.body || "").trim();
+            // Só vamos responder texto por enquanto
+            const text = type === "text" ? (msg?.text?.body || "").trim() : "";
 
-      // Normaliza
-      const t = text.toLowerCase();
+            console.log(`[WEBHOOK] incoming message type=${type} from=${from} text="${text}"`);
 
-      // Comandos rápidos
-      if (t === "0" || t === "menu") {
-        lastChoiceByUser.set(from, "menu");
-        await sendText(from, getMenu());
-        return res.status(200).send("OK");
-      }
+            if (!text) {
+              // Se não for texto, só não responde (por enquanto)
+              continue;
+            }
 
-      if (t === "9" || t.includes("atendente") || t.includes("humano")) {
-        lastChoiceByUser.set(from, "humano");
-        await sendText(
-          from,
-          "Certo. Me diga seu *nome* e *o que você precisa* que eu já encaminho pra equipe.\n\n(Para voltar ao menu: digite 0)"
-        );
-        return res.status(200).send("OK");
-      }
-
-      // Se usuário está no modo "humano", só confirma recebimento
-      if (lastChoiceByUser.get(from) === "humano") {
-        // Aqui depois a gente integra com WhatsApp da recepção / e-mail / planilha / CRM
-        await sendText(from, "Perfeito — recebi. Já vou encaminhar pra equipe. ✅\n\n(Para voltar ao menu: digite 0)");
-        return res.status(200).send("OK");
+            await sendText(from, `Recebi: ${text}`);
+          }
+        }
       }
 
-      // Opções do menu
-      if (t === "1") {
-        await sendText(
-          from,
-          "🗓️ *Agendamento*\nMe diga:\n1) Nome completo\n2) Queixa / objetivo\n3) Melhor dia/horário\n\n(Para falar com atendente: 9 | Menu: 0)"
-        );
-        return res.status(200).send("OK");
-      }
-
-      if (t === "2") {
-        await sendText(
-          from,
-          "💰 *Valores*\n• Sessão avulsa: sob consulta\n• RPG: R$ 150,00\n\nSe quiser, me diga qual serviço você procura. (Menu: 0)"
-        );
-        return res.status(200).send("OK");
-      }
-
-      if (t === "3") {
-        await sendText(
-          from,
-          "📍 *Endereço*\nRua Alegre, 667 — Santa Paula — São Caetano do Sul/SP.\n\nQuer a rota no Google Maps? Responda: *SIM*.\n(Menu: 0)"
-        );
-        return res.status(200).send("OK");
-      }
-
-      if (t === "sim" && lastChoiceByUser.get(from) !== "humano") {
-        await sendText(
-          from,
-          "Aqui está a rota (copie e cole no Maps):\nhttps://www.google.com/maps/search/?api=1&query=Rua+Alegre+667+Sao+Caetano+do+Sul"
-        );
-        return res.status(200).send("OK");
-      }
-
-      // Se chegou aqui, não entendeu: manda menu
-      await sendText(from, "Não entendi. Digite *0* para ver o menu.");
       return res.status(200).send("OK");
     } catch (e) {
       console.error("Webhook error:", e);
+      // Meta recomenda responder 200 mesmo em erro para evitar re-tentativas infinitas
       return res.status(200).send("OK");
     }
   }
@@ -120,20 +74,18 @@ export default async function handler(req, res) {
   return res.status(405).send("Method Not Allowed");
 }
 
-function getMenu() {
-  return (
-    "👋 Olá! Como posso ajudar?\n\n" +
-    "1) Agendar\n" +
-    "2) Valores\n" +
-    "3) Endereço\n" +
-    "9) Falar com atendente\n\n" +
-    "Responda com o número da opção."
-  );
-}
-
 async function sendText(to, body) {
   const phoneNumberId = process.env.PHONE_NUMBER_ID;
   const token = process.env.WHATSAPP_TOKEN;
+
+  if (!phoneNumberId) {
+    console.error("sendText: PHONE_NUMBER_ID missing");
+    return;
+  }
+  if (!token) {
+    console.error("sendText: WHATSAPP_TOKEN missing");
+    return;
+  }
 
   const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
 
@@ -156,5 +108,7 @@ async function sendText(to, body) {
   if (!resp.ok) {
     const err = await resp.text();
     console.error("SendText failed:", resp.status, err);
+  } else {
+    console.log("SendText OK ->", to);
   }
 }
