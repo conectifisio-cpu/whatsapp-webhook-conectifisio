@@ -1,114 +1,155 @@
-export default async function handler(req, res) {
-  // ====== 1) Verificação do webhook (GET) ======
-  if (req.method === "GET") {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+// api/whatsapp.js  (Vercel Serverless Function)
 
-    const ok = mode === "subscribe" && token === process.env.VERIFY_TOKEN;
+module.exports = async (req, res) => {
+  // =========================
+  // 1) VERIFICAÇÃO (GET)
+  // =========================
+  if (req.method === 'GET') {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
 
-    if (ok) {
-      console.log("[WEBHOOK][GET] verified OK");
+    // ajuda quando você abre /api/whatsapp sem query
+    if (!mode && !token && !challenge) {
+      return res.status(200).send('OK');
+    }
+
+    if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+      console.log('[WEBHOOK][GET] verified OK');
       return res.status(200).send(challenge);
     }
 
-    console.warn("[WEBHOOK][GET] forbidden", { mode, tokenReceived: token ? "***" : null });
-    return res.status(403).send("Forbidden");
+    console.log('[WEBHOOK][GET] forbidden', { mode, token });
+    return res.status(403).send('Forbidden');
   }
 
-  // ====== 2) Recebimento de eventos (POST) ======
-  if (req.method === "POST") {
+  // =========================
+  // 2) EVENTOS (POST)
+  // =========================
+  if (req.method === 'POST') {
     try {
-      // Log leve (evita imprimir token e coisas enormes)
-      console.log("[WEBHOOK][POST] received");
+      const body = normalizeBody(req.body);
+      console.log('[WEBHOOK][POST] received');
 
-      const entry = req.body?.entry?.[0];
-      const change = entry?.changes?.[0];
-      const value = change?.value;
+      // Pode vir em lote (várias entries/changes)
+      const entries = Array.isArray(body?.entry) ? body.entry : [];
+      for (const entry of entries) {
+        const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+        for (const change of changes) {
+          const value = change?.value;
 
-      // Às vezes vem status update, não é mensagem de usuário
-      const status = value?.statuses?.[0];
-      if (status) {
-        console.log("[WEBHOOK][POST] status update:", {
-          id: status.id,
-          status: status.status,
-          timestamp: status.timestamp
-        });
-        return res.status(200).send("OK");
+          // ===== IMPORTANTÍSSIMO =====
+          // Se o evento não for do seu PHONE_NUMBER_ID, ignore.
+          // Isso evita erro no "teste do painel" (payload fake).
+          const incomingPhoneNumberId = value?.metadata?.phone_number_id;
+          const myPhoneNumberId = String(process.env.PHONE_NUMBER_ID || '');
+
+          if (incomingPhoneNumberId && myPhoneNumberId) {
+            if (String(incomingPhoneNumberId) !== myPhoneNumberId) {
+              console.log(
+                `[WEBHOOK] ignoring event for phone_number_id=${incomingPhoneNumberId} (mine=${myPhoneNumberId})`
+              );
+              continue;
+            }
+          }
+
+          // Mensagens recebidas
+          const messages = Array.isArray(value?.messages) ? value.messages : [];
+          for (const msg of messages) {
+            const from = msg?.from; // wa_id (sem +)
+            const type = msg?.type;
+
+            if (!from || !type) continue;
+
+            let text = '';
+
+            if (type === 'text') {
+              text = (msg.text?.body || '').trim();
+            } else if (type === 'interactive') {
+              // caso você use botões/listas no futuro
+              const i = msg.interactive || {};
+              text =
+                i?.button_reply?.title ||
+                i?.list_reply?.title ||
+                '[interactive]';
+            } else {
+              text = `[${type}]`;
+            }
+
+            console.log(
+              `[WEBHOOK][MSG] from: ${from} type: ${type} text: ${text || '(empty)'}`
+            );
+
+            // Resposta simples (eco)
+            await sendText(from, `Recebi: ${text || '(sem texto)'}`);
+          }
+        }
       }
 
-      const msg = value?.messages?.[0];
-      if (!msg) {
-        // nada pra processar
-        return res.status(200).send("OK");
-      }
-
-      const from = msg.from; // wa_id do usuário (número sem '+')
-      const type = msg.type;
-
-      let text = "";
-      if (type === "text") {
-        text = msg.text?.body?.trim() || "";
-      } else {
-        text = ""; // outros tipos (imagem, áudio etc)
-      }
-
-      console.log("[WEBHOOK][MSG] from:", from, "type:", type, "text:", text);
-
-      // Resposta simples (eco)
-      const reply = type === "text"
-        ? `Recebi: ${text}`
-        : `Recebi uma mensagem do tipo "${type}". (por enquanto eu respondo só texto)`;
-
-      const sendResult = await sendText(from, reply);
-
-      if (!sendResult.ok) {
-        console.error("[SEND] failed:", sendResult.status, sendResult.bodyText);
-      } else {
-        console.log("[SEND] ok:", sendResult.status);
-      }
-
-      return res.status(200).send("OK");
+      return res.status(200).send('OK');
     } catch (e) {
-      console.error("[WEBHOOK] error:", e);
-      // sempre responda 200 pro Meta não ficar reenviando em loop
-      return res.status(200).send("OK");
+      console.error('[WEBHOOK] error:', e);
+      // Meta recomenda sempre 200 para não re-tentar sem parar
+      return res.status(200).send('OK');
     }
   }
 
-  return res.status(405).send("Method Not Allowed");
+  res.setHeader('Allow', 'GET, POST');
+  return res.status(405).send('Method Not Allowed');
+};
+
+// ----------------------------
+// Helpers
+// ----------------------------
+function normalizeBody(body) {
+  // Em alguns casos pode vir como string
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body);
+    } catch {
+      return {};
+    }
+  }
+  return body || {};
 }
 
 async function sendText(to, body) {
   const phoneNumberId = process.env.PHONE_NUMBER_ID;
   const token = process.env.WHATSAPP_TOKEN;
 
-  if (!phoneNumberId || !token) {
-    const msg = "Missing env vars: PHONE_NUMBER_ID and/or WHATSAPP_TOKEN";
-    console.error("[SEND] " + msg);
-    return { ok: false, status: 500, bodyText: msg };
+  if (!phoneNumberId) {
+    console.error('[SEND] missing PHONE_NUMBER_ID env var');
+    return;
+  }
+  if (!token) {
+    console.error('[SEND] missing WHATSAPP_TOKEN env var');
+    return;
   }
 
-  // Pode manter v19.0 se quiser; se preferir, troque para v24.0
   const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
 
   const payload = {
-    messaging_product: "whatsapp",
+    messaging_product: 'whatsapp',
     to,
-    type: "text",
+    type: 'text',
     text: { body }
   };
 
   const resp = await fetch(url, {
-    method: "POST",
+    method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Accept: "application/json"
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload)
   });
 
-  const bodyText = await resp.text();
-  return { ok: resp.ok, status: resp.status, bodyText };
+  if (!resp.ok) {
+    const err = await resp.text();
+    console.error('[SEND] failed:', resp.status, err);
+    return;
+  }
+
+  const data = await resp.json().catch(() => null);
+  console.log('[SEND] ok', data?.messages?.[0]?.id ? `msg_id=${data.messages[0].id}` : '');
 }
