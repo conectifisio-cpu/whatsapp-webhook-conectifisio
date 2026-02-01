@@ -1,84 +1,71 @@
-/**
- * Vercel / Next.js API Route
- * Endpoint:
- *   GET  /api/whatsapp  -> verificação do webhook (challenge)
- *   POST /api/whatsapp  -> recebe mensagens e responde
- */
-
-const GRAPH_API_VERSION = process.env.GRAPH_API_VERSION || 'v19.0';
+// api/whatsapp.js
 
 export default async function handler(req, res) {
-  // -------- 1) Verificação do webhook (Meta chama via GET) --------
-  if (req.method === 'GET') {
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
+  // Healthcheck simples (opcional)
+  // Se você abrir /api/whatsapp sem query, ele responde OK.
+  if (req.method === "GET" && !req.query?.["hub.mode"]) {
+    return res.status(200).send("OK");
+  }
 
-    if (mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+  // 1) Verificação do webhook (Meta chama via GET)
+  if (req.method === "GET") {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
       return res.status(200).send(challenge);
     }
-    return res.status(403).send('Forbidden');
+    return res.status(403).send("Forbidden");
   }
 
-  // -------- 2) Recebimento de eventos (Meta chama via POST) --------
-  if (req.method === 'POST') {
+  // 2) Recebimento de eventos (Meta chama via POST)
+  if (req.method === "POST") {
     try {
-      // Meta manda: { object, entry: [{ changes: [{ value: {...} }] }] }
-      const entries = Array.isArray(req.body?.entry) ? req.body.entry : [];
+      const body = parseBody(req);
 
-      // Percorre tudo (às vezes vem mais de um change no mesmo POST)
-      for (const entry of entries) {
-        const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+      const entry = body?.entry?.[0];
+      const change = entry?.changes?.[0];
+      const value = change?.value;
 
-        for (const change of changes) {
-          const value = change?.value;
+      // Quando não é mensagem (ex: status), só responde OK
+      const msg = value?.messages?.[0];
+      if (!msg) return res.status(200).send("OK");
 
-          // 2.1) Se for STATUS (entrega, lido etc.), não precisa responder
-          if (value?.statuses?.length) {
-            // você pode logar se quiser:
-            // console.log('Status event:', value.statuses?.[0]);
-            continue;
-          }
+      const from = msg.from; // ex: "5511971904516" (sem +)
+      const type = msg.type;
 
-          // 2.2) Se for MENSAGEM recebida
-          const msg = value?.messages?.[0];
-          if (!msg) continue;
+      let text = "";
+      if (type === "text") text = msg.text?.body?.trim() || "";
+      else text = `[${type}]`;
 
-          const from = msg.from; // wa_id do usuário (ex.: "551197...")
-          const type = msg.type;
+      // Debug básico no log do Vercel (Observability / Logs)
+      console.log("Incoming message:", { from, type, text });
 
-          let text = '';
+      // resposta simples (eco)
+      await sendText(from, `Recebi: ${text}`);
 
-          if (type === 'text') {
-            text = msg.text?.body?.trim() || '';
-          } else if (type === 'interactive') {
-            // botão / lista
-            const btn = msg.interactive?.button_reply?.title;
-            const list = msg.interactive?.list_reply?.title;
-            text = (btn || list || '').trim();
-          } else {
-            text = '';
-          }
-
-          // Resposta simples (eco)
-          if (text) {
-            await sendText(from, `Recebi: ${text}`);
-          } else {
-            await sendText(from, `Recebi sua mensagem 👍 (tipo: ${type})`);
-          }
-        }
-      }
-
-      // Sempre 200 OK para a Meta não reenviar
-      return res.status(200).send('OK');
+      return res.status(200).send("OK");
     } catch (e) {
-      console.error('Webhook error:', e);
-      // Mesmo em erro, devolve 200 para evitar retry infinito
-      return res.status(200).send('OK');
+      console.error("Webhook error:", e);
+      // Importante responder 200 para a Meta não ficar re-tentando sem parar
+      return res.status(200).send("OK");
     }
   }
 
-  return res.status(405).send('Method Not Allowed');
+  return res.status(405).send("Method Not Allowed");
+}
+
+function parseBody(req) {
+  // Dependendo do runtime, o body pode vir como objeto ou string
+  if (!req.body) return {};
+  if (typeof req.body === "object") return req.body;
+
+  try {
+    return JSON.parse(req.body);
+  } catch {
+    return {};
+  }
 }
 
 async function sendText(to, body) {
@@ -86,30 +73,36 @@ async function sendText(to, body) {
   const token = process.env.WHATSAPP_TOKEN;
 
   if (!phoneNumberId || !token) {
-    console.error('ENV faltando: PHONE_NUMBER_ID ou WHATSAPP_TOKEN');
+    console.error("Missing env vars:", {
+      PHONE_NUMBER_ID: !!phoneNumberId,
+      WHATSAPP_TOKEN: !!token,
+    });
     return;
   }
 
-  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`;
+  const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
 
   const payload = {
-    messaging_product: 'whatsapp',
+    messaging_product: "whatsapp",
     to,
-    type: 'text',
-    text: { body }
+    type: "text",
+    text: { body },
   };
 
   const resp = await fetch(url, {
-    method: 'POST',
+    method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 
+  const txt = await resp.text();
+
   if (!resp.ok) {
-    const err = await resp.text();
-    console.error('SendText failed:', resp.status, err);
+    console.error("SendText failed:", resp.status, txt);
+  } else {
+    console.log("SendText OK:", txt);
   }
 }
