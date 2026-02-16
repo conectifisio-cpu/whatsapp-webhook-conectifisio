@@ -1,114 +1,115 @@
-export default async function handler(req, res) {
-  // ===== 1) Verificação do webhook (GET) =====
-  if (req.method === "GET") {
-    const mode = req.query["hub.mode"];
-    const token = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+import os
+import json
+import requests
+import re
+from flask import Flask, request, jsonify
 
-    if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
-      return res.status(200).send(challenge);
-    }
-    return res.status(403).send("Forbidden");
-  }
+app = Flask(__name__)
 
-  // ===== 2) Recebimento de eventos (POST) =====
-  if (req.method === "POST") {
-    try {
-      // Vercel às vezes entrega body como string
-      const body =
-        typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+# ==========================================
+# CONFIGURAÇÕES DE SEGURANÇA E CONEXÃO
+# ==========================================
 
-      console.log("[WEBHOOK][POST] received");
+# 1. Use este token exatamente assim no painel "Meta Developers"
+VERIFY_TOKEN = "conectifisio_2024_seguro"
 
-      // Percorre entries/changes (pode vir mais de um)
-      const entries = body?.entry || [];
-      for (const entry of entries) {
-        const changes = entry?.changes || [];
-        for (const change of changes) {
-          const value = change?.value;
-          if (!value) continue;
+# 2. URL Final do Wix (apontando para o domínio principal para evitar redirecionamentos)
+WIX_WEBHOOK_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
-          // (Opcional) se quiser, você pode validar que o evento é do seu phone_number_id
-          const incomingPhoneNumberId = value?.metadata?.phone_number_id;
-          const myPhoneNumberId = process.env.PHONE_NUMBER_ID;
+def clean_cpf(cpf_str):
+    """ Remove pontos e traços, deixando apenas os 11 números do CPF """
+    return re.sub(r'\D', '', cpf_str)
 
-          // Se vier um payload de teste com phone_number_id fake, isso evita confusão.
-          // MAS NÃO impede o teste do painel (ele só precisa de 200 OK).
-          if (incomingPhoneNumberId && myPhoneNumberId && incomingPhoneNumberId !== myPhoneNumberId) {
-            console.log(
-              `[WEBHOOK] ignoring event for phone_number_id=${incomingPhoneNumberId} (expected ${myPhoneNumberId})`
-            );
-            continue;
-          }
+def sync_to_wix(data):
+    """ Envia os dados capturados para o Kanban do Wix CMS """
+    try:
+        print(f"Enviando dados de {data.get('from')} para o Wix...")
+        response = requests.post(WIX_WEBHOOK_URL, json=data, timeout=15)
+        
+        if response.status_code == 200:
+            print(f"Sucesso Wix: {response.json()}")
+            return True
+        else:
+            print(f"Erro Wix {response.status_code}: Verifique se o site foi PUBLICADO.")
+            return False
+    except Exception as e:
+        print(f"Falha de rede com Wix: {e}")
+        return False
 
-          const messages = value?.messages || [];
-          for (const msg of messages) {
-            const from = msg?.from; // ex: "5511999999999"
-            const type = msg?.type;
+# ==========================================
+# ROTA DE VERIFICAÇÃO (GET) - Para o Painel da Meta
+# ==========================================
 
-            if (!from) continue;
+@app.route("/whatsapp", methods=["GET"])
+def verify():
+    """ Valida o webhook quando você clica em 'Verificar e Salvar' na Meta """
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
 
-            // Só vamos responder texto por enquanto
-            const text = type === "text" ? (msg?.text?.body || "").trim() : "";
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("Webhook validado com sucesso pela Meta!")
+        return challenge, 200
+    
+    print("Falha na validação do token Meta.")
+    return "Token de verificação inválido", 403
 
-            console.log(`[WEBHOOK] incoming message type=${type} from=${from} text="${text}"`);
+# ==========================================
+# ROTA DE MENSAGENS (POST) - O Cérebro do Bot
+# ==========================================
 
-            if (!text) {
-              // Se não for texto, só não responde (por enquanto)
-              continue;
-            }
+@app.route("/whatsapp", methods=["POST"])
+def webhook():
+    """ Recebe as mensagens reais do WhatsApp e processa a Etapa 2 (Cadastro) """
+    data = request.get_json()
+    
+    if not data or "entry" not in data:
+        return jsonify({"status": "no_data"}), 200
 
-            await sendText(from, `Recebi: ${text}`);
-          }
-        }
-      }
+    try:
+        for entry in data["entry"]:
+            for change in entry["changes"]:
+                value = change["value"]
+                
+                if "messages" in value:
+                    message = value["messages"][0]
+                    phone = message["from"]
+                    text = message.get("text", {}).get("body", "").strip()
+                    
+                    # 1. Identificar Unidade pelo número de destino
+                    display_num = value["metadata"]["display_phone_number"]
+                    unit = "Ipiranga" if "23629360" in display_num else "SCS"
 
-      return res.status(200).send("OK");
-    } catch (e) {
-      console.error("Webhook error:", e);
-      // Meta recomenda responder 200 mesmo em erro para evitar re-tentativas infinitas
-      return res.status(200).send("OK");
-    }
-  }
+                    # 2. Payload base para o Kanban
+                    payload = {
+                        "from": phone,
+                        "text": text,
+                        "unit": unit,
+                        "status": "triagem" # Status padrão inicial
+                    }
 
-  return res.status(405).send("Method Not Allowed");
-}
+                    # 3. LÓGICA DE CAPTURA INTELIGENTE (Etapa 2)
+                    
+                    # DETECTAR CPF (Procura 11 números no texto)
+                    cpf_candidato = clean_cpf(text)
+                    if len(cpf_candidato) == 11:
+                        payload["cpf"] = cpf_candidato
+                        payload["status"] = "cadastro" # Move o card no Kanban automaticamente
+                        print(f"CPF detectado: {cpf_candidato}")
+                    
+                    # DETECTAR EMAIL
+                    if "@" in text and "." in text:
+                        payload["email"] = text.lower()
+                        print(f"Email detectado: {text}")
 
-async function sendText(to, body) {
-  const phoneNumberId = process.env.PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_TOKEN;
+                    # 4. Sincronizar com o Wix
+                    sync_to_wix(payload)
 
-  if (!phoneNumberId) {
-    console.error("sendText: PHONE_NUMBER_ID missing");
-    return;
-  }
-  if (!token) {
-    console.error("sendText: WHATSAPP_TOKEN missing");
-    return;
-  }
+        return jsonify({"status": "received"}), 200
 
-  const url = `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`;
+    except Exception as e:
+        print(f"Erro crítico no processamento: {e}")
+        return jsonify({"status": "error"}), 500
 
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: { body },
-  };
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!resp.ok) {
-    const err = await resp.text();
-    console.error("SendText failed:", resp.status, err);
-  } else {
-    console.log("SendText OK ->", to);
-  }
-}
+if __name__ == "__main__":
+    app.run(port=5000)
