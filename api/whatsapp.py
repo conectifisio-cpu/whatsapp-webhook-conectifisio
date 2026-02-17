@@ -7,18 +7,17 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # ==========================================
-# CONFIGURAÇÕES DE SEGURANÇA (VARIÁVEIS DE AMBIENTE)
+# CONFIGURAÇÕES (LIDAS DA VERCEL SETTINGS)
 # ==========================================
-# Certifique-se de que adicionou estas chaves na aba "Settings > Environment Variables" da Vercel
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "conectifisio_2024_seguro")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 WIX_WEBHOOK_URL = os.environ.get("WIX_WEBHOOK_URL", "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook")
 
 def send_reply(to, text):
-    """ Envia resposta automática via WhatsApp Cloud API """
+    """ Tenta responder no WhatsApp e loga o resultado """
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-        print("ERRO: WHATSAPP_TOKEN ou PHONE_NUMBER_ID não configurados.")
+        print("!!! ERRO: Variáveis WHATSAPP_TOKEN ou PHONE_NUMBER_ID não encontradas !!!")
         return False
 
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
@@ -34,36 +33,35 @@ def send_reply(to, text):
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"Log Meta API: Status {res.status_code}")
+        print(f"Log WhatsApp: Status {res.status_code} - Resposta: {res.text}")
         return res.status_code == 200
     except Exception as e:
-        print(f"Erro WhatsApp: {e}")
-        return False
-
-def sync_to_wix(data):
-    """ Envia dados para o Wix CMS """
-    try:
-        response = requests.post(WIX_WEBHOOK_URL, json=data, timeout=15)
-        print(f"Log Wix Sinc: Status {response.status_code}")
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Erro Wix: {e}")
+        print(f"Erro ao responder: {e}")
         return False
 
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
+    """ Validação para o Painel da Meta """
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
+    
     if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("✅ Webhook Validado!")
         return challenge, 200
-    return "Falha na verificação", 403
+    return "Token Inválido", 403
 
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
+    """ Recebe mensagens e envia para o Wix """
     data = request.get_json()
+    
+    # Log para ver o que a Meta está enviando
+    print("--- Mensagem Recebida ---")
+    print(json.dumps(data, indent=2))
+
     if not data or "entry" not in data:
-        return jsonify({"status": "no_payload"}), 200
+        return jsonify({"status": "no_data"}), 200
 
     try:
         entry = data["entry"][0]
@@ -75,35 +73,24 @@ def webhook():
             phone = message["from"]
             text = message.get("text", {}).get("body", "").strip()
             
+            # Identifica Unidade
             display_num = value["metadata"]["display_phone_number"]
             unit = "Ipiranga" if "23629360" in display_num else "SCS"
 
-            # Lógica de Captura (CPF)
-            status = "triagem"
-            cpf_match = re.search(r'\d{11}', re.sub(r'\D', '', text))
-            
-            payload = {
-                "from": phone,
-                "text": text,
-                "unit": unit,
-                "status": status,
-                "name": "Paciente Novo"
-            }
+            print(f"Processando: {phone} na unidade {unit}")
 
-            if cpf_match:
-                payload["cpf"] = cpf_match.group()
-                payload["status"] = "cadastro"
-                reply_msg = f"Recebido! O CPF {payload['cpf']} foi registado na unidade {unit}."
-            else:
-                reply_msg = f"Olá! Recebemos a sua mensagem na unidade {unit}. Um atendente falará consigo brevemente."
+            # Envia para o Wix
+            payload_wix = {"from": phone, "text": text, "unit": unit}
+            res_wix = requests.post(WIX_WEBHOOK_URL, json=payload_wix, timeout=10)
+            print(f"Wix Status: {res_wix.status_code}")
 
-            if sync_to_wix(payload):
-                send_reply(phone, reply_msg)
+            # Responde no WhatsApp
+            reply = f"Olá! Recebemos sua mensagem na unidade {unit}. Um atendente falará com você em breve."
+            send_reply(phone, reply)
 
         return jsonify({"status": "success"}), 200
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"Erro Crítico: {e}")
         return jsonify({"status": "error"}), 500
 
-# Exportação necessária para a Vercel
 app.debug = False
