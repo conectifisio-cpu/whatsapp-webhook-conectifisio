@@ -3,6 +3,7 @@ import json
 import requests
 import re
 from flask import Flask, request, jsonify
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -14,12 +15,49 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 WIX_WEBHOOK_URL = os.environ.get("WIX_WEBHOOK_URL", "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook")
 
+# ==========================================
+# FUNÇÕES DE VALIDAÇÃO E RECONHECIMENTO
+# ==========================================
+
+def is_valid_cpf(cpf):
+    """ Validação matemática real do CPF """
+    cpf = re.sub(r'\D', '', cpf)
+    if len(cpf) != 11 or cpf == cpf[0] * 11:
+        return False
+    for i in range(9, 11):
+        value = sum((int(cpf[num]) * ((i + 1) - num) for num in range(0, i)))
+        digit = ((value * 10) % 11) % 10
+        if digit != int(cpf[i]):
+            return False
+    return True
+
+def extract_date(text):
+    """ Tenta encontrar e validar uma data de nascimento no texto """
+    pattern = r'(\d{2})/?(\d{2})/?(\d{4})'
+    match = re.search(pattern, text)
+    if match:
+        day, month, year = match.groups()
+        try:
+            # Valida se a data existe no calendário
+            datetime(int(year), int(month), int(day))
+            return f"{day}/{month}/{year}"
+        except ValueError:
+            return None
+    return None
+
+def is_valid_email(text):
+    """ Validação básica de formato de e-mail """
+    return re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text.lower())
+
 def send_reply(to, text):
-    """ Envia a resposta para o WhatsApp do paciente """
+    """ Envia a resposta via WhatsApp Cloud API """
     if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
         return False
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -31,6 +69,10 @@ def send_reply(to, text):
         return res.status_code == 200
     except:
         return False
+
+# ==========================================
+# ROTAS DO WEBHOOK
+# ==========================================
 
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
@@ -60,27 +102,38 @@ def webhook():
             display_num = value["metadata"]["display_phone_number"]
             unit = "Ipiranga" if "23629360" in display_num else "SCS"
 
-            # --- LÓGICA DE RECONHECIMENTO DE CPF ---
-            # Remove tudo que não é número
-            only_numbers = re.sub(r'\D', '', text)
+            payload = {"from": phone, "text": text, "unit": unit, "status": "triagem"}
             
-            payload = {
-                "from": phone,
-                "text": text,
-                "unit": unit,
-                "status": "triagem"
-            }
-
-            # Se tiver exatamente 11 dígitos, tratamos como CPF
+            # --- LÓGICA DE DECISÃO DO ROBÔ ---
+            only_numbers = re.sub(r'\D', '', text)
+            found_date = extract_date(text)
+            
+            # 1. Se for CPF
             if len(only_numbers) == 11:
-                cpf_formatado = f"{only_numbers[:3]}.{only_numbers[3:6]}.{only_numbers[6:9]}-{only_numbers[9:]}"
-                payload["cpf"] = only_numbers # Enviamos o número limpo para o Wix
-                payload["status"] = "cadastro"
-                reply_msg = f"Recebido! Identificamos o CPF {cpf_formatado}. O seu card no Kanban da unidade {unit} foi atualizado para a etapa de Cadastro!"
-            else:
-                reply_msg = f"Olá! Recebemos sua mensagem na unidade {unit}. Um atendente falará com você em breve."
+                if is_valid_cpf(only_numbers):
+                    payload["cpf"] = only_numbers
+                    payload["status"] = "cadastro"
+                    reply_msg = f"✅ CPF validado! Agora, por favor, envie sua DATA DE NASCIMENTO (Ex: 15/05/1980)."
+                else:
+                    reply_msg = "⚠️ Esse CPF não parece válido. Por favor, digite novamente apenas os 11 números."
+                    send_reply(phone, reply_msg)
+                    return jsonify({"status": "invalid_cpf"}), 200
 
-            # Envia para o Wix e depois responde no Whats
+            # 2. Se for Data de Nascimento
+            elif found_date:
+                payload["birthDate"] = found_date
+                reply_msg = f"📅 Data de nascimento {found_date} registrada! Se desejar, envie também seu E-MAIL."
+
+            # 3. Se for E-mail
+            elif is_valid_email(text):
+                payload["email"] = text.lower()
+                reply_msg = "📧 E-mail registrado com sucesso! Um atendente entrará em contato em breve."
+
+            # 4. Mensagem Inicial
+            else:
+                reply_msg = f"Olá! Recebemos sua mensagem na unidade {unit}. Para agilizar seu cadastro no Feegow, por favor envie seu CPF."
+
+            # Sincroniza com Wix e Responde
             requests.post(WIX_WEBHOOK_URL, json=payload, timeout=10)
             send_reply(phone, reply_msg)
 
@@ -88,3 +141,5 @@ def webhook():
     except Exception as e:
         print(f"Erro: {e}")
         return jsonify({"status": "error"}), 500
+
+app.debug = False
