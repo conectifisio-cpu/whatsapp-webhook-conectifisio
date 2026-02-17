@@ -1,9 +1,15 @@
-flask
-requests
-3.  **Crie o arquivo `vercel.json` (O Segredo):** Para evitar que a Vercel se confunda com o erro de "uv lock", crie um novo arquivo na pasta principal do GitHub chamado `vercel.json` com este conteúdo:
-```json
 {
-  "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/whatsapp.py" }
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/whatsapp.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "api/whatsapp.py"
+    }
   ]
 }
