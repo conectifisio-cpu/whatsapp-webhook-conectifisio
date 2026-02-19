@@ -9,14 +9,17 @@ app = Flask(__name__)
 CORS(app)
 
 # ==========================================
-# CONFIGURAÇÕES - VERIFIQUE ESTAS CHAVES NA VERCEL
+# CONFIGURAÇÕES v33.3 - FIX URL DIRETO
 # ==========================================
+# O Token e o ID continuam vindo da Vercel
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-WIX_URL = os.environ.get("WIX_WEBHOOK_URL")
+
+# Escrevi a URL aqui direto para o robô nunca mais dizer "None"
+WIX_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
 def send_whatsapp(to, text):
-    """Envia mensagem e regista o resultado nos logs da Vercel"""
+    """Envia mensagem e mostra o resultado nos logs da Vercel"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -28,10 +31,8 @@ def send_whatsapp(to, text):
         "type": "text",
         "text": {"body": text}
     }
-    
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
-        # Este print aparecerá nos logs da Vercel para sabermos se a Meta aceitou o token
         print(f"DEBUG META: Status {response.status_code} - Resposta: {response.text}")
     except Exception as e:
         print(f"DEBUG META ERRO: {str(e)}")
@@ -39,8 +40,6 @@ def send_whatsapp(to, text):
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
     data = request.get_json()
-    
-    # Validação inicial para evitar Erro 500
     if not data or "entry" not in data:
         return jsonify({"status": "no_data"}), 200
 
@@ -49,7 +48,6 @@ def webhook():
         changes = entry.get("changes", [{}])[0]
         value = changes.get("value", {})
         
-        # Ignora se não for uma mensagem (ex: confirmação de leitura)
         if "messages" not in value:
             return jsonify({"status": "not_a_message"}), 200
 
@@ -57,28 +55,28 @@ def webhook():
         phone = message["from"]
         text = message.get("text", {}).get("body", "").strip()
         
-        # Identificação da Unidade
         display_phone = value.get("metadata", {}).get("display_phone_number", "")
         unit = "Ipiranga" if "23629360" in display_phone else "SCS"
 
-        # 1. COMUNICAÇÃO COM O WIX (COM LOG)
+        # 1. COMUNICAÇÃO COM O WIX
         print(f"DEBUG WIX: Enviando para {WIX_URL}...")
         try:
             res_wix = requests.post(WIX_URL, json={"from": phone, "text": text, "unit": unit}, timeout=15)
-            print(f"DEBUG WIX RESPOSTA: {res_wix.status_code} - {res_wix.text}")
+            print(f"DEBUG WIX RESPOSTA: {res_wix.status_code}")
             info = res_wix.json()
         except Exception as e:
             print(f"DEBUG WIX ERRO: {str(e)}")
-            return jsonify({"status": "wix_connection_error"}), 200
+            return jsonify({"status": "wix_error"}), 200
 
         status = info.get("currentStatus", "triagem")
         p_name = info.get("patientName", "")
 
-        # --- LÓGICA DE RESPOSTA (ESTADO: TRIAGEM) ---
+        # --- LÓGICA SIMPLIFICADA DE TESTE ---
         if status == "triagem":
-            reply = f"Olá! ✨ Recebemos o seu 'Olá' na unidade {unit}. O sistema está online! Como gostaria de ser chamado(a)?"
-            requests.post(WIX_URL, json={"from": phone, "status": "cadastrando_nome"})
+            reply = f"Olá! ✨ Recebemos sua mensagem na unidade {unit}. O sistema está ONLINE! Como gostaria de ser chamado(a)?"
             send_whatsapp(phone, reply)
+            # Avisa o Wix para mudar o estado
+            requests.post(WIX_URL, json={"from": phone, "status": "cadastrando_nome"})
 
         return jsonify({"status": "success"}), 200
 
