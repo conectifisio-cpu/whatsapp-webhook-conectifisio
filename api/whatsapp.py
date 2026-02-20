@@ -11,12 +11,13 @@ CORS(app)
 # ==========================================
 # CONFIGURAÇÕES v33.5 - ULTRA ESTÁVEL
 # ==========================================
+# Estas variáveis devem estar configuradas no painel da Vercel
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-
-# URL Direta para garantir comunicação imediata com o Wix
+# URL do Webhook do Wix (Backend)
 WIX_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
+# --- MENUS E TEXTOS ESTRATÉGICOS ---
 SERVICOS_MENU = (
     "1. Fisioterapia Ortopédica\n"
     "2. Fisioterapia Neurológica\n"
@@ -26,9 +27,9 @@ SERVICOS_MENU = (
     "6. Recovery / Liberação Miofascial"
 )
 
-# --- FUNÇÕES DE APOIO ---
+# --- FUNÇÕES AUXILIARES ---
 def send_whatsapp(to, text):
-    """Envia mensagem via API do WhatsApp Cloud"""
+    """Envia uma mensagem de texto através da API Cloud do WhatsApp (Meta)"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -41,25 +42,25 @@ def send_whatsapp(to, text):
         "text": {"body": text}
     }
     try:
-        r = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"DEBUG META: {r.status_code} - {r.text}")
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"DEBUG META: Status {response.status_code}")
     except Exception as e:
-        print(f"ERRO ENVIO META: {e}")
+        print(f"ERRO AO ENVIAR WHATSAPP: {e}")
 
-def extract_cpf(text):
-    """Limpa e valida CPF (11 dígitos)"""
+def clean_cpf(text):
+    """Remove caracteres não numéricos e valida se tem 11 dígitos"""
     nums = re.sub(r'\D', '', text)
     return nums if len(nums) == 11 else None
 
 # ==========================================
-# WEBHOOK PRINCIPAL (ESTADOS E LÓGICA)
+# WEBHOOK PRINCIPAL
 # ==========================================
 
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
     data = request.get_json()
     
-    # Proteção contra dados vazios ou notificações de sistema
+    # Validação inicial para evitar processar notificações de sistema/leitura
     if not data or "entry" not in data:
         return jsonify({"status": "no_data"}), 200
 
@@ -75,36 +76,37 @@ def webhook():
         phone = message["from"]
         text = message.get("text", {}).get("body", "").strip()
         
-        # Identificação automática da Unidade pelo número de destino
+        # Identificação da Unidade (Ipiranga ou SCS) baseada no número que recebeu a mensagem
         display_phone = value.get("metadata", {}).get("display_phone_number", "")
         unit = "Ipiranga" if "23629360" in display_phone else "SCS"
 
-        # 1. SINCRONIZAÇÃO COM O WIX (Pede o estado atual do paciente)
-        print(f"DEBUG WIX: Sincronizando {phone}...")
+        # 1. COMUNICAÇÃO COM O WIX (Sincronização de Estado)
+        # Enviamos a mensagem do paciente e recebemos o status actual e o nome (se existir)
         try:
             res_wix = requests.post(WIX_URL, json={"from": phone, "text": text, "unit": unit}, timeout=15)
             info = res_wix.json()
         except Exception as e:
-            print(f"DEBUG WIX ERRO: {e}")
-            return jsonify({"status": "wix_offline"}), 200
+            print(f"ERRO DE LIGAÇÃO AO WIX: {e}")
+            return jsonify({"status": "wix_error"}), 200
 
         status = info.get("currentStatus", "triagem")
         p_name = info.get("patientName", "")
         p_modalidade = info.get("modalidade", "particular")
 
-        # Se houver intervenção humana no Command Center, o robô para
+        # Se o Dashboard marcou como 'atendimento_humano', o robô silencia-se
         if status == "atendimento_humano":
-            return jsonify({"status": "human_intervention"}), 200
+            return jsonify({"status": "human_mode_active"}), 200
 
-        # --- MÁQUINA DE ATENDIMENTO ---
+        # --- LÓGICA DA MÁQUINA DE ESTADOS (ACOLHIMENTO) ---
         reply = ""
 
         if status == "triagem":
+            # Verifica se já temos o nome do paciente no banco de dados
             if p_name and p_name != "Paciente Novo":
-                reply = f"Olá, {p_name}! Que bom falar consigo novamente na Conectifisio {unit}! 😊\n\nDeseja iniciar um novo Plano de Tratamento hoje?"
+                reply = f"Olá, {p_name}! Que bom falar consigo novamente na Conectifisio unidade {unit}! 😊\n\nDeseja iniciar um novo Plano de Tratamento hoje?"
                 requests.post(WIX_URL, json={"from": phone, "status": "menu_veterano"})
             else:
-                reply = f"Olá! ✨ Seja bem-vindo à Conectifisio unidade {unit}. Para iniciarmos, como gostaria de ser chamado(a)?"
+                reply = f"Olá! ✨ Seja bem-vindo à Conectifisio unidade {unit}. Para iniciarmos o seu atendimento, como gostaria de ser chamado(a)?"
                 requests.post(WIX_URL, json={"from": phone, "status": "cadastrando_nome"})
 
         elif status == "cadastrando_nome":
@@ -113,60 +115,73 @@ def webhook():
             requests.post(WIX_URL, json={"from": phone, "name": nome_limpo, "status": "cadastrando_queixa"})
 
         elif status == "cadastrando_queixa":
-            reply = f"Entendi. Qual serviço procura hoje?\n\n{SERVICOS_MENU}"
+            # Captura a queixa (Escuta Ativa) e apresenta o menu de serviços
+            reply = f"Entendido. Vamos analisar a melhor forma de ajudar. Qual serviço procura hoje?\n\n{SERVICOS_MENU}"
             requests.post(WIX_URL, json={"from": phone, "queixa": text, "status": "escolha_especialidade"})
 
         elif status == "escolha_especialidade":
+            # Verificação de Triagem Neuro
             if "2" in text or "neuro" in text.lower():
-                reply = "Como está a mobilidade do paciente? (Independente, Semidependente ou Dependente)"
+                reply = "Para casos de Neurologia, como está a mobilidade do paciente? (Independente, Semidependente ou Dependente)"
                 requests.post(WIX_URL, json={"from": phone, "status": "triagem_neuro", "servico": "Neurologia"})
             else:
-                reply = "Deseja atendimento pelo CONVÉNIO ou de forma PARTICULAR?"
+                reply = "Perfeito! ✅ Deseja realizar o atendimento pelo seu CONVÉNIO ou de forma PARTICULAR?"
                 requests.post(WIX_URL, json={"from": phone, "status": "escolha_modalidade", "servico": text})
 
         elif status == "triagem_neuro":
             if "independente" in text.lower():
-                reply = "Certo! ✅ Deseja atendimento pelo CONVÉNIO ou de forma PARTICULAR?"
+                reply = "Certo! ✅ Deseja atendimento pelo seu CONVÉNIO ou de forma PARTICULAR?"
                 requests.post(WIX_URL, json={"from": phone, "status": "escolha_modalidade"})
             else:
+                # Silencia o robô para casos complexos
                 reply = "O nosso fisioterapeuta responsável assumirá o contacto agora para lhe dar atenção total. 👨‍⚕️"
                 requests.post(WIX_URL, json={"from": phone, "status": "atendimento_humano"})
 
         elif status == "escolha_modalidade":
-            modalidade = "particular" if "particular" in text.lower() else "convenio"
-            if modalidade == "particular":
-                reply = "No atendimento particular focamos na sua evolução total. Digite o seu CPF (apenas números)."
+            is_particular = "particular" in text.lower()
+            modalidade = "particular" if is_particular else "convenio"
+            
+            if is_particular:
+                reply = "No atendimento particular focamos na sua evolução total, com tempo e especialistas dedicados. Digite o seu CPF (apenas números)."
                 requests.post(WIX_URL, json={"from": phone, "status": "cadastrando_cpf", "modalidade": "particular"})
             else:
                 reply = "Qual o nome do seu CONVÉNIO?"
                 requests.post(WIX_URL, json={"from": phone, "status": "cadastrando_convenio", "modalidade": "convenio"})
 
         elif status == "cadastrando_convenio":
-            reply = "Anotado! Agora, digite o seu CPF (apenas números)."
+            reply = "Anotado! Agora, por favor, digite o seu CPF (apenas números)."
             requests.post(WIX_URL, json={"from": phone, "convenio": text, "status": "cadastrando_cpf"})
 
         elif status == "cadastrando_cpf":
-            cpf = extract_cpf(text)
-            if list(cpf): # Validação simples se existe algo
-                reply = "CPF anotado! Qual o período da sua preferência: Manhã ou Tarde? 🕒"
+            cpf = clean_cpf(text)
+            if cpf:
+                reply = "CPF validado! Qual o período da sua preferência para agendamento: Manhã ou Tarde? 🕒"
                 requests.post(WIX_URL, json={"from": phone, "cpf": cpf, "status": "agendando"})
             else:
-                reply = "CPF inválido. Por favor, digite os 11 números novamente."
+                reply = "CPF inválido. Por favor, envie os 11 números novamente."
 
         elif status == "agendando":
-            reply = "Agendamento pré-confirmado! 🎉 Entraremos em contacto em instantes."
+            reply = "Recebido! 🎉 A nossa equipa entrará em contacto em instantes para confirmar o seu horário exacto. Até já!"
             send_whatsapp(phone, reply)
             requests.post(WIX_URL, json={"from": phone, "status": "finalizado"})
 
-        if reply: send_whatsapp(phone, reply)
+        # Envia a resposta final se houver
+        if reply:
+            send_whatsapp(phone, reply)
+            
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"ERRO GLOBAL: {e}")
+        print(f"ERRO CRÍTICO NO WEBHOOK: {e}")
         return jsonify({"status": "error_handled"}), 200
 
+# Endpoint de Verificação (GET) exigido pela Meta para activar o Webhook
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
+    # O Verify Token deve ser o mesmo configurado no painel de Developers da Meta
     if request.args.get("hub.verify_token") == "conectifisio_2024_seguro":
         return request.args.get("hub.challenge"), 200
-    return "Erro", 403
+    return "Erro de Verificação", 403
+
+if __name__ == "__main__":
+    app.run(port=5000)
