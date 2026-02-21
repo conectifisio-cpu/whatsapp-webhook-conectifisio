@@ -10,13 +10,17 @@ app = Flask(__name__)
 CORS(app)
 
 # ==========================================
-# CONFIGURAÇÕES v62.0 - FLUXO SOLIDIFICADO & LIMITE META
+# CONFIGURAÇÕES v63.0 - FLUXO SOLIDIFICADO & MENUS COMPLETOS
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 WIX_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
 def simular_digitacao(to):
+    """
+    O tempo foi reduzido para 0.5s para evitar o Timeout da Vercel (10 segundos).
+    Assim garantimos que o robô nunca morre a meio do processo.
+    """
     time.sleep(0.5)
 
 def enviar_texto(to, texto):
@@ -84,7 +88,6 @@ def webhook():
         p_modalidade = info.get("modalidade", "").lower()
 
         # --- REINÍCIO MANUAL SEGURO ---
-        # CORREÇÃO: "Recomeçar Atendimento" alterado para "Recomeçar"
         if msg_recebida in ["Recomeçar", "Menu Inicial", "⬅️ Voltar"]:
             requests.post(WIX_URL, json={"from": phone, "status": "triagem"})
             enviar_texto(phone, "Entendido! Vamos recomeçar o seu atendimento. 😊")
@@ -113,6 +116,7 @@ def webhook():
         # --- DETECÇÃO AVANÇADA DE SAUDAÇÃO (CONTINUIDADE) ---
         is_greeting = False
         if msg_type == "text":
+            # Remove pontuação para entender intenção de saudação ("Oi, boa tarde!")
             msg_limpa = re.sub(r'[^\w\s]', '', msg_recebida.lower().strip())
             saudacoes = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "oii", "oie"]
             
@@ -128,7 +132,7 @@ def webhook():
             elif status not in ["triagem", "menu_veterano"]:
                 enviar_botoes(phone, 
                     f"Olá! ✨ Notei que estávamos no meio do seu pedido de atendimento. Podemos continuar de onde paramos?",
-                    ["Sim, continuar", "Recomeçar"] # CORREÇÃO: Reduzido de 21 para 9 caracteres!
+                    ["Sim, continuar", "Recomeçar"]
                 )
                 return jsonify({"status": "success"}), 200
 
@@ -164,8 +168,13 @@ def webhook():
 
             elif "Novo Serviço" in msg_recebida:
                 secoes = [{"title": "Serviços", "rows": [
-                    {"id": "s1", "title": "Fisio Ortopédica"}, {"id": "s2", "title": "Fisio Neurológica"},
-                    {"id": "s5", "title": "Recovery"}, {"id": "s6", "title": "Liberação Miofascial"}
+                    {"id": "s1", "title": "Fisio Ortopédica"}, 
+                    {"id": "s2", "title": "Fisio Neurológica"},
+                    {"id": "s3", "title": "Fisio Pélvica"}, 
+                    {"id": "s4", "title": "Pilates Studio"},
+                    {"id": "s5", "title": "Recovery"}, 
+                    {"id": "s6", "title": "Liberação Miofascial"},
+                    {"id": "s0", "title": "⬅️ Voltar"}
                 ]}]
                 enviar_lista(phone, "Qual desses novos serviços você procura hoje?", "Ver Opções", secoes)
                 requests.post(WIX_URL, json={"from": phone, "status": "escolha_especialidade"})
@@ -174,7 +183,8 @@ def webhook():
                 enviar_lista(phone, "Como podemos ajudar?", "Ver Solicitações", [{"title": "Solicitações", "rows": [
                     {"id": "o1", "title": "📄 Atestado Pendente"},
                     {"id": "o2", "title": "📝 Relatório Pendente"},
-                    {"id": "o3", "title": "👤 Falar com Recepção"}
+                    {"id": "o3", "title": "👤 Falar com Recepção"},
+                    {"id": "o0", "title": "⬅️ Voltar"}
                 ]}])
                 requests.post(WIX_URL, json={"from": phone, "status": "veterano_outros"})
 
