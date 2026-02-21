@@ -92,9 +92,14 @@ def webhook():
             enviar_texto(phone, "Entendido! Vamos recomeçar o seu atendimento. 😊")
             status = "triagem"
 
-        # --- CONTINUIDADE INTELIGENTE ---
+        # --- CONTINUIDADE INTELIGENTE E RESET DE VETERANO ---
         elif msg_type == "text" and msg_recebida.lower() in ["oi", "olá", "ola", "bom dia", "boa tarde"]:
-            if status not in ["triagem", "finalizado", "menu_veterano"]:
+            # CORREÇÃO CIRÚRGICA: Se o paciente já tinha terminado um atendimento antes, o "Olá" acorda-o como Veterano!
+            if status == "finalizado":
+                requests.post(WIX_URL, json={"from": phone, "status": "triagem"})
+                status = "triagem"
+            # Se estava no meio do cadastro (O fluxo Novo Paciente não é afetado)
+            elif status not in ["triagem", "menu_veterano"]:
                 enviar_botoes(phone, 
                     f"Olá! ✨ Notei que estávamos no meio do seu pedido de {servico_atual}. Podemos continuar de onde paramos?",
                     ["Sim, continuar", "Recomeçar Atendimento"]
