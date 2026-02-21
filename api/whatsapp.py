@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import time
+import re  # Importado para inteligência de leitura de pontuação
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -9,7 +10,7 @@ app = Flask(__name__)
 CORS(app)
 
 # ==========================================
-# CONFIGURAÇÕES v59.0 - FLUXO SOLIDIFICADO & RÁPIDO
+# CONFIGURAÇÕES v61.0 - FLUXO SOLIDIFICADO & INTELIGENTE
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
@@ -18,7 +19,7 @@ WIX_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 def simular_digitacao(to):
     """
     O tempo foi reduzido para 0.5s para evitar o Timeout da Vercel (10 segundos).
-    Assim garantimos que o robô nunca morre a meio do processo, evitando duplicações.
+    Assim garantimos que o robô nunca morre a meio do processo.
     """
     time.sleep(0.5)
 
@@ -75,7 +76,7 @@ def webhook():
 
         unit = "Ipiranga" if "23629360" in value.get("metadata", {}).get("display_phone_number", "") else "SCS"
 
-        # 1. CONSULTA AO WIX (TIMEOUT AUMENTADO PARA NÃO FALHAR)
+        # 1. CONSULTA AO WIX
         res_wix = requests.post(WIX_URL, json={"from": phone, "text": msg_recebida, "unit": unit}, timeout=15)
         info = res_wix.json()
         
@@ -87,19 +88,52 @@ def webhook():
         p_modalidade = info.get("modalidade", "").lower()
 
         # --- REINÍCIO MANUAL SEGURO ---
-        if msg_recebida == "Recomeçar Atendimento" or msg_recebida == "Menu Inicial":
+        if msg_recebida in ["Recomeçar Atendimento", "Menu Inicial", "⬅️ Voltar"]:
             requests.post(WIX_URL, json={"from": phone, "status": "triagem"})
             enviar_texto(phone, "Entendido! Vamos recomeçar o seu atendimento. 😊")
             status = "triagem"
 
-        # --- CONTINUIDADE INTELIGENTE E RESET DE VETERANO ---
-        elif msg_type == "text" and msg_recebida.lower() in ["oi", "olá", "ola", "bom dia", "boa tarde"]:
-            # CORREÇÃO CIRÚRGICA: Se o paciente já tinha terminado um atendimento antes, o "Olá" acorda-o como Veterano!
+        # --- INTERCEPTA O BOTÃO DE CONTINUAR ---
+        # Se o paciente clicar em "Sim, continuar", o robô repete a última pergunta pendente
+        elif msg_recebida == "Sim, continuar":
+            prompts = {
+                "aguardando_nome_novo": "Como gostaria de ser chamado(a)?",
+                "escolha_especialidade": "Qual desses serviços você procura hoje? (Ortopedia, Neuro, etc)",
+                "escolha_modalidade": "Deseja atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?",
+                "cadastrando_nome_completo": "Por favor, digite o seu NOME COMPLETO (conforme documento):",
+                "cadastrando_data": "Qual a sua DATA DE NASCIMENTO? (Ex: 15/05/1980)",
+                "cadastrando_email": "Qual o seu melhor E-MAIL para enviarmos os lembretes?",
+                "cadastrando_queixa": "O que te trouxe à clínica hoje? (Dor ou queixa principal?)",
+                "cadastrando_cpf": "Digite o seu CPF (apenas números).",
+                "cadastrando_convenio": "Qual o nome do seu CONVÊNIO?",
+                "cadastrando_num_carteirinha": "Digite o NÚMERO DA SUA CARTEIRINHA.",
+                "aguardando_carteirinha": "Envie agora uma FOTO da sua CARTEIRINHA.",
+                "aguardando_pedido": "Envie agora uma FOTO do seu PEDIDO MÉDICO."
+            }
+            texto = prompts.get(status, "Por favor, continue de onde paramos.")
+            enviar_texto(phone, f"Ótimo! 😊 {texto}")
+            return jsonify({"status": "success"}), 200
+
+        # --- DETECÇÃO AVANÇADA DE SAUDAÇÃO (CONTINUIDADE) ---
+        is_greeting = False
+        if msg_type == "text":
+            # Remove pontuação para entender "Oi, boa tarde!" como saudação
+            msg_limpa = re.sub(r'[^\w\s]', '', msg_recebida.lower().strip())
+            saudacoes = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "oii", "oie"]
+            
+            for s in saudacoes:
+                # Se contiver saudação e for curto (<= 25 letras), é distração/retomada
+                if s in msg_limpa and len(msg_limpa) <= 25:
+                    is_greeting = True
+                    break
+
+        if is_greeting:
             if status == "finalizado":
+                # Acorda o Veterano Finalizado
                 requests.post(WIX_URL, json={"from": phone, "status": "triagem"})
                 status = "triagem"
-            # Se estava no meio do cadastro (O fluxo Novo Paciente não é afetado)
             elif status not in ["triagem", "menu_veterano"]:
+                # Oferece continuidade se estiver no meio do cadastro
                 enviar_botoes(phone, 
                     f"Olá! ✨ Notei que estávamos no meio do seu pedido de {servico_atual}. Podemos continuar de onde paramos?",
                     ["Sim, continuar", "Recomeçar Atendimento"]
