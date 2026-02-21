@@ -2,7 +2,6 @@ import os
 import json
 import requests
 import time
-import random
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -10,14 +9,18 @@ app = Flask(__name__)
 CORS(app)
 
 # ==========================================
-# CONFIGURAÇÕES v58.0 - FLUXO SOLIDIFICADO
+# CONFIGURAÇÕES v59.0 - FLUXO SOLIDIFICADO & RÁPIDO
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 WIX_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
 def simular_digitacao(to):
-    time.sleep(random.uniform(2.5, 4.0))
+    """
+    O tempo foi reduzido para 0.5s para evitar o Timeout da Vercel (10 segundos).
+    Assim garantimos que o robô nunca morre a meio do processo, evitando duplicações.
+    """
+    time.sleep(0.5)
 
 def enviar_texto(to, texto):
     simular_digitacao(to)
@@ -72,7 +75,7 @@ def webhook():
 
         unit = "Ipiranga" if "23629360" in value.get("metadata", {}).get("display_phone_number", "") else "SCS"
 
-        # 1. CONSULTA AO WIX
+        # 1. CONSULTA AO WIX (TIMEOUT AUMENTADO PARA NÃO FALHAR)
         res_wix = requests.post(WIX_URL, json={"from": phone, "text": msg_recebida, "unit": unit}, timeout=15)
         info = res_wix.json()
         
@@ -81,6 +84,7 @@ def webhook():
         is_veteran = info.get("isVeteran", False)
         servico_atual = info.get("servico", "atendimento")
         p_convenio = info.get("convenio", "")
+        p_modalidade = info.get("modalidade", "").lower()
 
         # --- REINÍCIO MANUAL SEGURO ---
         if msg_recebida == "Recomeçar Atendimento" or msg_recebida == "Menu Inicial":
@@ -168,7 +172,6 @@ def webhook():
                 {"id": "s3", "title": "Fisio Pélvica"}, {"id": "s4", "title": "Pilates Studio"},
                 {"id": "s5", "title": "Recovery"}, {"id": "s6", "title": "Liberação Miofascial"}
             ]}]
-            # A RESTAURAÇÃO DO GATILHO QUE HAVIA SIDO QUEBRADO
             enviar_lista(phone, f"Prazer em conhecer, {nome_informado}! 😊 Qual desses serviços você procura hoje?", "Ver Opções", secoes)
             requests.post(WIX_URL, json={"from": phone, "name": nome_informado, "status": "escolha_especialidade"})
 
