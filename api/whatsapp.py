@@ -123,7 +123,10 @@ def webhook():
                 "pilates_escolha_app": "Qual desses aplicativos você utiliza?",
                 "pilates_wellhub_id": "Por favor, informe seu Wellhub ID:",
                 "pilates_decisao_app": "Prefere usar nosso App Exclusivo ou falar com a equipe?",
-                "performance_nome": "Por favor, digite seu NOME COMPLETO:"
+                "performance_nome": "Por favor, digite seu NOME COMPLETO:",
+                "veterano_escolha_modalidade": "As novas sessões serão pelo seu CONVÊNIO ou PARTICULAR?",
+                "veterano_validacao_convenio": "Você continua utilizando o mesmo convênio ou trocou de plano?",
+                "veterano_pedido_medico": "Você já está com o novo Pedido Médico em mãos?"
             }
             texto = prompts.get(status, "Por favor, continue de onde paramos.")
             enviar_texto(phone, f"Ótimo! 😊 {texto}")
@@ -182,6 +185,40 @@ def webhook():
             elif "Continuar Tratamento" in msg_recebida:
                 enviar_botoes(phone, "As novas sessões serão pelo seu CONVÊNIO ou PARTICULAR?", ["Convênio", "Particular", "Menu Inicial"])
                 requests.post(WIX_URL, json={"from": phone, "status": "veterano_escolha_modalidade"})
+            elif "Reagendar" in msg_recebida:
+                enviar_texto(phone, "Não se preocupe, vou te ajudar com isso! 😊\n\nNossa equipe assumirá o atendimento agora mesmo para encontrar o melhor horário para você. Aguarde um instante!")
+                requests.post(WIX_URL, json={"from": phone, "status": "atendimento_humano", "queixa": "[REAGENDAMENTO DE SESSÃO]"})
+            elif "Outras" in msg_recebida:
+                enviar_texto(phone, "Anotado! Nossa equipe assumirá o atendimento agora mesmo para te ajudar com sua solicitação. Aguarde um instante! 👩‍⚕️")
+                requests.post(WIX_URL, json={"from": phone, "status": "atendimento_humano", "queixa": "[OUTRAS SOLICITAÇÕES]"})
+
+        # ==========================================
+        # 1.5. FLUXO EXCLUSIVO DO VETERANO (CONTINUAR TRATAMENTO)
+        # ==========================================
+        elif status == "veterano_escolha_modalidade":
+            if "Convênio" in msg_recebida:
+                nome_conv = p_convenio if p_convenio else "cadastrado"
+                enviar_botoes(phone, f"Você continua utilizando o convênio *{nome_conv}* ou houve alguma mudança no seu plano?", ["✅ Mesmo Convênio", "🔄 Troquei de Plano"])
+                requests.post(WIX_URL, json={"from": phone, "status": "veterano_validacao_convenio"})
+            elif "Particular" in msg_recebida:
+                enviar_botoes(phone, "Excelente! Qual período você prefere para as novas sessões?", ["Manhã", "Tarde", "⬅️ Voltar"])
+                requests.post(WIX_URL, json={"from": phone, "status": "agendando", "modalidade": "particular"})
+
+        elif status == "veterano_validacao_convenio":
+            if "Mesmo" in msg_recebida:
+                enviar_botoes(phone, "Ótimo! Você já está com o novo Pedido Médico em mãos?", ["Sim, tenho a foto", "Não, vou providenciar"])
+                requests.post(WIX_URL, json={"from": phone, "status": "veterano_pedido_medico"})
+            elif "Troquei" in msg_recebida:
+                enviar_texto(phone, "Entendido! Vamos atualizar seus dados.\n\nQual o nome do seu *NOVO CONVÊNIO*?")
+                requests.post(WIX_URL, json={"from": phone, "status": "cadastrando_convenio"})
+
+        elif status == "veterano_pedido_medico":
+            if "Sim" in msg_recebida:
+                enviar_texto(phone, "Perfeito! Por favor, envie uma FOTO do seu novo PEDIDO MÉDICO atualizado para anexarmos ao prontuário.")
+                requests.post(WIX_URL, json={"from": phone, "status": "aguardando_pedido"})
+            elif "Não" in msg_recebida:
+                enviar_texto(phone, "Sem problemas! Para darmos continuidade, você precisará da guia médica atualizada. Nossa equipe vai te chamar para orientar melhor. Aguarde! 👩‍⚕️")
+                requests.post(WIX_URL, json={"from": phone, "status": "atendimento_humano"})
 
         # ==========================================
         # 2. ESCOLHA DE ESPECIALIDADE E TRIAGENS
