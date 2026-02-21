@@ -17,6 +17,7 @@ PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 WIX_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
 def simular_digitacao(to):
+    """Simula o tempo de resposta do robô para parecer mais humano."""
     time.sleep(0.8)
 
 def enviar_texto(to, texto):
@@ -30,6 +31,7 @@ def enviar_botoes(to, texto, lista_botoes):
     simular_digitacao(to)
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    # Limita a 3 botões (padrão do WhatsApp API)
     btns = [{"type": "reply", "reply": {"id": f"btn_{i}", "title": b}} for i, b in enumerate(lista_botoes[:3])]
     payload = {
         "messaging_product": "whatsapp", "to": to, "type": "interactive",
@@ -74,8 +76,8 @@ def webhook():
 
         # --- FAQ (FAC) AUTOMÁTICO ---
         perguntas_frequentes = {
-            "estacionamento": "Temos estacionamento conveniado logo em frente à unidade, garantindo total segurança e conforto para você! 🚗",
-            "localização": f"Nossa unidade {unit} fica em uma localização privilegiada e de fácil acesso. Deseja que eu envie a localização exata pelo Google Maps?",
+            "estacionamento": "Temos estacionamento conveniado logo em frente à unidade, garantindo total segurança e conforto para si! 🚗",
+            "localização": f"Nossa unidade {unit} fica numa localização privilegiada e de fácil acesso. Deseja que envie a localização exata pelo Google Maps?",
             "horário": "Funcionamos de segunda a sexta, das 07h às 21h, e aos sábados das 08h às 12h. ⏰"
         }
         for chave, resposta in perguntas_frequentes.items():
@@ -84,12 +86,12 @@ def webhook():
                 return jsonify({"status": "success"}), 200
 
         # --- COMANDO DE RESET ---
-        if msg_recebida.lower() in ["resetar tudo", "recomeçar"]:
+        if msg_recebida.lower() in ["resetar tudo", "recomeçar", "sou novo"]:
             requests.post(WIX_URL, json={"from": phone, "status": "triagem"})
-            enviar_texto(phone, "🔄 Atendimento reiniciado! Como podemos ajudar?")
+            enviar_texto(phone, "🔄 Atendimento reiniciado! Como podemos ajudar hoje?")
             return jsonify({"status": "success"}), 200
 
-        # 1. CONSULTA AO WIX
+        # 1. CONSULTA AO WIX PARA SABER STATUS E HISTÓRICO
         res_wix = requests.post(WIX_URL, json={"from": phone, "text": msg_recebida, "unit": unit}, timeout=15)
         info = res_wix.json()
         
@@ -97,8 +99,13 @@ def webhook():
         p_name = info.get("patientName", "")
         is_veteran = info.get("isVeteran", False)
 
+        # --- REINÍCIO MANUAL E BOTÃO VOLTAR ---
+        if msg_recebida in ["Menu Inicial", "⬅️ Voltar"]:
+            requests.post(WIX_URL, json={"from": phone, "status": "triagem"})
+            status = "triagem"
+
         # ==========================================
-        # FLUXO DE NAVEGAÇÃO
+        # FLUXO DE NAVEGAÇÃO PRINCIPAL
         # ==========================================
         if status == "triagem":
             if is_veteran:
@@ -120,13 +127,13 @@ def webhook():
                 {"id": "s3", "title": "Fisio Pélvica"}, {"id": "s4", "title": "Pilates Studio"},
                 {"id": "s5", "title": "Recovery"}, {"id": "s6", "title": "Liberação Miofascial"}
             ]}]
-            enviar_lista(phone, f"Prazer em conhecer, {nome_informado}! 😊 Qual serviço você procura hoje?", "Ver Opções", secoes)
+            enviar_lista(phone, f"Prazer em conhecer, {nome_informado}! 😊 Qual serviço procura hoje?", "Ver Opções", secoes)
             requests.post(WIX_URL, json={"from": phone, "name": nome_informado, "status": "escolha_especialidade"})
 
         elif status == "escolha_especialidade":
             if "Pilates Studio" in msg_recebida:
                 enviar_texto(phone, "Excelente escolha! 🧘‍♀️ O Pilates é fundamental para a correção postural e fortalecimento.")
-                enviar_botoes(phone, "Para passarmos as informações corretas, como você pretende realizar as aulas?", ["Wellhub / Totalpass", "Saúde Caixa", "Plano Particular"])
+                enviar_botoes(phone, "Como pretende realizar as aulas?", ["Wellhub / Totalpass", "Saúde Caixa", "Plano Particular"])
                 requests.post(WIX_URL, json={"from": phone, "status": "pilates_triagem_modalidade"})
             elif msg_recebida in ["Recovery", "Liberação Miofascial"]:
                 enviar_texto(phone, f"O serviço de **{msg_recebida}** é focado em performance e bem-estar, realizado exclusivamente de forma **PARTICULAR**. ✨")
@@ -147,12 +154,12 @@ def webhook():
                     enviar_texto(phone, "Para iniciarmos seu cadastro rápido, por favor, digite seu **NOME COMPLETO**:")
                     requests.post(WIX_URL, json={"from": phone, "status": "pilates_caixa_nome"})
             
-            elif "Particular" in msg_recebida:
-                enviar_texto(phone, "No nosso estúdio você conta com fisioterapeutas especializados e equipamentos de ponta para resultados reais. ✨")
+            elif "Particular" in msg_rece_bida:
+                enviar_texto(phone, "No nosso estúdio conta com fisioterapeutas especializados e equipamentos de ponta para resultados reais. ✨")
                 enviar_texto(phone, "Para podermos passar os detalhes e agendar sua **AULA EXPERIMENTAL**, digite seu **NOME COMPLETO**:")
                 requests.post(WIX_URL, json={"from": phone, "status": "pilates_particular_nome"})
             
-            elif "Wellhub" in msg_recebida:
+            elif "Wellhub" in msg_recebida or "Totalpass" in msg_recebida:
                 enviar_texto(phone, "Ótimo! ✅ Aceitamos planos **Golden (Wellhub)** e **TP5 (Totalpass)**.")
                 enviar_texto(phone, "Para sua autonomia, usamos o **App Next Fit** para agendamentos!\n📱 Android: bit.ly/app-android\n🍎 iPhone: bit.ly/app-iphone")
                 enviar_texto(phone, "Para liberarmos seu acesso, digite seu **NOME COMPLETO** e seu **ID do Aplicativo**:")
@@ -161,7 +168,7 @@ def webhook():
         # --- CADASTRO CAIXA (NOVO) ---
         elif status == "pilates_caixa_nome":
             requests.post(WIX_URL, json={"from": phone, "name": msg_recebida, "status": "pilates_caixa_dados_extra"})
-            enviar_texto(phone, "Recebido! Agora preciso do seu CPF, Data de Nascimento e E-mail (digite tudo em uma única mensagem):")
+            enviar_texto(phone, "Recebido! Agora preciso do seu CPF, Data de Nascimento e E-mail (pode digitar tudo numa única mensagem):")
 
         elif status == "pilates_caixa_dados_extra":
             requests.post(WIX_URL, json={"from": phone, "queixa": msg_recebida, "status": "pilates_caixa_carteirinha"})
@@ -172,18 +179,18 @@ def webhook():
             enviar_texto(phone, "Quase lá! Agora envie a FOTO do seu PEDIDO MÉDICO:")
 
         elif status == "pilates_caixa_pedido":
-            enviar_texto(phone, "Documentos recebidos! 🎉 Nossa equipe assumirá agora para validar sua autorização e agendar. Aguarde!")
+            enviar_texto(phone, "Documentos recebidos! 🎉 A nossa equipa assumirá agora para validar a sua autorização e agendar. Aguarde!")
             requests.post(WIX_URL, json={"from": phone, "status": "atendimento_humano"})
 
         # --- FINALIZAÇÃO PARTICULAR PILATES ---
         elif status == "pilates_particular_nome":
-            enviar_texto(phone, f"Prazer, {msg_recebida}! Ficamos muito felizes com seu interesse. O Pilates vai transformar sua postura! 😊")
-            enviar_texto(phone, "Nossa equipe assumirá agora para agendar sua **AULA EXPERIMENTAL**. Aguarde um instante!")
+            enviar_texto(phone, f"Prazer, {msg_recebida}! Ficamos muito felizes com o seu interesse. O Pilates vai transformar a sua postura! 😊")
+            enviar_texto(phone, "A nossa equipa assumirá agora para agendar a sua **AULA EXPERIMENTAL**. Aguarde um instante!")
             requests.post(WIX_URL, json={"from": phone, "name": msg_recebida, "status": "atendimento_humano"})
 
         # --- PERFORMANCE / RECOVERY ---
         elif status == "performance_nome":
-            enviar_texto(phone, "Anotado! Nossa equipe especializada assumirá o atendimento agora para encontrar o melhor horário para você. 👨‍⚕️")
+            enviar_texto(phone, "Anotado! A nossa equipa especializada assumirá o atendimento agora para encontrar o melhor horário para si. 👨‍⚕️")
             requests.post(WIX_URL, json={"from": phone, "name": msg_recebida, "status": "atendimento_humano"})
 
         return jsonify({"status": "success"}), 200
