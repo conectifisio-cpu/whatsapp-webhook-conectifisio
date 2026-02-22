@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import time
+import traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -13,11 +14,11 @@ CORS(app)
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-API_KEY = os.environ.get("GEMINI_API_KEY", "") # Chave do Gemini
+API_KEY = os.environ.get("GEMINI_API_KEY", "") 
 WIX_WEBHOOK_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
 # ==========================================
-# FUNÇÕES DE APOIO (ENVIO DE MENSAGENS)
+# FUNÇÕES DE APOIO
 # ==========================================
 
 def chamar_gemini(query, system_prompt):
@@ -28,7 +29,7 @@ def chamar_gemini(query, system_prompt):
         "contents": [{"parts": [{"text": query}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]}
     }
-    for delay in [1, 2, 4]:
+    for delay in [1, 2]:
         try:
             res = requests.post(url, json=payload, timeout=10)
             if res.status_code == 200:
@@ -50,13 +51,14 @@ def enviar_whatsapp(to, payload_msg):
         "to": to,
         **payload_msg
     }
-    return requests.post(url, json=payload, headers=headers, timeout=10)
+    res = requests.post(url, json=payload, headers=headers, timeout=10)
+    print(f"👉 RESPOSTA DA META: {res.status_code} - {res.text}")
+    return res
 
 def responder_texto(to, texto):
     return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
 def enviar_botoes(to, texto, botoes):
-    """Envia até 3 botões rápidos"""
     payload = {
         "type": "interactive",
         "interactive": {
@@ -70,7 +72,6 @@ def enviar_botoes(to, texto, botoes):
     return enviar_whatsapp(to, payload)
 
 def enviar_lista(to, texto, titulo_botao, secoes):
-    """Envia um menu em formato de lista (mais de 3 opções)"""
     payload = {
         "type": "interactive",
         "interactive": {
@@ -85,7 +86,7 @@ def enviar_lista(to, texto, titulo_botao, secoes):
     return enviar_whatsapp(to, payload)
 
 # ==========================================
-# WEBHOOK PRINCIPAL (O MOTOR DO ROBÔ)
+# WEBHOOK PRINCIPAL (COM RASTREADOR DE ERROS)
 # ==========================================
 
 @app.route("/api/whatsapp", methods=["POST"])
@@ -113,10 +114,14 @@ def webhook():
 
         # 2. SINCRONIZAR COM O WIX CMS
         sync_payload = {"from": phone, "text": msg_recebida}
-        res_wix = requests.post(WIX_WEBHOOK_URL, json=sync_payload, timeout=15)
+        try:
+            res_wix = requests.post(WIX_WEBHOOK_URL, json=sync_payload, timeout=15)
+        except Exception as e:
+            responder_texto(phone, f"⚠️ Erro 1: O servidor do Wix não está a responder. Detalhe: {str(e)}")
+            return jsonify({"status": "wix_timeout"}), 200
         
         if res_wix.status_code != 200:
-            print("Erro ao ligar ao Wix")
+            responder_texto(phone, f"⚠️ Erro 2: O Wix devolveu um erro {res_wix.status_code}. Esqueceu-se de Publicar o Wix?")
             return jsonify({"status": "wix_error"}), 200
             
         info = res_wix.json()
@@ -128,14 +133,12 @@ def webhook():
         # 3. LÓGICA DE FLUXO (AS FASES DO BOT)
         # ==========================================
 
-        # --- SE ESTÁ PARADO NO DASHBOARD (ATENDIMENTO MANUAL) ---
         if status == "atendimento_humano":
             if msg_recebida.lower() in ["reset", "recomeçar", "menu"]:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "triagem"})
                 responder_texto(phone, "Entendido! O seu atendimento foi reiniciado. 😊")
             return jsonify({"status": "human_mode"}), 200
 
-        # --- FASE 1: ACOLHIMENTO E VETERANOS ---
         elif status == "triagem" or msg_recebida.lower() in ["oi", "ola", "olá", "bom dia", "boa tarde"]:
             if is_veteran:
                 botoes = [
@@ -151,14 +154,12 @@ def webhook():
                 responder_texto(phone, "Para iniciarmos o seu atendimento, como gostaria de ser chamado(a)?")
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "cadastrando_nome"})
 
-        # --- FASE 2: NOME E QUEIXA (NOVO PACIENTE) ---
         elif status == "cadastrando_nome":
             requests.post(WIX_WEBHOOK_URL, json={"from": phone, "name": msg_recebida, "status": "cadastrando_queixa"})
             responder_texto(phone, f"Prazer em conhecer, {msg_recebida}! 😊")
             responder_texto(phone, "Me conte brevemente: o que te trouxe à clínica hoje? (Ex: dor nas costas, pós-operatório...)")
 
         elif status == "cadastrando_queixa":
-            # GEMINI IA: Acolhe a dor do paciente
             prompt = f"Você é fisioterapeuta. Paciente diz: '{msg_recebida}'. Responda em UMA frase curta com extrema empatia."
             acolhimento = chamar_gemini(msg_recebida, prompt) or "Entendi perfeitamente o seu caso. Vamos cuidar disso."
             
@@ -177,26 +178,19 @@ def webhook():
             }]
             enviar_lista(phone, f"{acolhimento}\n\nPor favor, escolha abaixo a especialidade que você procura hoje:", "Ver Especialidades", secoes)
 
-        # --- FASE 3: MODALIDADE (PARTICULAR/CONVÊNIO) E PILATES ---
         elif status == "escolha_especialidade" or status == "menu_veterano":
             requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": msg_recebida, "status": "modalidade"})
             
             if "Pilates" in msg_recebida:
-                botoes = [
-                    {"id": "p1", "title": "Particular"},
-                    {"id": "p2", "title": "Saúde Caixa"},
-                    {"id": "p3", "title": "Wellhub/Totalpass"}
-                ]
+                botoes = [{"id": "p1", "title": "Particular"}, {"id": "p2", "title": "Saúde Caixa"}, {"id": "p3", "title": "Wellhub/Totalpass"}]
                 enviar_botoes(phone, "Excelente escolha! 🧘‍♀️ Como pretende realizar as aulas?", botoes)
             elif "Recovery" in msg_recebida:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": "Particular", "status": "cpf"})
-                responder_texto(phone, "Para este serviço, trabalhamos exclusivamente de forma Particular. ✅")
-                responder_texto(phone, "Por favor, digite o seu CPF (apenas números) para validarmos o seu cadastro.")
+                responder_texto(phone, "Para este serviço, trabalhamos exclusivamente de forma Particular. ✅\nPor favor, digite o seu CPF (apenas números).")
             else:
                 botoes = [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}]
                 enviar_botoes(phone, "Entendido! Deseja realizar o atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?", botoes)
 
-        # --- FASE 4: COLETA DE DADOS SEGURA ---
         elif status == "modalidade":
             requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": msg_recebida, "status": "cpf"})
             responder_texto(phone, "Perfeito! Agora, para garantirmos a segurança do seu registro, por favor digite o seu CPF (apenas números).")
@@ -214,15 +208,16 @@ def webhook():
             botoes = [{"id": "t1", "title": "☀️ Manhã"}, {"id": "t2", "title": "⛅ Tarde"}]
             enviar_botoes(phone, "Quase pronto! Para vermos a disponibilidade, qual o melhor período para você?", botoes)
 
-        # --- FASE 5: ENCERRAMENTO ---
         elif status == "agendando":
             requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "finalizado"})
-            responder_texto(phone, "Tudo pronto! 🎉 Nossa equipe já recebeu seus dados e vai te chamar por aqui em instantes para confirmar o horário exato. Até já! 👩‍⚕️")
+            responder_texto(phone, "Tudo pronto! 🎉 Nossa equipe já recebeu seus dados e vai te chamar por aqui em instantes. Até já! 👩‍⚕️")
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"Erro Crítico: {str(e)}")
+        # Se o Python crashar, avisa o Dr. Issa diretamente no WhatsApp
+        print(f"Erro Crítico: {traceback.format_exc()}")
+        responder_texto(phone, f"⚠️ Erro 3 (Cérebro Crashou): {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 200
 
 @app.route("/api/whatsapp", methods=["GET"])
