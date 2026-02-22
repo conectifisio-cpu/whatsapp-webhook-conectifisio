@@ -11,31 +11,26 @@ CORS(app)
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE
 # ==========================================
-# O ambiente fornece estas chaves automaticamente
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-API_KEY = "" # Chave de API injetada no runtime
+API_KEY = os.environ.get("GEMINI_API_KEY", "") # Chave do Gemini
 WIX_WEBHOOK_URL = "https://www.ictusfisioterapia.com.br/_functions/conectifisioWebhook"
 
 # ==========================================
-# FUNÇÕES DE APOIO (IA E COMUNICAÇÃO)
+# FUNÇÕES DE APOIO (ENVIO DE MENSAGENS)
 # ==========================================
 
 def chamar_gemini(query, system_prompt):
-    """
-    Integração com Gemini 2.5 Flash para análise de NLP.
-    Retorna o texto processado ou None em caso de falha.
-    """
+    if not API_KEY:
+        return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": query}]}],
         "systemInstruction": {"parts": [{"text": system_prompt}]}
     }
-    
-    # Implementação de backoff exponencial conforme requisitos
-    for delay in [1, 2, 4, 8, 16]:
+    for delay in [1, 2, 4]:
         try:
-            res = requests.post(url, json=payload, timeout=15)
+            res = requests.post(url, json=payload, timeout=10)
             if res.status_code == 200:
                 result = res.json()
                 return result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
@@ -44,7 +39,6 @@ def chamar_gemini(query, system_prompt):
     return None
 
 def enviar_whatsapp(to, payload_msg):
-    """Envia requisição para a Meta Cloud API"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -61,8 +55,37 @@ def enviar_whatsapp(to, payload_msg):
 def responder_texto(to, texto):
     return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
+def enviar_botoes(to, texto, botoes):
+    """Envia até 3 botões rápidos"""
+    payload = {
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": texto},
+            "action": {
+                "buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"]}} for b in botoes]
+            }
+        }
+    }
+    return enviar_whatsapp(to, payload)
+
+def enviar_lista(to, texto, titulo_botao, secoes):
+    """Envia um menu em formato de lista (mais de 3 opções)"""
+    payload = {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "body": {"text": texto},
+            "action": {
+                "button": titulo_botao,
+                "sections": secoes
+            }
+        }
+    }
+    return enviar_whatsapp(to, payload)
+
 # ==========================================
-# WEBHOOK PRINCIPAL
+# WEBHOOK PRINCIPAL (O MOTOR DO ROBÔ)
 # ==========================================
 
 @app.route("/api/whatsapp", methods=["POST"])
@@ -80,7 +103,7 @@ def webhook():
         phone = message["from"]
         msg_type = message.get("type")
         
-        # 1. CAPTURA DA MENSAGEM (Texto ou Botão)
+        # 1. LER MENSAGEM DO PACIENTE
         msg_recebida = ""
         if msg_type == "text":
             msg_recebida = message["text"]["body"].strip()
@@ -88,12 +111,12 @@ def webhook():
             inter = message["interactive"]
             msg_recebida = inter.get("button_reply", {}).get("title", inter.get("list_reply", {}).get("title", ""))
 
-        # 2. SINCRONIZAÇÃO COM WIX (O Wix é o cérebro do estado)
-        # Enviamos a mensagem para o Wix e ele nos diz o status atual do paciente
+        # 2. SINCRONIZAR COM O WIX CMS
         sync_payload = {"from": phone, "text": msg_recebida}
         res_wix = requests.post(WIX_WEBHOOK_URL, json=sync_payload, timeout=15)
         
         if res_wix.status_code != 200:
+            print("Erro ao ligar ao Wix")
             return jsonify({"status": "wix_error"}), 200
             
         info = res_wix.json()
@@ -101,57 +124,115 @@ def webhook():
         is_veteran = info.get("isVeteran", False)
         nome_paciente = info.get("patientName", "Paciente")
 
-        # 3. LÓGICA DE INTELIGÊNCIA ARTIFICIAL (NLP)
-        # Se o paciente estiver na fase de contar o que sente (Queixa)
-        if status == "cadastrando_queixa":
-            prompt_ia = f"""
-            Você é o assistente clínico da Conectifisio. O paciente {nome_paciente} relatou: "{msg_recebida}".
-            Sua tarefa:
-            1. Analise a queixa e seja extremamente empático e acolhedor.
-            2. Confirme que entendeu o local da dor (ex: "Sinto muito que sua lombar esteja incomodando").
-            3. Não forneça diagnósticos.
-            4. Responda em apenas uma frase curta e humana.
-            """
-            analise_ia = chamar_gemini(msg_recebida, prompt_ia)
-            
-            # Devolvemos ao Wix o resumo da IA para o Dashboard
-            requests.post(WIX_WEBHOOK_URL, json={
-                "from": phone, 
-                "queixa": msg_recebida, 
-                "queixa_ia": analise_ia, 
-                "status": "escolha_especialidade"
-            })
-            
-            responder_texto(phone, analise_ia if analise_ia else "Entendido. Vamos cuidar disso agora mesmo.")
-            # O robô seguirá para o menu de especialidades no próximo passo
+        # ==========================================
+        # 3. LÓGICA DE FLUXO (AS FASES DO BOT)
+        # ==========================================
 
-        # 4. LÓGICA DE FAQ / CONVERSA LIVRE (FALLBACK)
-        elif status == "atendimento_humano":
-            # Se um humano assumiu, o robô só obedece ao comando de RESET
-            if msg_recebida.lower() in ["resetar", "recomeçar", "menu"]:
+        # --- SE ESTÁ PARADO NO DASHBOARD (ATENDIMENTO MANUAL) ---
+        if status == "atendimento_humano":
+            if msg_recebida.lower() in ["reset", "recomeçar", "menu"]:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "triagem"})
-                responder_texto(phone, "Entendido! Vamos recomeçar o seu atendimento. 😊")
+                responder_texto(phone, "Entendido! O seu atendimento foi reiniciado. 😊")
             return jsonify({"status": "human_mode"}), 200
 
-        # Caso contrário, o robô segue a estrutura de botões (Fases 1 a 6)
-        # ... (O restante da lógica de botões é processada aqui) ...
+        # --- FASE 1: ACOLHIMENTO E VETERANOS ---
+        elif status == "triagem" or msg_recebida.lower() in ["oi", "ola", "olá", "bom dia", "boa tarde"]:
+            if is_veteran:
+                botoes = [
+                    {"id": "b1", "title": "🗓️ Reagendar"},
+                    {"id": "b2", "title": "🔄 Retomar Tratamento"},
+                    {"id": "b3", "title": "➕ Novo Serviço"}
+                ]
+                responder_texto(phone, f"Olá, {nome_paciente}! ✨ Que bom ter você de volta.")
+                enviar_botoes(phone, "Como posso facilitar o seu dia hoje?", botoes)
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "menu_veterano"})
+            else:
+                responder_texto(phone, "Olá! ✨ Seja muito bem-vindo à Conectifisio.")
+                responder_texto(phone, "Para iniciarmos o seu atendimento, como gostaria de ser chamado(a)?")
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "cadastrando_nome"})
+
+        # --- FASE 2: NOME E QUEIXA (NOVO PACIENTE) ---
+        elif status == "cadastrando_nome":
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "name": msg_recebida, "status": "cadastrando_queixa"})
+            responder_texto(phone, f"Prazer em conhecer, {msg_recebida}! 😊")
+            responder_texto(phone, "Me conte brevemente: o que te trouxe à clínica hoje? (Ex: dor nas costas, pós-operatório...)")
+
+        elif status == "cadastrando_queixa":
+            # GEMINI IA: Acolhe a dor do paciente
+            prompt = f"Você é fisioterapeuta. Paciente diz: '{msg_recebida}'. Responda em UMA frase curta com extrema empatia."
+            acolhimento = chamar_gemini(msg_recebida, prompt) or "Entendi perfeitamente o seu caso. Vamos cuidar disso."
+            
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "queixa": msg_recebida, "queixa_ia": acolhimento, "status": "escolha_especialidade"})
+            
+            secoes = [{
+                "title": "Nossos Serviços",
+                "rows": [
+                    {"id": "s1", "title": "Fisio Ortopédica"},
+                    {"id": "s2", "title": "Fisio Neurológica"},
+                    {"id": "s3", "title": "Fisio Pélvica"},
+                    {"id": "s4", "title": "Acupuntura"},
+                    {"id": "s5", "title": "Pilates Studio"},
+                    {"id": "s6", "title": "Recovery / Liberação"}
+                ]
+            }]
+            enviar_lista(phone, f"{acolhimento}\n\nPor favor, escolha abaixo a especialidade que você procura hoje:", "Ver Especialidades", secoes)
+
+        # --- FASE 3: MODALIDADE (PARTICULAR/CONVÊNIO) E PILATES ---
+        elif status == "escolha_especialidade" or status == "menu_veterano":
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": msg_recebida, "status": "modalidade"})
+            
+            if "Pilates" in msg_recebida:
+                botoes = [
+                    {"id": "p1", "title": "Particular"},
+                    {"id": "p2", "title": "Saúde Caixa"},
+                    {"id": "p3", "title": "Wellhub/Totalpass"}
+                ]
+                enviar_botoes(phone, "Excelente escolha! 🧘‍♀️ Como pretende realizar as aulas?", botoes)
+            elif "Recovery" in msg_recebida:
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": "Particular", "status": "cpf"})
+                responder_texto(phone, "Para este serviço, trabalhamos exclusivamente de forma Particular. ✅")
+                responder_texto(phone, "Por favor, digite o seu CPF (apenas números) para validarmos o seu cadastro.")
+            else:
+                botoes = [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}]
+                enviar_botoes(phone, "Entendido! Deseja realizar o atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?", botoes)
+
+        # --- FASE 4: COLETA DE DADOS SEGURA ---
+        elif status == "modalidade":
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": msg_recebida, "status": "cpf"})
+            responder_texto(phone, "Perfeito! Agora, para garantirmos a segurança do seu registro, por favor digite o seu CPF (apenas números).")
+
+        elif status == "cpf":
+            cpf_limpo = ''.join(filter(str.isdigit, msg_recebida))
+            if len(cpf_limpo) != 11:
+                responder_texto(phone, "❌ Este CPF não parece ter 11 números. Por favor, digite novamente (só os números).")
+            else:
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "cpf": cpf_limpo, "status": "data_nascimento"})
+                responder_texto(phone, "CPF validado! ✅ Qual a sua data de nascimento? (Ex: 15/05/1980)")
+
+        elif status == "data_nascimento":
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "birthDate": msg_recebida, "status": "agendando"})
+            botoes = [{"id": "t1", "title": "☀️ Manhã"}, {"id": "t2", "title": "⛅ Tarde"}]
+            enviar_botoes(phone, "Quase pronto! Para vermos a disponibilidade, qual o melhor período para você?", botoes)
+
+        # --- FASE 5: ENCERRAMENTO ---
+        elif status == "agendando":
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "finalizado"})
+            responder_texto(phone, "Tudo pronto! 🎉 Nossa equipe já recebeu seus dados e vai te chamar por aqui em instantes para confirmar o horário exato. Até já! 👩‍⚕️")
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"DEBUG ERRO: {str(e)}")
+        print(f"Erro Crítico: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 200
 
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
-    """Verificação obrigatória do Webhook pela Meta"""
     hub_mode = request.args.get("hub.mode")
     hub_token = request.args.get("hub.verify_token")
     hub_challenge = request.args.get("hub.challenge")
-    
     if hub_mode == "subscribe" and hub_token == "conectifisio_2024_seguro":
         return hub_challenge, 200
-    return "Token Inválido", 403
+    return "Erro", 403
 
 if __name__ == "__main__":
     app.run(port=5000)
