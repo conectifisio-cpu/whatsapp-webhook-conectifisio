@@ -104,6 +104,19 @@ def webhook():
         elif not modalidade:
             modalidade = "Particular"
 
+        # =====================================================
+        # A SOLUÇÃO: RETORNO INTELIGENTE PARA FLUXOS CONCLUÍDOS
+        # Evita que o robô fique "mudo" quando o status é agendando
+        # =====================================================
+        if status in ["agendando", "finalizado"]:
+            if is_veteran:
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "menu_veterano"})
+                botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Retomar"}, {"id": "v3", "title": "➕ Novo Serviço"}]
+                enviar_botoes(phone, f"Olá, {info.get('patientName', 'paciente')}! ✨ Que bom ter você de volta. Como posso te ajudar hoje?", botoes)
+                return jsonify({"status": "restart_veteran"}), 200
+            else:
+                status = "triagem" # Força o reinício se o cadastro ficou pela metade
+
         # -----------------------------------------------------
         # MÁQUINA DE ESTADOS
         # -----------------------------------------------------
@@ -154,7 +167,6 @@ def webhook():
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": msg_recebida, "modalidade": "Particular", "status": "cadastrando_queixa"})
                 responder_texto(phone, f"Ótima escolha para performance em {msg_recebida}! 🚀\n\nMe conte brevemente: o que te trouxe aqui hoje?")
             elif msg_recebida == "Fisio Neurológica":
-                # A NOVA TRIAGEM NEURO ENTRA AQUI
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": msg_recebida, "status": "triagem_neuro"})
                 botoes = [
                     {"id": "n1", "title": "🔹 Independente"}, 
