@@ -49,7 +49,7 @@ def enviar_botoes(to, texto, botoes):
         "interactive": {
             "type": "button",
             "body": {"text": texto},
-            "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"]}} for b in botoes]}
+            "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}
         }
     }
     return enviar_whatsapp(to, payload)
@@ -60,7 +60,7 @@ def enviar_lista(to, texto, titulo_botao, secoes):
         "interactive": {
             "type": "list",
             "body": {"text": texto},
-            "action": {"button": titulo_botao, "sections": secoes}
+            "action": {"button": titulo_botao[:20], "sections": secoes}
         }
     }
     return enviar_whatsapp(to, payload)
@@ -114,7 +114,7 @@ def webhook():
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
             enviar_botoes(phone, "Olá! ✨ Seja muito bem-vindo à Conectifisio. Para iniciarmos, em qual unidade você deseja ser atendido?", botoes)
 
-        # FASE 2: NOME
+        # FASE 2: NOME (APELIDO/NOME CURTO)
         elif status == "escolhendo_unidade":
             requests.post(WIX_WEBHOOK_URL, json={"from": phone, "unit": msg_recebida, "status": "cadastrando_nome"})
             responder_texto(phone, f"Ótima escolha! Unidade {msg_recebida} selecionada. Para continuarmos, como você gostaria de ser chamado(a)?")
@@ -123,16 +123,22 @@ def webhook():
         elif status == "cadastrando_nome":
             if is_veteran:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "name": msg_recebida, "status": "menu_veterano"})
-                botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Retomar Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}]
+                botoes = [
+                    {"id": "v1", "title": "🗓️ Reagendar"}, 
+                    {"id": "v2", "title": "🔄 Retomar"}, 
+                    {"id": "v3", "title": "➕ Novo Serviço"}
+                ]
                 enviar_botoes(phone, f"Olá, {msg_recebida}! ✨ Que bom ter você de volta conosco. Como podemos facilitar o seu dia hoje?", botoes)
             else:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "name": msg_recebida, "status": "escolhendo_especialidade"})
                 secoes = [{"title": "Nossos Serviços", "rows": [
                     {"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"},
                     {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"},
-                    {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery / Liberação Miofascial"}
+                    {"id": "e5", "title": "Pilates Studio"}, 
+                    {"id": "e6", "title": "Recovery"},
+                    {"id": "e7", "title": "Liberação Miofascial"}
                 ]}]
-                enviar_lista(phone, f"Prazer em conhecer você, {msg_recebida}! 😊\n\nQual especialidade você procura hoje?", "Ver Especialidades", secoes)
+                enviar_lista(phone, f"Prazer em conhecer você, {msg_recebida}! 😊\n\nQual especialidade você procura hoje?", "Ver Serviços", secoes)
 
         # ROTA VETERANO
         elif status == "menu_veterano":
@@ -141,10 +147,12 @@ def webhook():
                 secoes = [{"title": "Nossos Serviços", "rows": [
                     {"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"},
                     {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"},
-                    {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery / Liberação Miofascial"}
+                    {"id": "e5", "title": "Pilates Studio"},
+                    {"id": "e6", "title": "Recovery"},
+                    {"id": "e7", "title": "Liberação Miofascial"}
                 ]}]
-                enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Especialidades", secoes)
-            elif "Retomar" in msg_recebida or "Continuar" in msg_recebida:
+                enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Serviços", secoes)
+            elif "Retomar" in msg_recebida:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "status": "modalidade"})
                 botoes = [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}]
                 enviar_botoes(phone, "As novas sessões serão pelo seu CONVÊNIO ou de forma PARTICULAR?", botoes)
@@ -155,9 +163,10 @@ def webhook():
 
         # ROTA NOVO PACIENTE (QUEIXA + MODALIDADE)
         elif status == "escolhendo_especialidade":
-            if "Recovery" in msg_recebida:
-                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": "Recovery / Liberação Miofascial", "modalidade": "Particular", "status": "cadastrando_queixa"})
-                responder_texto(phone, "Excelente escolha para sua performance! 🚀 Me conte brevemente: o que te trouxe aqui hoje?")
+            if "Recovery" in msg_recebida or "Liberação" in msg_recebida:
+                servico_final = "Recovery" if "Recovery" in msg_recebida else "Liberação Miofascial"
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": servico_final, "modalidade": "Particular", "status": "cadastrando_queixa"})
+                responder_texto(phone, f"Excelente escolha para sua performance em {servico_final}! 🚀 Me conte brevemente: o que te trouxe aqui hoje?")
             else:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "servico": msg_recebida, "status": "cadastrando_queixa"})
                 responder_texto(phone, f"Entendido! {msg_recebida} selecionada. Me conte brevemente: o que te trouxe à clínica hoje? (Ex: dor nas costas, pós-operatório...)")
@@ -166,9 +175,11 @@ def webhook():
             prompt = "Você é fisioterapeuta na Conectifisio Brasil. Responda com UMA frase curta de acolhimento empático."
             acolhimento = chamar_gemini(msg_recebida, prompt) or "Sinto muito por isso, vamos cuidar de você."
             
-            if info.get("servico") == "Recovery / Liberação Miofascial":
-                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cpf"})
-                responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro particular, digite o seu CPF (apenas números).")
+            servico_atual = info.get("servico", "")
+            if servico_atual == "Recovery" or servico_atual == "Liberação Miofascial":
+                # Atalho Particular pede Nome Completo antes do CPF
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cadastrando_nome_completo"})
+                responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro particular, por favor digite o seu NOME COMPLETO (conforme o documento):")
             else:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "queixa": msg_recebida, "queixa_ia": acolhimento, "status": "modalidade"})
                 botoes = [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}]
@@ -178,14 +189,39 @@ def webhook():
         elif status == "modalidade":
             if "Convênio" in msg_recebida:
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": "Convênio", "status": "nome_convenio"})
-                responder_texto(phone, "Qual é o nome do seu plano de saúde? (Ex: Amil, Bradesco...)")
+                
+                # BUSCA DINÂMICA DE CONVÊNIOS NO FEEGOW VIA WIX
+                try:
+                    res_convenios = requests.post(WIX_WEBHOOK_URL, json={"from": phone, "action": "get_insurances"}, timeout=10)
+                    lista_feegow = res_convenios.json().get("convenios", [])
+                    
+                    if lista_feegow:
+                        rows = [{"id": f"c_{c['id']}", "title": c['nome'][:24]} for c in lista_feegow[:10]]
+                        secoes = [{"title": "Convênios Aceitos", "rows": rows}]
+                        enviar_lista(phone, "Entendido! Selecione abaixo o seu plano de saúde para validarmos a cobertura:", "Ver Convênios", secoes)
+                    else:
+                        raise Exception("Lista vazia")
+                except:
+                    secoes = [{"title": "Convênios Aceitos", "rows": [
+                        {"id": "c1", "title": "Amil"}, {"id": "c2", "title": "Bradesco Saúde"},
+                        {"id": "c3", "title": "Porto Seguro"}, {"id": "c4", "title": "Prevent Senior"},
+                        {"id": "c5", "title": "Cassi"}, {"id": "c6", "title": "Saúde Caixa"}
+                    ]}]
+                    enviar_lista(phone, "Entendido! Selecione o seu plano de saúde:", "Ver Convênios", secoes)
             else:
-                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": "Particular", "status": "cpf"})
-                responder_texto(phone, "Perfeito! Para iniciarmos seu cadastro particular, digite o seu CPF (apenas números).")
+                # PARTICULAR: Pede Nome Completo agora
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "modalidade": "Particular", "status": "cadastrando_nome_completo"})
+                responder_texto(phone, "Perfeito! Para iniciarmos seu cadastro particular, por favor digite o seu NOME COMPLETO (conforme o documento):")
 
         elif status == "nome_convenio":
-            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "convenio": msg_recebida, "status": "cpf"})
-            responder_texto(phone, "Anotado! Agora, digite o seu CPF (apenas números).")
+            # CONVÊNIO: Pede Nome Completo após o plano
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "convenio": msg_recebida, "status": "cadastrando_nome_completo"})
+            responder_texto(phone, f"Anotado: {msg_recebida}! Agora, por favor digite o seu NOME COMPLETO (conforme o documento):")
+
+        elif status == "cadastrando_nome_completo":
+            # Salva o nome oficial (title) e pede o CPF
+            requests.post(WIX_WEBHOOK_URL, json={"from": phone, "name": msg_recebida, "status": "cpf"})
+            responder_texto(phone, "Nome registrado com sucesso! ✅ Agora, digite o seu CPF (apenas números):")
 
         elif status == "cpf":
             cpf_limpo = re.sub(r'\D', '', msg_recebida)
@@ -205,7 +241,6 @@ def webhook():
                 botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
                 enviar_botoes(phone, "Cadastro concluído! 🎉 Qual o melhor período para verificarmos a agenda? ☀️ ⛅", botoes)
             else:
-                # CONVÊNIO: Pede o NÚMERO DA CARTEIRINHA agora
                 requests.post(WIX_WEBHOOK_URL, json={"from": phone, "email": msg_recebida, "status": "num_carteirinha"})
                 responder_texto(phone, "Certo! E qual é o NÚMERO DA SUA CARTEIRINHA do convênio? (apenas números)")
 
