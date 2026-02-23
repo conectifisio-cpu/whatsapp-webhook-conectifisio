@@ -34,7 +34,15 @@ def enviar_whatsapp(to, payload_msg):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, **payload_msg}
-    return requests.post(url, json=payload, headers=headers, timeout=10)
+    
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=10)
+        # LOG VITAL: Imprime a resposta da Meta na Vercel para sabermos se o Token expirou ou se há erro de formato
+        print(f"META API RESPONSE [{res.status_code}]: {res.text}") 
+        return res
+    except Exception as e:
+        print(f"META API ERROR: {str(e)}")
+        return None
 
 def responder_texto(to, texto):
     return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
@@ -97,6 +105,7 @@ def webhook():
         # 2. CONSULTA ESTADO ATUAL NO WIX
         res_wix = requests.post(WIX_WEBHOOK_URL, json={"from": phone}, timeout=10)
         info = res_wix.json()
+        print(f"WIX STATUS RETORNADO: {info.get('currentStatus', 'triagem')}") # Log para acompanhamento
         status = info.get("currentStatus", "triagem")
         is_veteran = info.get("isVeteran", False)
         servico = info.get("servico", "")
@@ -174,7 +183,6 @@ def webhook():
 
         # ETAPA 7: NOME COMPLETO (SÓ APÓS DEFINIR PLANO)
         elif status == "nome_convenio":
-            # Validação de Matriz aqui (Omitida para brevidade, mas o robô salva o plano e segue)
             requests.post(WIX_WEBHOOK_URL, json={"from": phone, "convenio": msg_recebida, "status": "cadastrando_nome_completo"})
             responder_texto(phone, f"Anotado: {msg_recebida}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
 
@@ -200,7 +208,7 @@ def webhook():
         # ETAPA 11: FINALIZAÇÃO PARTICULAR OU BUROCRACIA CONVÊNIO
         elif status == "coletando_email":
             if modalidade == "Particular":
-                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "email": msg_rece_bida if 'msg_rece_bida' in locals() else msg_recebida, "status": "buscando_vagas"})
+                requests.post(WIX_WEBHOOK_URL, json={"from": phone, "email": msg_recebida, "status": "buscando_vagas"})
                 botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
                 enviar_botoes(phone, "Cadastro concluído! 🎉\n\nQual o melhor período para verificarmos a agenda particular?", botoes)
             else:
