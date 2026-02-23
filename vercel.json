@@ -8,7 +8,7 @@
   ],
   "routes": [
     {
-      "src": "/api/whatsapp",
+      "src": "/api/(.*)",
       "dest": "api/whatsapp.py"
     }
   ]
