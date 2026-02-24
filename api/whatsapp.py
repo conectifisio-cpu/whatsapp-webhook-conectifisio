@@ -21,24 +21,27 @@ API_KEY = os.environ.get("GEMINI_API_KEY", "")
 # ==========================================
 # INICIALIZAÇÃO DO FIREBASE (O Cofre Seguro)
 # ==========================================
-# Lê o JSON seguro da Vercel sem expor a chave no código
 firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
 if firebase_creds_json and not firebase_admin._apps:
     try:
-        cred_dict = json.loads(firebase_creds_json)
+        cred_dict = json.loads(firebase_creds_json, strict=False)
+        # Desamassa as quebras de linha que a Vercel estraga no JSON
+        if 'private_key' in cred_dict:
+            cred_dict['private_key'] = cred_dict['private_key'].replace('\\n', '\n')
+            
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
+        print("Firebase Inicializado com Sucesso!")
     except Exception as e:
-        print(f"Erro ao carregar Firebase: {e}")
+        print(f"Erro Crítico ao carregar Firebase: {e}")
 
-# Instância da Base de Dados
 db = firestore.client() if firebase_admin._apps else None
 
 # ==========================================
 # FUNÇÕES DE MEMÓRIA (FIREBASE)
 # ==========================================
 def get_paciente(phone):
-    """Busca a memória do paciente em 1 milissegundo"""
+    """Busca a memória do paciente na base de dados"""
     if not db: return {}
     doc = db.collection("PatientsKanban").document(phone).get()
     return doc.to_dict() if doc.exists else {}
@@ -53,6 +56,7 @@ def update_paciente(phone, data):
 # FUNÇÕES DE MENSAGERIA E IA
 # ==========================================
 def chamar_gemini(query, system_prompt):
+    """Faz a chamada à Inteligência Artificial do Google"""
     if not API_KEY: return None
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
     payload = {"contents": [{"parts": [{"text": query[:300]}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}}
@@ -64,15 +68,14 @@ def chamar_gemini(query, system_prompt):
     return None
 
 def enviar_whatsapp(to, payload_msg):
+    """Envia a mensagem genérica para a Meta"""
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, **payload_msg}
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=10)
-        print(f"META API RESPONSE [{res.status_code}]: {res.text}") 
         return res
     except Exception as e:
-        print(f"META API ERROR: {str(e)}")
         return None
 
 def responder_texto(to, texto):
@@ -101,7 +104,7 @@ def enviar_lista(to, texto, titulo_botao, secoes):
     return enviar_whatsapp(to, payload)
 
 # ==========================================
-# WEBHOOK PRINCIPAL (O CÉREBRO)
+# WEBHOOK POST (Recebe as mensagens do paciente)
 # ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
@@ -126,39 +129,33 @@ def webhook():
             tem_anexo = True
             msg_recebida = "Anexo Recebido"
 
-        # 1. COMANDOS DE RESET DE EMERGÊNCIA
+        # Comando para forçar reinício
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial"]:
             update_paciente(phone, {"status": "triagem", "cellphone": phone})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
             enviar_botoes(phone, "Atendimento reiniciado. 🔄\n\nEm qual unidade deseja ser atendido?", botoes)
             return jsonify({"status": "reset"}), 200
 
-        # =====================================================
-        # 2. CONSULTA ESTADO ATUAL (AGORA ULTRA-RÁPIDO NO FIREBASE)
-        # =====================================================
+        # Carrega o contexto do paciente
         info = get_paciente(phone)
-        
-        # Cria registo básico se não existir
         if not info:
             info = {"cellphone": phone, "status": "triagem"}
             update_paciente(phone, info)
 
         status = info.get("status", "triagem")
         servico = info.get("servico", "")
-        
-        # Regra de Veterano: Se tem CPF e é válido (11 chars)
         cpf_salvo = info.get("cpf", "")
+        
+        # Identificação de Veterano: se tem CPF válido (11 algarismos)
         is_veteran = True if len(re.sub(r'\D', '', cpf_salvo)) >= 11 else False
         
-        # Super Trava: Garante que a modalidade nunca é esquecida
+        # Super Trava: Garante que a modalidade não é perdida
         modalidade = info.get("modalidade", "")
         convenio = info.get("convenio", "")
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade: modalidade = "Particular"
 
-        # -----------------------------------------------------
-        # O RETORNO INTELIGENTE PARA FLUXOS CONCLUÍDOS
-        # -----------------------------------------------------
+        # Se paciente já finalizou anteriormente e envia nova mensagem
         if status in ["agendando", "finalizado"]:
             if is_veteran:
                 update_paciente(phone, {"status": "menu_veterano"})
@@ -167,11 +164,10 @@ def webhook():
                 return jsonify({"status": "restart_veteran"}), 200
             else:
                 status = "triagem"
-
-        # -----------------------------------------------------
-        # 3. MÁQUINA DE ESTADOS (TOTALMENTE INDEPENDENTE DO WIX)
-        # -----------------------------------------------------
         
+        # -----------------------------------------------------
+        # MÁQUINA DE ESTADOS DO CHATBOT
+        # -----------------------------------------------------
         if status == "triagem":
             update_paciente(phone, {"status": "escolhendo_unidade"})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
@@ -312,7 +308,6 @@ def webhook():
             if not tem_anexo: 
                 responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
             else:
-                # Na prática, a Vercel pode guardar o URL da imagem aqui, mas para simplificar registamos a receção
                 update_paciente(phone, {"status": "foto_pedido_medico", "tem_foto_carteirinha": True})
                 responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO DO SEU PEDIDO MÉDICO.")
 
@@ -331,14 +326,40 @@ def webhook():
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"Erro Crítico: {traceback.format_exc()}")
+        print(f"Erro Crítico POST: {traceback.format_exc()}")
         return jsonify({"status": "error", "message": str(e)}), 200
 
+# ==========================================
+# WEBHOOK GET (Trata verificação Meta e Pedido do Dashboard)
+# ==========================================
 @app.route("/api/whatsapp", methods=["GET"])
-def verify():
+def verify_or_data():
+    # 1. Porta de Verificação do WhatsApp (Meta)
     if request.args.get("hub.verify_token") == "conectifisio_2024_seguro":
         return request.args.get("hub.challenge"), 200
-    return "Erro", 403
+        
+    # 2. A "Porta Secreta" para o Dashboard ler o Firebase
+    if request.args.get("action") == "get_patients":
+        try:
+            if not db: return jsonify({"items": []}), 200
+            docs = db.collection("PatientsKanban").stream()
+            patients = []
+            for doc in docs:
+                data = doc.to_dict()
+                data["id"] = doc.id
+                # Converte a data do Firebase para string
+                if "lastInteraction" in data and data["lastInteraction"]:
+                    try:
+                        data["lastInteraction"] = data["lastInteraction"].isoformat()
+                    except:
+                        data["lastInteraction"] = str(data["lastInteraction"])
+                patients.append(data)
+            return jsonify({"items": patients}), 200
+        except Exception as e:
+            print(f"Erro ao buscar pacientes: {str(e)}")
+            return jsonify({"error": str(e), "items": []}), 500
+            
+    return "Acesso Negado ou Rota Incorreta", 403
 
 if __name__ == "__main__":
     app.run(port=5000)
