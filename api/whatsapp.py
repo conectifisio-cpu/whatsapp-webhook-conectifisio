@@ -156,7 +156,7 @@ def webhook():
         elif not modalidade: modalidade = "Particular"
 
         # Se paciente já finalizou anteriormente e envia nova mensagem
-        if status in ["agendando", "finalizado"]:
+        if status == "finalizado":
             if is_veteran:
                 update_paciente(phone, {"status": "menu_veterano"})
                 botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Retomar"}, {"id": "v3", "title": "➕ Novo Serviço"}]
@@ -210,16 +210,159 @@ def webhook():
                 enviar_botoes(phone, "Certo! Vamos organizar isso. Qual o melhor período para você? ☀️ ⛅", botoes)
 
         elif status == "escolhendo_especialidade":
-            if msg_recebida in ["Recovery", "Liberação Miofascial"]:
+            if msg_recebida in ["Recovery", "Liberação Miofascial", "Recovery / Liberação"]:
                 update_paciente(phone, {"servico": msg_recebida, "modalidade": "Particular", "status": "cadastrando_queixa"})
                 responder_texto(phone, f"Ótima escolha para performance em {msg_recebida}! 🚀\n\nMe conte brevemente: o que te trouxe aqui hoje?")
             elif msg_recebida == "Fisio Neurológica":
                 update_paciente(phone, {"servico": msg_recebida, "status": "triagem_neuro"})
                 botoes = [{"id": "n1", "title": "🔹 Independente"}, {"id": "n2", "title": "🤝 Semidependente"}, {"id": "n3", "title": "👨‍🦽 Dependente"}]
                 enviar_botoes(phone, "Para agendarmos com o especialista ideal, como está a mobilidade do paciente?\n\n🔹 *Independente:* Faz tudo sozinho.\n🤝 *Semidependente:* Precisa de apoio.\n👨‍🦽 *Dependente:* Auxílio constante.", botoes)
+            elif msg_recebida == "Pilates Studio":
+                update_paciente(phone, {"servico": msg_recebida, "status": "pilates_modalidade"})
+                secoes = [{"title": "Modalidade Pilates", "rows": [
+                    {"id": "p_part", "title": "💎 Plano Particular"},
+                    {"id": "p_caixa", "title": "🏦 Saúde Caixa"},
+                    {"id": "p_app", "title": "💪 Wellhub/Totalpass"},
+                    {"id": "p_vol", "title": "⬅️ Voltar"}
+                ]}]
+                enviar_lista(phone, "Excelente escolha! 🧘‍♀️ O Pilates é fundamental para a correção postural e fortalecimento.\n\nPara passarmos as informações corretas de horários e valores, como você pretende realizar as aulas?", "Ver Opções", secoes)
             else:
                 update_paciente(phone, {"servico": msg_recebida, "status": "cadastrando_queixa"})
                 responder_texto(phone, f"Entendido! {msg_recebida} selecionada.\n\nMe conte brevemente: o que te trouxe à clínica hoje?")
+
+        elif status.startswith("pilates_"):
+            if status == "pilates_modalidade":
+                if "Voltar" in msg_recebida:
+                    update_paciente(phone, {"status": "escolhendo_especialidade"})
+                    secoes = [{"title": "Nossos Serviços", "rows": [
+                        {"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"},
+                        {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"},
+                        {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery / Liberação"}
+                    ]}]
+                    enviar_lista(phone, "Sem problemas! Voltando ao menu de especialidades. Qual serviço você procura hoje?", "Ver Serviços", secoes)
+                elif "Wellhub" in msg_recebida or "Totalpass" in msg_recebida:
+                    update_paciente(phone, {"modalidade": "Parceria App"})
+                    if is_veteran:
+                        update_paciente(phone, {"status": "pilates_app"})
+                        botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
+                        enviar_botoes(phone, f"Prazer ter você aqui novamente, {info.get('title', 'paciente')}! ✨ E qual desses aplicativos você utiliza para o seu plano?", botoes)
+                    else:
+                        update_paciente(phone, {"status": "pilates_nome_app"})
+                        responder_texto(phone, "Perfeito! ✅ Informamos que para o Pilates aceitamos os planos Golden (Wellhub) e TP5 (Totalpass).\n\nPara iniciarmos o seu atendimento, como gostaria de ser chamado(a)?")
+                elif "Saúde Caixa" in msg_recebida:
+                    update_paciente(phone, {"modalidade": "Convênio", "convenio": "Saúde Caixa"})
+                    if is_veteran:
+                        update_paciente(phone, {"status": "pilates_caixa_foto_pedido"})
+                        responder_texto(phone, f"Olá, {info.get('title', 'paciente')}! Que bom ver você focado na sua saúde. 🚀 Para seguirmos pelo Saúde Caixa, envie uma FOTO ou PDF do seu PEDIDO MÉDICO atualizado (indicação para Pilates ou Fisioterapia).")
+                    else:
+                        update_paciente(phone, {"status": "pilates_caixa_nome"})
+                        responder_texto(phone, "Entendido! 🏦 Para o plano Saúde Caixa, informamos que é necessária a autorização prévia junto ao plano de saúde. Também é obrigatório apresentar uma solicitação ou pedido médico indicando Pilates ou Fisioterapia.\n\nPara começarmos seu cadastro, digite o seu NOME COMPLETO:")
+                elif "Particular" in msg_recebida:
+                    update_paciente(phone, {"modalidade": "Particular"})
+                    update_paciente(phone, {"status": "pilates_part_exp"})
+                    botoes = [{"id": "pe_sim", "title": "Sim, gostaria"}, {"id": "pe_nao", "title": "Não, já quero começar"}]
+                    enviar_botoes(phone, "Ótima escolha! No nosso estúdio, você conta com fisioterapeutas altamente especializados e equipamentos de ponta para garantir resultados reais e segurança em cada movimento. ✨\n\nO Pilates vai ajudar a melhorar a sua postura, aliviar dores e fortalecer o corpo todo. Gostaria de agendar uma aula experimental gratuita para conhecer o nosso método e o estúdio?", botoes)
+
+            # -- Fluxo App (Wellhub/Totalpass) --
+            elif status == "pilates_nome_app":
+                update_paciente(phone, {"title": msg_recebida, "status": "pilates_app"})
+                botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
+                enviar_botoes(phone, f"Prazer, {msg_recebida}! E qual desses aplicativos você utiliza para o seu plano?", botoes)
+
+            elif status == "pilates_app":
+                update_paciente(phone, {"convenio": msg_recebida})
+                if msg_recebida == "Wellhub":
+                    update_paciente(phone, {"status": "pilates_wellhub_id"})
+                    responder_texto(phone, "Para validarmos o seu acesso, por favor, informe o seu Wellhub ID. Você encontra esse número logo abaixo do seu nome, na secção de perfil do seu aplicativo Wellhub.")
+                else:
+                    update_paciente(phone, {"status": "pilates_app_pref"})
+                    botoes = [{"id": "pa_app", "title": "📱 Usar App"}, {"id": "pa_equipa", "title": "👩‍⚕️ Falar com Equipa"}]
+                    enviar_botoes(phone, "Entendido! Para facilitar o seu dia a dia, prefere utilizar o nosso App Exclusivo para gerir os seus horários com total autonomia ou prefere o suporte direto da nossa equipe?", botoes)
+
+            elif status == "pilates_wellhub_id":
+                update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_pref"})
+                botoes = [{"id": "pa_app", "title": "📱 Usar App"}, {"id": "pa_equipa", "title": "👩‍⚕️ Falar com Equipa"}]
+                enviar_botoes(phone, "ID recebido! Para facilitar o seu dia a dia, prefere utilizar o nosso App Exclusivo para gerir os seus horários com total autonomia ou prefere o suporte direto da nossa equipe?", botoes)
+
+            elif status == "pilates_app_pref":
+                update_paciente(phone, {"status": "atendimento_humano"})
+                if "Usar App" in msg_recebida:
+                    responder_texto(phone, "Ótima escolha! Para a sua total comodidade, disponibilizamos um App Exclusivo do Aluno! 📲 Com ele, você ganha autonomia para agendar, cancelar ou remarcar as suas aulas.\n\nBaixe pelos links:\n🍏 iPhone: https://apps.apple.com/app/next-fit/id1451167440\n🤖 Android: https://play.google.com/store/apps/details?id=br.com.nextfit.app\n\nÉ super fácil:\n1️⃣ Abra o app e faça um cadastro rápido\n2️⃣ Selecione a sua cidade\n3️⃣ Busque: Conectifisio - Ictus Fisioterapia SCS\n\nNossa equipe vai assumir o atendimento agora para liberar o seu acesso inicial. Aguarde um instante! 👩‍⚕️")
+                else:
+                    responder_texto(phone, "Perfeito! Nossa equipe vai assumir o atendimento agora para tirar qualquer dúvida e organizar seus horários. Aguarde um instante! 👩‍⚕️")
+
+            # -- Fluxo Saúde Caixa --
+            elif status == "pilates_caixa_nome":
+                update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
+                responder_texto(phone, "Nome registrado! ✅ Agora, digite seu CPF (apenas os 11 números):")
+                
+            elif status == "pilates_caixa_cpf":
+                cpf_limpo = re.sub(r'\D', '', msg_recebida)
+                if len(cpf_limpo) != 11:
+                    responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
+                else:
+                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_caixa_nasc"})
+                    responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+
+            elif status == "pilates_caixa_nasc":
+                update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_caixa_email"})
+                responder_texto(phone, "Ótimo! Qual seu melhor E-MAIL?")
+                
+            elif status == "pilates_caixa_email":
+                update_paciente(phone, {"email": msg_recebida, "status": "pilates_caixa_foto_cart"})
+                responder_texto(phone, "Anotado! ✅ Agora a parte documental:\n\nEnvie uma FOTO NÍTIDA da sua carteirinha Saúde Caixa (use o ícone de clipe ou câmera).")
+
+            elif status == "pilates_caixa_foto_cart":
+                if not tem_anexo:
+                    responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
+                else:
+                    update_paciente(phone, {"status": "pilates_caixa_foto_pedido", "tem_foto_carteirinha": True})
+                    responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO.")
+
+            elif status == "pilates_caixa_foto_pedido":
+                if not tem_anexo:
+                    responder_texto(phone, "❌ Por favor, envie a foto ou PDF do seu Pedido Médico.")
+                else:
+                    update_paciente(phone, {"status": "atendimento_humano", "tem_foto_pedido": True})
+                    responder_texto(phone, "Dados e documentos recebidos com sucesso! Nossa equipe vai assumir o atendimento agora para dar andamento ao seu processo. Aguarde um instante! 👩‍⚕️")
+
+            # -- Fluxo Particular --
+            elif status == "pilates_part_exp":
+                update_paciente(phone, {"interesse_experimental": msg_recebida, "status": "pilates_part_periodo"})
+                botoes = [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}]
+                if "Sim" in msg_recebida:
+                    enviar_botoes(phone, "Agradecemos muito pela sua escolha! Ficamos muito felizes em ter você conosco.\n\nPara agilizarmos o agendamento da sua aula experimental, qual o melhor período para você?", botoes)
+                else:
+                    enviar_botoes(phone, "Excelente escolha! Vamos direto para a agenda.\n\nPara agilizarmos, qual o melhor período para você?", botoes)
+
+            elif status == "pilates_part_periodo":
+                update_paciente(phone, {"periodo": msg_recebida})
+                if is_veteran:
+                    update_paciente(phone, {"status": "atendimento_humano"})
+                    responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para encontrar o melhor horário. Aguarde um instante! 👩‍⚕️")
+                else:
+                    update_paciente(phone, {"status": "pilates_part_nome"})
+                    responder_texto(phone, "Para finalizarmos seu cadastro e liberarmos a agenda, por favor, digite seu NOME COMPLETO:")
+                    
+            elif status == "pilates_part_nome":
+                update_paciente(phone, {"title": msg_recebida, "status": "pilates_part_cpf"})
+                responder_texto(phone, "Nome registrado! ✅ Agora, digite seu CPF (apenas os 11 números):")
+                
+            elif status == "pilates_part_cpf":
+                cpf_limpo = re.sub(r'\D', '', msg_recebida)
+                if len(cpf_limpo) != 11:
+                    responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
+                else:
+                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_part_nasc"})
+                    responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+
+            elif status == "pilates_part_nasc":
+                update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_part_email"})
+                responder_texto(phone, "Para completarmos, qual seu melhor E-MAIL?")
+
+            elif status == "pilates_part_email":
+                update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário e início. Aguarde um instante! 👩‍⚕️")
 
         elif status == "triagem_neuro":
             if "Dependente" in msg_recebida and "Semi" not in msg_recebida:
@@ -320,8 +463,12 @@ def webhook():
                 enviar_botoes(phone, "Documentação completa! 🎉\n\nQual o melhor período para verificarmos a sua vaga?", botoes)
 
         elif status == "agendando":
-            update_paciente(phone, {"periodo": msg_recebida, "status": "finalizado"})
-            responder_texto(phone, f"Horário de {msg_recebida} pré-agendado com sucesso! ✅ Nossa recepção vai finalizar a autorização e confirmar tudo em instantes.")
+            if msg_recebida in ["Manhã", "Tarde"]:
+                update_paciente(phone, {"periodo": msg_recebida, "status": "finalizado"})
+                responder_texto(phone, f"Horário de {msg_recebida} pré-agendado com sucesso! ✅ Nossa recepção vai finalizar a autorização e confirmar tudo em instantes.")
+            else:
+                botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
+                enviar_botoes(phone, "Por favor, utilize os botões abaixo para escolher o período: ☀️ ⛅", botoes)
 
         return jsonify({"status": "success"}), 200
 
