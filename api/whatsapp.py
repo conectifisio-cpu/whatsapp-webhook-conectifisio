@@ -3,6 +3,7 @@ import requests
 import traceback
 import re
 import json
+import base64
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -30,9 +31,9 @@ if firebase_creds_json and not firebase_admin._apps:
             cred_dict['private_key'] = cred_dict['private_key'].replace('\\n', '\n')
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
-        print("Firebase Inicializado com Sucesso!")
+        print("✅ Firebase Inicializado com Sucesso!")
     except Exception as e:
-        print(f"Erro Crítico ao carregar Firebase: {e}")
+        print(f"❌ Erro Crítico ao carregar Firebase: {e}")
 
 db = firestore.client() if firebase_admin._apps else None
 
@@ -50,7 +51,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FUNÇÕES DO FEEGOW
+# FUNÇÕES DO FEEGOW (DADOS + CONVÊNIO + FOTOS)
 # ==========================================
 def formatar_data_feegow(data_br):
     try:
@@ -60,6 +61,42 @@ def formatar_data_feegow(data_br):
     except: pass
     return data_br
 
+def mapear_convenio(nome):
+    nome_upper = str(nome).upper()
+    if "BRADESCO" in nome_upper and "OPERADORA" in nome_upper: return 5
+    if "BRADESCO" in nome_upper: return 2
+    if "AMIL" in nome_upper: return 3
+    if "PORTO SEGURO" in nome_upper: return 4
+    if "GEAP" in nome_upper: return 6
+    if "PREVENT" in nome_upper: return 7
+    if "CASSI" in nome_upper: return 8
+    if "PETROBRAS" in nome_upper: return 11
+    if "MEDISERVICE" in nome_upper: return 9968
+    if "CAIXA" in nome_upper: return 10154
+    return 0
+
+def baixar_midia_whatsapp(media_id):
+    """Baixa a foto do WhatsApp da Meta e converte para Base64 para o Feegow"""
+    if not media_id or not WHATSAPP_TOKEN: return None
+    try:
+        url_info = f"https://graph.facebook.com/v18.0/{media_id}"
+        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        res_info = requests.get(url_info, headers=headers, timeout=10)
+        
+        if res_info.status_code != 200: return None
+        
+        media_url = res_info.json().get("url")
+        mime_type = res_info.json().get("mime_type", "image/jpeg")
+        
+        res_download = requests.get(media_url, headers=headers, timeout=15)
+        if res_download.status_code != 200: return None
+        
+        b64_data = base64.b64encode(res_download.content).decode('utf-8')
+        return f"data:{mime_type};base64,{b64_data}"
+    except Exception as e:
+        print(f"Erro ao baixar foto da Meta: {e}")
+        return None
+
 def integrar_feegow(phone, info):
     if not FEEGOW_TOKEN: return None
     
@@ -68,40 +105,81 @@ def integrar_feegow(phone, info):
 
     headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
     base_url = "https://api.feegow.com/v1/api"
+    paciente_id = None
     
+    # 1. BUSCAR PACIENTE
     try:
         res_search = requests.get(f"{base_url}/patient/search?paciente_cpf={cpf}&photo=false", headers=headers, timeout=10)
         if res_search.status_code == 200:
             dados = res_search.json()
             if dados.get("success") != False and dados.get("content"):
                 paciente_id = dados.get("content", {}).get("paciente_id") or dados.get("content", {}).get("id")
-                if paciente_id:
-                    return {"feegow_id": paciente_id, "feegow_status": "Encontrado"}
     except Exception as e:
         print(f"Erro na busca Feegow: {e}")
 
-    payload_create = {
-        "nome_completo": info.get("title", "Paciente Sem Nome"),
-        "cpf": cpf,
-        "data_nascimento": formatar_data_feegow(info.get("birthDate", "")),
-        "email1": info.get("email", ""),
-        "celular1": re.sub(r'\D', '', phone)
-    }
-    
-    try:
-        res_create = requests.post(f"{base_url}/patient/create", json=payload_create, headers=headers, timeout=10)
-        if res_create.status_code == 200:
-            dados = res_create.json()
-            if dados.get("success") != False:
-                paciente_id = dados.get("content", {}).get("paciente_id") or dados.get("paciente_id")
-                return {"feegow_id": paciente_id, "feegow_status": "Criado Novo"}
-    except Exception as e:
-        print(f"Erro na criação Feegow: {e}")
+    # 2. CRIAR PACIENTE SE NÃO EXISTIR
+    if not paciente_id:
+        payload_create = {
+            "nome_completo": info.get("title", "Paciente Sem Nome"),
+            "cpf": cpf,
+            "data_nascimento": formatar_data_feegow(info.get("birthDate", "")),
+            "email1": info.get("email", ""),
+            "celular1": re.sub(r'\D', '', phone)
+        }
+        try:
+            res_create = requests.post(f"{base_url}/patient/create", json=payload_create, headers=headers, timeout=10)
+            if res_create.status_code == 200:
+                dados = res_create.json()
+                if dados.get("success") != False:
+                    paciente_id = dados.get("content", {}).get("paciente_id") or dados.get("paciente_id")
+        except Exception as e:
+            print(f"Erro na criação Feegow: {e}")
+
+    # 3. SE O PACIENTE FOI ENCONTRADO/CRIADO -> SALVAR CONVÊNIO E FOTOS
+    if paciente_id:
+        convenio_id = mapear_convenio(info.get("convenio", ""))
+        matricula = info.get("numCarteirinha", "")
+        
+        # A. Atualizar Convênio e Carteirinha (patient/edit)
+        if convenio_id > 0:
+            try:
+                payload_edit = {
+                    "paciente_id": paciente_id,
+                    "convenio_id": convenio_id,
+                    "plano_id": 0, # Obrigatório conforme seu script Wix
+                    "matricula": matricula
+                }
+                requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
+                print(f"✅ Convênio atualizado no Feegow.")
+            except Exception as e:
+                print(f"Erro ao atualizar convênio Feegow: {e}")
+
+        # B. Fazer Upload das Fotos (patient/upload-base64)
+        carteirinha_id = info.get("carteirinha_media_id")
+        pedido_id = info.get("pedido_media_id")
+
+        if carteirinha_id:
+            try:
+                b64_cart = baixar_midia_whatsapp(carteirinha_id)
+                if b64_cart:
+                    requests.post(f"{base_url}/patient/upload-base64", json={"paciente_id": paciente_id, "arquivo_descricao": "Carteirinha (Via Robô)", "base64_file": b64_cart}, headers=headers, timeout=15)
+                    print(f"📸 Foto da Carteirinha enviada ao Feegow!")
+            except Exception as e: print(f"Erro upload carteirinha: {e}")
+
+        if pedido_id:
+            try:
+                b64_pedido = baixar_midia_whatsapp(pedido_id)
+                if b64_pedido:
+                    requests.post(f"{base_url}/patient/upload-base64", json={"paciente_id": paciente_id, "arquivo_descricao": "Pedido Médico (Via Robô)", "base64_file": b64_pedido}, headers=headers, timeout=15)
+                    print(f"📸 Foto do Pedido enviada ao Feegow!")
+            except Exception as e: print(f"Erro upload pedido: {e}")
+
+        return {"feegow_id": paciente_id, "feegow_status": "Cadastrado Completo"}
         
     return {"feegow_status": "Erro na Integração"}
 
 # ==========================================
-# FUNÇÕES DE MENSAGERIA E IA
+# FUNÇÕES DE MENSAGERIA E IA (COM LOG DETALHADO)
 # ==========================================
 def chamar_gemini(query, system_prompt):
     if not API_KEY: return None
@@ -119,10 +197,16 @@ def enviar_whatsapp(to, payload_msg):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, **payload_msg}
+    
+    print(f"▶️ Tentando enviar mensagem para: {to}") 
+    
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=10)
+        print(f"◀️ Resposta da Meta (Status {res.status_code})") 
         return res
-    except Exception: return None
+    except Exception as e: 
+        print(f"❌ Erro fatal ao ligar à Meta: {e}")
+        return None
 
 def responder_texto(to, texto):
     return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
@@ -165,15 +249,22 @@ def webhook():
         phone = message["from"]
         msg_type = message.get("type")
         
+        print(f"📥 MENSAGEM RECEBIDA do número {phone} | Tipo: {msg_type}")
+        
         msg_recebida = ""
         tem_anexo = False
-        if msg_type == "text": msg_recebida = message["text"]["body"].strip()
+        media_id = None # NOVO: Guarda o ID da foto recebida
+
+        if msg_type == "text": 
+            msg_recebida = message["text"]["body"].strip()
         elif msg_type == "interactive":
             inter = message["interactive"]
             msg_recebida = inter.get("button_reply", {}).get("title", inter.get("list_reply", {}).get("title", ""))
         elif msg_type in ["image", "document"]:
             tem_anexo = True
             msg_recebida = "Anexo Recebido"
+            # Captura o ID da imagem na infraestrutura da Meta
+            media_id = message.get(msg_type, {}).get("id")
 
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "triagem", "cellphone": phone, "servico": "", "modalidade": ""})
@@ -444,12 +535,12 @@ def webhook():
             elif status == "pilates_caixa_foto_cart":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto da sua carteirinha.")
                 else:
-                    update_paciente(phone, {"status": "pilates_caixa_foto_pedido", "tem_foto_carteirinha": True})
+                    update_paciente(phone, {"status": "pilates_caixa_foto_pedido", "tem_foto_carteirinha": True, "carteirinha_media_id": media_id})
                     responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO.")
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
                 else:
-                    update_paciente(phone, {"status": "atendimento_humano", "tem_foto_pedido": True})
+                    update_paciente(phone, {"status": "atendimento_humano", "tem_foto_pedido": True, "pedido_media_id": media_id})
                     responder_texto(phone, "Dados recebidos! Nossa equipe vai assumir o atendimento para dar andamento. Aguarde! 👩‍⚕️")
 
         # -----------------------------------------------------
@@ -546,14 +637,14 @@ Não prescreva tratamentos e não faça perguntas."""
             if not tem_anexo: 
                 responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
             else:
-                update_paciente(phone, {"status": "foto_pedido_medico", "tem_foto_carteirinha": True})
+                update_paciente(phone, {"status": "foto_pedido_medico", "tem_foto_carteirinha": True, "carteirinha_media_id": media_id})
                 responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO DO SEU PEDIDO MÉDICO.")
 
         elif status == "foto_pedido_medico":
             if not tem_anexo: 
                 responder_texto(phone, "❌ Por favor, envie a foto do seu Pedido Médico.")
             else:
-                update_paciente(phone, {"status": "agendando", "tem_foto_pedido": True})
+                update_paciente(phone, {"status": "agendando", "tem_foto_pedido": True, "pedido_media_id": media_id})
                 botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
                 enviar_botoes(phone, "Documentação completa! 🎉\n\nQual o melhor período para verificarmos a sua vaga?", botoes)
 
@@ -562,7 +653,7 @@ Não prescreva tratamentos e não faça perguntas."""
                 info["periodo"] = msg_recebida
                 update_data = {"periodo": msg_recebida, "status": "finalizado"}
                 
-                # FEEGOW INTEGRATION CALL
+                # FEEGOW INTEGRATION CALL (Agora Completa com Upload de Fotos)
                 if servico and "Pilates" not in servico:
                     resultado_feegow = integrar_feegow(phone, info)
                     if resultado_feegow:
@@ -577,7 +668,7 @@ Não prescreva tratamentos e não faça perguntas."""
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"Erro Crítico POST: {traceback.format_exc()}")
+        print(f"❌ Erro Crítico POST: {traceback.format_exc()}")
         return jsonify({"status": "error", "message": str(e)}), 200
 
 # ==========================================
