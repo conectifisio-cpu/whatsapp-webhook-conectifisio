@@ -114,6 +114,10 @@ def integrar_feegow(phone, info):
     base_url = "https://api.feegow.com/v1/api"
     paciente_id = None
     
+    convenio_id = mapear_convenio(info.get("convenio", ""))
+    matricula = info.get("numCarteirinha", "")
+    msg_erro_convenio = ""
+    
     # 1. BUSCAR PACIENTE
     try:
         res_search = requests.get(f"{base_url}/patient/search?paciente_cpf={cpf}&photo=false", headers=headers, timeout=10)
@@ -126,7 +130,6 @@ def integrar_feegow(phone, info):
 
     # 2. CRIAR PACIENTE SE NÃO EXISTIR
     if not paciente_id:
-        # Só envia os dados que realmente existem (evita erros de "Email inválido" por mandar vazio)
         payload_create = {
             "nome_completo": info.get("title", "Paciente Sem Nome"),
             "cpf": cpf,
@@ -137,6 +140,12 @@ def integrar_feegow(phone, info):
         email = info.get("email", "").strip()
         if email and "@" in email:
             payload_create["email1"] = email
+
+        # 🔥 INJEÇÃO DIRETA DO CONVÊNIO NA CRIAÇÃO (Evita falha no Edit posterior)
+        if convenio_id > 0:
+            payload_create["convenio_id"] = convenio_id
+            payload_create["plano_id"] = 0
+            payload_create["matricula"] = matricula
 
         try:
             res_create = requests.post(f"{base_url}/patient/create", json=payload_create, headers=headers, timeout=10)
@@ -151,25 +160,26 @@ def integrar_feegow(phone, info):
             print(f"Erro fatal criação Feegow: {e}")
             return {"feegow_status": "Falha de Conexão Feegow"}
 
-    # 3. SE O PACIENTE FOI ENCONTRADO/CRIADO -> SALVAR CONVÊNIO E FOTOS
-    if paciente_id:
-        paciente_id_int = int(paciente_id) # Garante que é número
-        convenio_id = mapear_convenio(info.get("convenio", ""))
-        matricula = info.get("numCarteirinha", "")
-        
-        # A. Atualizar Convênio e Carteirinha
-        if convenio_id > 0:
-            try:
-                payload_edit = {
-                    "paciente_id": paciente_id_int,
-                    "convenio_id": convenio_id,
-                    "plano_id": 0,
-                    "matricula": matricula
-                }
-                requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
-            except Exception as e: pass
+    # 3. SE O PACIENTE JÁ EXISTIA, TENTAMOS ATUALIZAR O CONVÊNIO (EDIT)
+    elif paciente_id and convenio_id > 0:
+        try:
+            payload_edit = {
+                "paciente_id": int(paciente_id),
+                "convenio_id": convenio_id,
+                "plano_id": 0,
+                "matricula": matricula
+            }
+            res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
+            d_edit = res_edit.json()
+            if res_edit.status_code != 200 or d_edit.get("success") == False:
+                msg_erro_convenio = d_edit.get("message", "Falha interna API Feegow")
+                print(f"Erro Edit Convênio: {msg_erro_convenio}")
+        except Exception as e: 
+            msg_erro_convenio = "Erro de conexão Edit"
 
-        # B. Fazer Upload das Fotos
+    # 4. SALVAR FOTOS DE DOCUMENTOS
+    if paciente_id:
+        paciente_id_int = int(paciente_id) 
         carteirinha_id = info.get("carteirinha_media_id")
         pedido_id = info.get("pedido_media_id")
         fotos_enviadas = []
@@ -181,8 +191,6 @@ def integrar_feegow(phone, info):
                     res_cart = requests.post(f"{base_url}/patient/upload-base64", json={"paciente_id": paciente_id_int, "arquivo_descricao": "Carteirinha (Robô)", "base64_file": b64_cart}, headers=headers, timeout=15)
                     if res_cart.status_code == 200 and res_cart.json().get("success") != False:
                         fotos_enviadas.append("Carteirinha")
-                    else:
-                        print(f"Erro Feegow ao salvar carteirinha: {res_cart.text}")
             except Exception as e: print(f"Erro upload carteirinha: {e}")
 
         if pedido_id:
@@ -192,11 +200,11 @@ def integrar_feegow(phone, info):
                     res_ped = requests.post(f"{base_url}/patient/upload-base64", json={"paciente_id": paciente_id_int, "arquivo_descricao": "Pedido Médico (Robô)", "base64_file": b64_pedido}, headers=headers, timeout=15)
                     if res_ped.status_code == 200 and res_ped.json().get("success") != False:
                         fotos_enviadas.append("Pedido")
-                    else:
-                        print(f"Erro Feegow ao salvar pedido: {res_ped.text}")
             except Exception as e: print(f"Erro upload pedido: {e}")
 
+        # GERA O STATUS FINAL PARA O DASHBOARD (Com o diagnóstico)
         status_final = f"ID: {paciente_id_int}"
+        if msg_erro_convenio: status_final += f" | Erro Convênio: {msg_erro_convenio}"
         if fotos_enviadas: status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
         
         return {"feegow_id": paciente_id_int, "feegow_status": status_final}
