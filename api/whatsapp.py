@@ -52,7 +52,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FEEGOW: RECONHECIMENTO INVISÍVEL
+# FEEGOW: RECONHECIMENTO INVISÍVEL E BUSCAS
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
     """Busca silenciosa no Feegow pelo celular para ver se já é paciente antigo"""
@@ -60,7 +60,11 @@ def buscar_veterano_feegow_celular(phone):
     celular = re.sub(r'\D', '', phone)
     if celular.startswith("55") and len(celular) > 11: celular = celular[2:]
     
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "Authorization": f"Bearer {FEEGOW_TOKEN}"
+    }
     url = f"https://api.feegow.com/v1/api/patient/list?celular={celular}"
     
     try:
@@ -81,7 +85,11 @@ def buscar_feegow_id_por_cpf(cpf):
     """Garante que temos o ID do paciente para buscar agendamentos"""
     if not FEEGOW_TOKEN or not cpf: return None
     cpf_limpo = re.sub(r'\D', '', cpf)
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "Authorization": f"Bearer {FEEGOW_TOKEN}"
+    }
     try:
         res = requests.get(f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false", headers=headers, timeout=5)
         if res.status_code == 200 and res.json().get("success"):
@@ -118,7 +126,11 @@ def buscar_horarios_feegow(unidade_nome, servico_nome, periodo, is_veteran):
     elif data_alvo.weekday() == 6: data_alvo += timedelta(days=1)
     
     url = f"https://api.feegow.com.br/v1/appoints/available-schedule?local_id={local_id}&procedimento_id={proc_id}&data={data_alvo.strftime('%Y-%m-%d')}"
-    headers = {"x-access-token": FEEGOW_TOKEN, "Content-Type": "application/json"}
+    headers = {
+        "x-access-token": FEEGOW_TOKEN, 
+        "Authorization": FEEGOW_TOKEN,
+        "Content-Type": "application/json"
+    }
     slots = []
     try:
         res = requests.get(url, headers=headers, timeout=5)
@@ -139,24 +151,59 @@ def buscar_horarios_feegow(unidade_nome, servico_nome, periodo, is_veteran):
     return [f"🗓️ {h}" for h in gerar_horarios_disponiveis(periodo)[:2]]
 
 def buscar_agendamentos_futuros(feegow_id):
-    """Busca as sessões ativas do paciente nos próximos 30 dias"""
-    if not FEEGOW_TOKEN or not feegow_id: return None
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    """Busca as sessões ativas do paciente nos próximos 60 dias (Ultra Resiliente)"""
+    if not FEEGOW_TOKEN or not feegow_id: return []
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "Authorization": f"Bearer {FEEGOW_TOKEN}"
+    }
     hoje = datetime.now()
-    futuro = hoje + timedelta(days=30)
-    url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={hoje.strftime('%Y-%m-%d')}&data_end={futuro.strftime('%Y-%m-%d')}"
+    futuro = hoje + timedelta(days=60)
+    data_start = hoje.strftime('%Y-%m-%d')
+    data_end = futuro.strftime('%Y-%m-%d')
+    
+    lista_final = []
+    
+    # Tentativa 1: Endpoint Padrão de Pesquisa (v1/api)
     try:
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200 and res.json().get("success"):
-            lista_final = []
-            for a in res.json().get("content", []):
-                if "cancelado" not in str(a.get("status_nome", "")).lower():
+        url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={data_start}&data_end={data_end}"
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            dados = res.json()
+            itens = dados.get("content") or dados.get("data") or []
+            for a in itens:
+                status = str(a.get("status_nome", "")).lower()
+                if "cancelado" not in status and "falta" not in status:
                     try:
-                        dt_obj = datetime.strptime(a.get("data", ""), "%Y-%m-%d")
-                        lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m')} às {a.get('horario', '')[:5]}* - {a.get('procedimento_nome', 'Sessão')}")
+                        data_raw = a.get("data", "")
+                        if "T" in data_raw: data_raw = data_raw.split("T")[0]
+                        dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                        if dt_obj.date() >= hoje.date():
+                            lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {a.get('procedimento_nome', 'Sessão')}")
                     except: pass
-            return lista_final[:3] # Retorna as 3 próximas
-    except: pass
+            if lista_final: return lista_final[:3]
+    except Exception as e: print(f"Erro Busca 1: {e}")
+
+    # Tentativa 2: Endpoint Secundário (Caso o primeiro falhe)
+    try:
+        url2 = f"https://api.feegow.com.br/v1/appoints?paciente_id={feegow_id}"
+        res2 = requests.get(url2, headers=headers, timeout=10)
+        if res2.status_code == 200:
+            dados2 = res2.json()
+            itens2 = dados2.get("data") or []
+            for a in itens2:
+                data_raw = a.get("data", "")
+                if "T" in data_raw: data_raw = data_raw.split("T")[0]
+                try:
+                    dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                    if dt_obj.date() >= hoje.date():
+                        proc = a.get('procedimento', {}).get('nome', 'Sessão') if isinstance(a.get('procedimento'), dict) else 'Sessão'
+                        lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
+                except: pass
+            if lista_final: return lista_final[:3]
+    except Exception as e: print(f"Erro Busca 2: {e}")
+    
     return []
 
 # ==========================================
@@ -197,7 +244,7 @@ def integrar_feegow(phone, info):
     celular = re.sub(r'\D', '', phone)
     if celular.startswith("55") and len(celular) > 11: celular = celular[2:]
 
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN, "Authorization": f"Bearer {FEEGOW_TOKEN}"}
     base_url = "https://api.feegow.com/v1/api"
     paciente_id = info.get("feegow_id")
     
@@ -385,7 +432,7 @@ def webhook():
                 enviar_lista(phone, f"Prazer, {msg_recebida}! 😊\n\nQual serviço você procura hoje?", "Ver Serviços", secoes)
 
         # ---------------------------------------------
-        # 🚀 O MENU DO VETERANO (PESQUISA FEEGOW AQUI)
+        # 🚀 O MENU DO VETERANO E AGENDAMENTOS FEEGOW
         # ---------------------------------------------
         elif status == "menu_veterano":
             if "Novo Serviço" in msg_recebida:
@@ -396,20 +443,28 @@ def webhook():
             elif "Agendamentos" in msg_recebida or "Reagendar" in msg_recebida:
                 # O BOTÃO "🗓️ Agendamentos" CAI AQUI E ACIONA A PESQUISA!
                 feegow_id = info.get("feegow_id")
-                if not feegow_id and info.get("cpf"):
-                    feegow_id = buscar_feegow_id_por_cpf(info.get("cpf"))
-                    if feegow_id: update_paciente(phone, {"feegow_id": feegow_id})
+                
+                # Busca de resgate profunda para o Feegow ID
+                if not feegow_id:
+                    vet = buscar_veterano_feegow_celular(phone)
+                    if vet and vet.get("feegow_id"):
+                        feegow_id = vet["feegow_id"]
+                    elif info.get("cpf"):
+                        feegow_id = buscar_feegow_id_por_cpf(info.get("cpf"))
+                    
+                    if feegow_id:
+                        update_paciente(phone, {"feegow_id": feegow_id})
                 
                 lista_sessoes = buscar_agendamentos_futuros(feegow_id)
                 if lista_sessoes:
-                    msg_agenda = "Localizei as suas próximas sessões: 👇\n\n" + "\n".join(lista_sessoes) + "\n\nO que deseja fazer?"
+                    msg_agenda = "Localizei suas próximas sessões: 👇\n\n" + "\n".join(lista_sessoes) + "\n\nO que deseja fazer?"
                     botoes = [{"id": "ag_ok", "title": "👍 Apenas Consultar"}, {"id": "ag_mudar", "title": "🔄 Reagendar/Cancelar"}, {"id": "ag_voltar", "title": "⬅️ Voltar"}]
                     update_paciente(phone, {"status": "vendo_agendamentos"})
                     enviar_botoes(phone, msg_agenda, botoes)
                 else:
                     update_paciente(phone, {"status": "agendando"})
                     botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}]
-                    enviar_botoes(phone, "Não encontrei agendamentos futuros para si. 🤔\n\nPosso agendar um agora! Qual o melhor período? ☀️ ⛅", botoes)
+                    enviar_botoes(phone, "Não encontrei agendamentos futuros para você no sistema. 🤔\n\nMas não se preocupe, posso agendar um agora! Qual o melhor período? ☀️ ⛅", botoes)
             
             elif "Nova Guia" in msg_recebida or "Retomar" in msg_recebida:
                 update_paciente(phone, {"status": "modalidade"})
