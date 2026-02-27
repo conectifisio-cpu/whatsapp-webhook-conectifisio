@@ -139,6 +139,7 @@ def buscar_horarios_feegow(unidade_nome, servico_nome, periodo, is_veteran):
     return [f"🗓️ {h}" for h in gerar_horarios_disponiveis(periodo)[:2]]
 
 def buscar_agendamentos_futuros(feegow_id):
+    """Busca as sessões ativas do paciente nos próximos 30 dias"""
     if not FEEGOW_TOKEN or not feegow_id: return None
     headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
     hoje = datetime.now()
@@ -154,7 +155,7 @@ def buscar_agendamentos_futuros(feegow_id):
                         dt_obj = datetime.strptime(a.get("data", ""), "%Y-%m-%d")
                         lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m')} às {a.get('horario', '')[:5]}* - {a.get('procedimento_nome', 'Sessão')}")
                     except: pass
-            return lista_final[:3]
+            return lista_final[:3] # Retorna as 3 próximas
     except: pass
     return []
 
@@ -301,7 +302,6 @@ def webhook():
         # 2. CARREGAMENTO DE MEMÓRIA E RECONHECIMENTO INVISÍVEL
         info = get_paciente(phone)
         if not info:
-            # É a primeira vez que manda mensagem! Vamos procurar no Feegow.
             veterano_feegow = buscar_veterano_feegow_celular(phone)
             if veterano_feegow:
                 info = {"cellphone": phone, "status": "menu_veterano", **veterano_feegow}
@@ -319,14 +319,14 @@ def webhook():
         is_veteran = True if len(re.sub(r'\D', '', cpf_salvo or "")) >= 11 or info.get("feegow_id") else False
         modalidade = info.get("modalidade", "")
         
-        # 3. ESCUDO ANTI-LIXO E SAUDAÇÕES (RODA ANTES DE TUDO)
+        # 3. ESCUDO ANTI-LIXO E SAUDAÇÕES
         is_saudacao = len(msg_limpa) <= 20 and any(w in msg_limpa for w in ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite", "tudo bem"])
         if is_saudacao and status not in ["triagem", "finalizado", "menu_veterano"]:
             botoes = [{"id": "btn_cont", "title": "Sim, continuar"}, {"id": "btn_rec", "title": "Recomeçar"}]
             enviar_botoes(phone, "Olá! ✨ Notei que estávamos no meio do seu atendimento. Podemos continuar de onde paramos?", botoes)
             return jsonify({"status": "anti_lixo"}), 200
 
-        # 4. TRATAMENTO DO "SIM, CONTINUAR" (Re-envia a última pergunta)
+        # 4. TRATAMENTO DO "SIM, CONTINUAR"
         if msg_recebida == "Sim, continuar":
             prompts = {
                 "escolhendo_unidade": ("Por favor, escolha a unidade:", [{"id":"u1","title":"SCS"},{"id":"u2","title":"Ipiranga"}], "botoes"),
@@ -384,12 +384,17 @@ def webhook():
                 secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
                 enviar_lista(phone, f"Prazer, {msg_recebida}! 😊\n\nQual serviço você procura hoje?", "Ver Serviços", secoes)
 
+        # ---------------------------------------------
+        # 🚀 O MENU DO VETERANO (PESQUISA FEEGOW AQUI)
+        # ---------------------------------------------
         elif status == "menu_veterano":
             if "Novo Serviço" in msg_recebida:
                 update_paciente(phone, {"status": "escolhendo_especialidade"})
                 secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
                 enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Serviços", secoes)
-            elif "Agendamentos" in msg_recebida:
+            
+            elif "Agendamentos" in msg_recebida or "Reagendar" in msg_recebida:
+                # O BOTÃO "🗓️ Agendamentos" CAI AQUI E ACIONA A PESQUISA!
                 feegow_id = info.get("feegow_id")
                 if not feegow_id and info.get("cpf"):
                     feegow_id = buscar_feegow_id_por_cpf(info.get("cpf"))
@@ -405,6 +410,7 @@ def webhook():
                     update_paciente(phone, {"status": "agendando"})
                     botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}]
                     enviar_botoes(phone, "Não encontrei agendamentos futuros para si. 🤔\n\nPosso agendar um agora! Qual o melhor período? ☀️ ⛅", botoes)
+            
             elif "Nova Guia" in msg_recebida or "Retomar" in msg_recebida:
                 update_paciente(phone, {"status": "modalidade"})
                 botoes = [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}]
@@ -609,12 +615,10 @@ def webhook():
             elif status == "pilates_app":
                 if msg_recebida == "Wellhub":
                     update_paciente(phone, {"convenio": "Wellhub", "status": "pilates_wellhub_id"})
-                    # INSTRUÇÃO DIDÁTICA DO WELLHUB
                     responder_texto(phone, "Por favor, informe o seu *Wellhub ID* (Você pode encontrá-lo no seu aplicativo Wellhub, logo abaixo do seu nome na aba de Perfil).")
                 else:
                     update_paciente(phone, {"convenio": "Totalpass", "status": "pilates_app_pref"})
                     botoes = [{"id": "pa_app", "title": "📱 App da Clínica"}, {"id": "pa_parceiro", "title": "🎫 App Parceiro"}]
-                    # INSTRUÇÃO DIDÁTICA DO CANAL
                     enviar_botoes(phone, "Como prefere agendar as suas aulas?\n\n📱 *App da Clínica:* Baixe o nosso app (NextFit) para ter autonomia total.\n🎫 *App Parceiro:* Agende diretamente pelo app do Gympass/Totalpass.", botoes)
             elif status == "pilates_wellhub_id":
                 update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_pref"})
