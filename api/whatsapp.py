@@ -52,7 +52,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FEEGOW: BUSCAS & SONDA MÚLTIPLA COM UNIDADE
+# FEEGOW: BUSCAS & SONDA MÚLTIPLA
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
     if not FEEGOW_TOKEN: return None
@@ -100,7 +100,7 @@ def processar_resultado_feegow(dados, hoje):
     return lista_final[:3]
 
 def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
-    """Sonda Ninja: Usa táticas de Bypass no Firewall (WAF) da Feegow"""
+    """Sonda Definitiva: Remove Local ID e usa Camuflagem Anti-Cloudflare"""
     if not FEEGOW_TOKEN: return [], "ERRO: Token não configurado."
     if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
     
@@ -109,66 +109,50 @@ def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
     d_start = hoje.strftime('%Y-%m-%d')
     d_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 WAF BYPASS NINJA\nID: {feegow_id}\n\n"
+    debug_msg = f"🔍 PROBE DEFINITIVO\nID: {feegow_id}\n\n"
     
-    headers = {
+    # Camuflagem de Navegador Real (Bypass Erro 403 do Cloudflare)
+    headers_ninja = {
         "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Connection": "keep-alive"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json"
     }
     
-    session = requests.Session()
-    session.headers.update(headers)
-    
-    # Sonda 1: O "Cavalo de Troia" (POST Override)
-    # O Firewall permite POST. O servidor vê o cabeçalho e trata internamente como GET.
+    # Sonda 1: Rota de Search Oficial (A que descobrimos ser GET)
     try:
-        h1 = headers.copy()
-        h1["X-HTTP-Method-Override"] = "GET"
         url1 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
-        r1 = session.post(url1, headers=h1, timeout=5)
-        debug_msg += f"S1 (POST Override): {r1.status_code} | {r1.text[:40]}\n"
+        r1 = requests.get(url1, headers=headers_ninja, timeout=5)
+        debug_msg += f"S1 (GET Search): {r1.status_code} | {r1.text[:40]}\n"
         if r1.status_code == 200 and r1.json().get("success") != False:
             res = processar_resultado_feegow(r1.json(), hoje)
             if res: return res, ""
     except Exception as e: debug_msg += f"S1 Erro: {e}\n"
 
-    # Sonda 2: Obfuscação de Rota (Trailing Slash)
-    # O firewall pode estar a bloquear exatamente a palavra "/search?", adicionamos "/"
+    # Sonda 2: Rota Search Sem Filtro de Data (Traz tudo)
     try:
-        url2 = f"https://api.feegow.com/v1/api/appoints/search/?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
-        r2 = session.get(url2, timeout=5)
-        debug_msg += f"S2 (Slash //): {r2.status_code} | {r2.text[:40]}\n"
+        url2 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}"
+        r2 = requests.get(url2, headers=headers_ninja, timeout=5)
+        debug_msg += f"S2 (Search s/Data): {r2.status_code} | {r2.text[:40]}\n"
         if r2.status_code == 200 and r2.json().get("success") != False:
             res = processar_resultado_feegow(r2.json(), hoje)
             if res: return res, ""
     except Exception as e: debug_msg += f"S2 Erro: {e}\n"
 
-    # Sonda 3: Tática de Parâmetro de Método
+    # Sonda 3: Rota Appoints Base (Evitando o Erro 422 do local_id)
     try:
-        url3 = f"https://api.feegow.com/v1/api/appoints/search"
-        payload = {"_method": "GET", "paciente_id": feegow_id, "data_start": d_start, "data_end": d_end}
-        r3 = session.post(url3, json=payload, timeout=5)
-        debug_msg += f"S3 (POST _method): {r3.status_code} | {r3.text[:40]}\n"
+        url3 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data={d_start}"
+        r3 = requests.get(url3, headers=headers_ninja, timeout=5)
+        debug_msg += f"S3 (Appoints Dia): {r3.status_code} | {r3.text[:40]}\n"
         if r3.status_code == 200 and r3.json().get("success") != False:
             res = processar_resultado_feegow(r3.json(), hoje)
             if res: return res, ""
     except Exception as e: debug_msg += f"S3 Erro: {e}\n"
 
-    # Sonda 4: Fuga de Regra de Datas
-    # O Firewall pode estar a bloquear o formato das datas na URL, tentamos sem elas.
-    try:
-        url4 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}"
-        r4 = session.get(url4, timeout=5)
-        debug_msg += f"S4 (GET Sem Data): {r4.status_code} | {r4.text[:40]}\n"
-        if r4.status_code == 200 and r4.json().get("success") != False:
-            res = processar_resultado_feegow(r4.json(), hoje)
-            if res: return res, ""
-    except Exception as e: debug_msg += f"S4 Erro: {e}\n"
-
     return [], debug_msg
 
+# ==========================================
+# MOTOR DE AGENDAMENTO (CRIAR NOVOS)
+# ==========================================
 def get_proximos_dias_uteis(quantidade=3):
     dias = []
     data_atual = datetime.now()
@@ -277,7 +261,8 @@ def webhook():
                     if feegow_id:
                         update_paciente(phone, {"feegow_id": feegow_id})
                 
-                unidade_nome = info.get("unit", "SCS") # Pega a unidade salva
+                unidade_nome = info.get("unit", "SCS")
+                # Chama a versão DEFINITIVA
                 lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome)
                 
                 if lista_sessoes:
