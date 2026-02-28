@@ -100,66 +100,68 @@ def processar_resultado_feegow(dados, hoje):
     return lista_final[:3]
 
 def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
-    """Sonda Injeta o Local ID para tentar quebrar o erro 422"""
+    """Sonda Ninja: Usa táticas de Bypass no Firewall (WAF) da Feegow"""
     if not FEEGOW_TOKEN: return [], "ERRO: Token não configurado."
     if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
     
-    local_id = 1 if "ipiranga" in str(unidade_nome).lower() else 0
     hoje = datetime.now()
     futuro = hoje + timedelta(days=60)
     d_start = hoje.strftime('%Y-%m-%d')
     d_end = futuro.strftime('%Y-%m-%d')
     
-    headers_old = {
-        "Content-Type": "application/json", 
-        "Accept": "application/json", 
-        "x-access-token": FEEGOW_TOKEN
+    debug_msg = f"🔍 WAF BYPASS NINJA\nID: {feegow_id}\n\n"
+    
+    headers = {
+        "x-access-token": FEEGOW_TOKEN,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Connection": "keep-alive"
     }
     
-    # Formato idêntico ao que funciona no WIX para a nova API
-    headers_new = {
-        "Content-Type": "application/json", 
-        "Accept": "application/json", 
-        "Authorization": FEEGOW_TOKEN 
-    }
+    session = requests.Session()
+    session.headers.update(headers)
     
-    debug_msg = f"🔍 PROBE LOCAL_ID\nID: {feegow_id} | Local: {local_id}\n\n"
-    
-    # Sonda 1: Old API /appoints com RANGE e LOCAL_ID (Para corrigir o 422)
-    url1 = f"https://api.feegow.com/v1/api/appoints?local_id={local_id}&paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
+    # Sonda 1: O "Cavalo de Troia" (POST Override)
+    # O Firewall permite POST. O servidor vê o cabeçalho e trata internamente como GET.
     try:
-        r1 = requests.get(url1, headers=headers_old, timeout=5)
-        debug_msg += f"S1 (Old c/ Range): {r1.status_code} | {r1.text[:50]}\n"
+        h1 = headers.copy()
+        h1["X-HTTP-Method-Override"] = "GET"
+        url1 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
+        r1 = session.post(url1, headers=h1, timeout=5)
+        debug_msg += f"S1 (POST Override): {r1.status_code} | {r1.text[:40]}\n"
         if r1.status_code == 200 and r1.json().get("success") != False:
             res = processar_resultado_feegow(r1.json(), hoje)
             if res: return res, ""
     except Exception as e: debug_msg += f"S1 Erro: {e}\n"
 
-    # Sonda 2: Old API /appoints APENAS PARA HOJE (Para ver se devolve 200)
-    url2 = f"https://api.feegow.com/v1/api/appoints?local_id={local_id}&paciente_id={feegow_id}&data={d_start}"
+    # Sonda 2: Obfuscação de Rota (Trailing Slash)
+    # O firewall pode estar a bloquear exatamente a palavra "/search?", adicionamos "/"
     try:
-        r2 = requests.get(url2, headers=headers_old, timeout=5)
-        debug_msg += f"S2 (Old Dia Único): {r2.status_code} | {r2.text[:50]}\n"
+        url2 = f"https://api.feegow.com/v1/api/appoints/search/?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
+        r2 = session.get(url2, timeout=5)
+        debug_msg += f"S2 (Slash //): {r2.status_code} | {r2.text[:40]}\n"
         if r2.status_code == 200 and r2.json().get("success") != False:
             res = processar_resultado_feegow(r2.json(), hoje)
             if res: return res, ""
     except Exception as e: debug_msg += f"S2 Erro: {e}\n"
 
-    # Sonda 3: Nova API com Header idêntico ao do WIX
-    url3 = f"https://api.feegow.com.br/v1/agendamentos?paciente_id={feegow_id}"
+    # Sonda 3: Tática de Parâmetro de Método
     try:
-        r3 = requests.get(url3, headers=headers_new, timeout=5)
-        debug_msg += f"S3 (New Agendamentos): {r3.status_code} | {r3.text[:50]}\n"
+        url3 = f"https://api.feegow.com/v1/api/appoints/search"
+        payload = {"_method": "GET", "paciente_id": feegow_id, "data_start": d_start, "data_end": d_end}
+        r3 = session.post(url3, json=payload, timeout=5)
+        debug_msg += f"S3 (POST _method): {r3.status_code} | {r3.text[:40]}\n"
         if r3.status_code == 200 and r3.json().get("success") != False:
             res = processar_resultado_feegow(r3.json(), hoje)
             if res: return res, ""
     except Exception as e: debug_msg += f"S3 Erro: {e}\n"
 
-    # Sonda 4: Rota relacional de Paciente na Nova API
-    url4 = f"https://api.feegow.com.br/v1/pacientes/{feegow_id}/agendamentos"
+    # Sonda 4: Fuga de Regra de Datas
+    # O Firewall pode estar a bloquear o formato das datas na URL, tentamos sem elas.
     try:
-        r4 = requests.get(url4, headers=headers_new, timeout=5)
-        debug_msg += f"S4 (New Pacientes/Agend): {r4.status_code} | {r4.text[:50]}\n"
+        url4 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}"
+        r4 = session.get(url4, timeout=5)
+        debug_msg += f"S4 (GET Sem Data): {r4.status_code} | {r4.text[:40]}\n"
         if r4.status_code == 200 and r4.json().get("success") != False:
             res = processar_resultado_feegow(r4.json(), hoje)
             if res: return res, ""
@@ -167,9 +169,6 @@ def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
 
     return [], debug_msg
 
-# ==========================================
-# MOTOR DE AGENDAMENTO (CRIAR NOVOS)
-# ==========================================
 def get_proximos_dias_uteis(quantidade=3):
     dias = []
     data_atual = datetime.now()
