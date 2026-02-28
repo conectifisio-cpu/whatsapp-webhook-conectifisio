@@ -52,7 +52,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FEEGOW: BUSCAS & SONDA MÚLTIPLA
+# FEEGOW: BUSCAS & SONDA MÚLTIPLA JSON
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
     if not FEEGOW_TOKEN: return None
@@ -100,19 +100,14 @@ def processar_resultado_feegow(dados, hoje):
     return lista_final[:3]
 
 def buscar_agendamentos_futuros_com_debug(feegow_id):
-    """Sonda Múltipla: Atira em 4 endpoints diferentes da Feegow para encontrar o que funciona"""
+    """Sonda Múltipla JSON: Força a Feegow a não enviar páginas HTML de erro."""
     if not FEEGOW_TOKEN: return [], "ERRO: Token do Feegow não configurado."
     if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
     
-    headers_old = {
+    headers = {
         "Content-Type": "application/json", 
+        "Accept": "application/json", # <-- O PULO DO GATO (Exige resposta em código)
         "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    
-    headers_new = {
-        "Content-Type": "application/json", 
-        "Authorization": f"Bearer {FEEGOW_TOKEN}",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
@@ -121,52 +116,43 @@ def buscar_agendamentos_futuros_com_debug(feegow_id):
     d_start = hoje.strftime('%Y-%m-%d')
     d_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 MULTI-PROBE FEEGOW\nID: {feegow_id}\n\n"
+    debug_msg = f"🔍 MULTI-PROBE JSON\nID: {feegow_id}\n\n"
     
-    # Sonda 1: POST na API de Search (Geralmente a correta para fugir do WAF 403)
-    url1 = "https://api.feegow.com/v1/api/appoints/search"
-    payload1 = {"paciente_id": int(feegow_id), "data_start": d_start, "data_end": d_end}
+    # Sonda 1: GET /appoints/search (A oficial que deve funcionar)
+    url1 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
     try:
-        r1 = requests.post(url1, headers=headers_old, json=payload1, timeout=10)
-        debug_msg += f"Sonda 1 (POST search): {r1.status_code} | {r1.text[:60]}\n"
-        if r1.status_code == 200:
-            d1 = r1.json()
-            if d1.get("success") != False and (d1.get("content") or d1.get("data")):
-                return processar_resultado_feegow(d1, hoje), ""
-    except Exception as e: debug_msg += f"Sonda 1 Erro: {e}\n"
+        r1 = requests.get(url1, headers=headers, timeout=10)
+        debug_msg += f"S1 (GET search): {r1.status_code} | {r1.text[:60]}\n"
+        if r1.status_code == 200 and r1.json().get("success") != False:
+            return processar_resultado_feegow(r1.json(), hoje), ""
+    except Exception as e: debug_msg += f"S1 Erro: {e}\n"
 
-    # Sonda 2: POST na API de Search SEM datas (Algumas versões exigem apenas ID)
-    payload2 = {"paciente_id": int(feegow_id)}
+    # Sonda 2: Trocando os nomes dos parâmetros de data
+    url2 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data_inicio={d_start}&data_fim={d_end}"
     try:
-        r2 = requests.post(url1, headers=headers_old, json=payload2, timeout=10)
-        debug_msg += f"Sonda 2 (POST s/ data): {r2.status_code} | {r2.text[:60]}\n"
-        if r2.status_code == 200:
-            d2 = r2.json()
-            if d2.get("success") != False and (d2.get("content") or d2.get("data")):
-                return processar_resultado_feegow(d2, hoje), ""
-    except Exception as e: debug_msg += f"Sonda 2 Erro: {e}\n"
+        r2 = requests.get(url2, headers=headers, timeout=10)
+        debug_msg += f"S2 (GET appoints): {r2.status_code} | {r2.text[:60]}\n"
+        if r2.status_code == 200 and r2.json().get("success") != False:
+            return processar_resultado_feegow(r2.json(), hoje), ""
+    except Exception as e: debug_msg += f"S2 Erro: {e}\n"
 
-    # Sonda 3: GET na API original sem parâmetros de data (Fugindo do erro 422)
-    url3 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}"
+    # Sonda 3: Rota do Paciente Direta
+    url3 = f"https://api.feegow.com/v1/api/patient/{feegow_id}/appoints"
     try:
-        r3 = requests.get(url3, headers=headers_old, timeout=10)
-        debug_msg += f"Sonda 3 (GET s/ data): {r3.status_code} | {r3.text[:60]}\n"
-        if r3.status_code == 200:
-            d3 = r3.json()
-            if d3.get("success") != False and (d3.get("content") or d3.get("data")):
-                return processar_resultado_feegow(d3, hoje), ""
-    except Exception as e: debug_msg += f"Sonda 3 Erro: {e}\n"
+        r3 = requests.get(url3, headers=headers, timeout=10)
+        debug_msg += f"S3 (GET patient): {r3.status_code} | {r3.text[:60]}\n"
+        if r3.status_code == 200 and r3.json().get("success") != False:
+            return processar_resultado_feegow(r3.json(), hoje), ""
+    except Exception as e: debug_msg += f"S3 Erro: {e}\n"
     
-    # Sonda 4: GET na Nova API com Bearer Token
-    url4 = f"https://api.feegow.com.br/v1/appoints?paciente_id={feegow_id}"
+    # Sonda 4: Rota de agenda do dia sem período (Para testar validação)
+    url4 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data={d_start}"
     try:
-        r4 = requests.get(url4, headers=headers_new, timeout=10)
-        debug_msg += f"Sonda 4 (GET api nova): {r4.status_code} | {r4.text[:60]}\n"
-        if r4.status_code == 200:
-            d4 = r4.json()
-            if d4.get("success") != False and (d4.get("content") or d4.get("data")):
-                return processar_resultado_feegow(d4, hoje), ""
-    except Exception as e: debug_msg += f"Sonda 4 Erro: {e}\n"
+        r4 = requests.get(url4, headers=headers, timeout=10)
+        debug_msg += f"S4 (GET dia): {r4.status_code} | {r4.text[:60]}\n"
+        if r4.status_code == 200 and r4.json().get("success") != False:
+            return processar_resultado_feegow(r4.json(), hoje), ""
+    except Exception as e: debug_msg += f"S4 Erro: {e}\n"
 
     return [], debug_msg
 
@@ -281,7 +267,6 @@ def webhook():
                     if feegow_id:
                         update_paciente(phone, {"feegow_id": feegow_id})
                 
-                # A MÁGICA: ATIRA AS 4 SONDAS AO MESMO TEMPO
                 lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id)
                 
                 if lista_sessoes:
