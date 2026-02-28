@@ -40,45 +40,68 @@ db = firestore.client() if firebase_admin._apps else None
 # FUNÇÃO DE SALVAMENTO FIREBASE
 # ==========================================
 def update_paciente(phone, data):
-    if not db: 
-        print("❌ ERRO: Tentou salvar no Firebase, mas o DB não está conectado.")
-        return
+    if not db: return
     try:
         data["lastInteraction"] = firestore.SERVER_TIMESTAMP
         db.collection("PatientsKanban").document(phone).set(data, merge=True)
-        print(f"✅ Dados salvos no Firebase para o número {phone}")
     except Exception as e:
         print(f"❌ ERRO AO SALVAR FIREBASE: {e}")
 
 # ==========================================
-# 🚀 MOTOR DE CONSULTA FEEGOW
+# 🚀 MOTOR DE CONSULTA FEEGOW (TANQUE DE GUERRA)
 # ==========================================
 def consultar_agenda_feegow(cpf):
     if not FEEGOW_TOKEN or not cpf: return [], "CPF ou Token ausente."
     cpf_limpo = re.sub(r'\D', '', str(cpf))
+    
     headers_br = {"Authorization": FEEGOW_TOKEN, "Content-Type": "application/json"}
-    base_url = "https://api.feegow.com.br/v1"
+    headers_br_bearer = {"Authorization": f"Bearer {FEEGOW_TOKEN}", "Content-Type": "application/json"}
+    headers_old = {"x-access-token": FEEGOW_TOKEN, "Content-Type": "application/json"}
+    
+    paciente_id = None
+    
+    # PASSO 1: DESCOBRIR ID DO PACIENTE (ATACA 3 ROTAS DIFERENTES)
+    try: # TENTATIVA 1: Rota Nova
+        r1 = requests.get(f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=5)
+        if r1.status_code == 200 and r1.json().get("data"):
+            paciente_id = r1.json()["data"][0]["id"]
+    except: pass
+    
+    if not paciente_id:
+        try: # TENTATIVA 2: Rota Nova com Bearer
+            r2 = requests.get(f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_limpo}", headers=headers_br_bearer, timeout=5)
+            if r2.status_code == 200 and r2.json().get("data"):
+                paciente_id = r2.json()["data"][0]["id"]
+        except: pass
 
-    try:
-        res_pac = requests.get(f"{base_url}/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=8)
-        if res_pac.status_code != 200 or not res_pac.json().get("data"): return [], "Paciente não localizado."
-        paciente_id = res_pac.json()["data"][0]["id"]
-    except: return [], "Falha na comunicação com servidor da clínica."
+    if not paciente_id:
+        try: # TENTATIVA 3: Rota Clássica (A que usamos no teste isolado)
+            r3 = requests.get(f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false", headers=headers_old, timeout=5)
+            if r3.status_code == 200 and r3.json().get("content"):
+                c = r3.json().get("content", {})
+                if isinstance(c, list) and len(c) > 0: paciente_id = c[0].get("id") or c[0].get("paciente_id")
+                elif isinstance(c, dict): paciente_id = c.get("id") or c.get("paciente_id")
+        except: pass
 
+    if not paciente_id:
+        return [], "Paciente não localizado no sistema."
+
+    # PASSO 2: BUSCAR AGENDAMENTOS FUTUROS
     hoje = datetime.now().strftime("%Y-%m-%d")
-    rotas = [
-        f"{base_url}/appoints?paciente_id={paciente_id}&data_start={hoje}",
-        f"{base_url}/agendamentos?paciente_id={paciente_id}",
-        f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={hoje}"
+    rotas_agenda = [
+        (f"https://api.feegow.com.br/v1/appoints?paciente_id={paciente_id}&data_start={hoje}", headers_br),
+        (f"https://api.feegow.com.br/v1/agendamentos?paciente_id={paciente_id}", headers_br),
+        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={hoje}", headers_old)
     ]
 
-    for url in rotas:
+    for url, hdrs in rotas_agenda:
         try:
-            req_headers = {"x-access-token": FEEGOW_TOKEN} if "api.feegow.com/v1/api" in url else headers_br
-            res = requests.get(url, headers=req_headers, timeout=8)
+            res = requests.get(url, headers=hdrs, timeout=5)
             if res.status_code == 200:
                 dados = res.json()
                 itens = dados.get("data") or dados.get("content") or []
+                if isinstance(itens, dict): itens = [itens] # Proteção extra
+                
                 sessoes = []
                 for a in itens:
                     status = str(a.get("status_nome", a.get("status", ""))).lower()
@@ -91,19 +114,17 @@ def consultar_agenda_feegow(cpf):
                             sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
                 if sessoes: return sessoes[:3], ""
         except: continue
+        
     return [], ""
 
 # ==========================================
-# MENSAGERIA WHATSAPP (AGORA COM RADAR DE ERRO)
+# MENSAGERIA WHATSAPP
 # ==========================================
 def enviar_whatsapp(to, payload):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    try: 
-        res = requests.post(url, json={"messaging_product": "whatsapp", "to": to, **payload}, headers=headers, timeout=10)
-        print(f"📩 META RESPONSE ({res.status_code}): {res.text}")
-    except Exception as e: 
-        print(f"❌ ERRO AO ENVIAR WHATSAPP: {e}")
+    try: requests.post(url, json={"messaging_product": "whatsapp", "to": to, **payload}, headers=headers, timeout=10)
+    except: pass
 
 def enviar_botoes(to, texto, botoes):
     payload = {
@@ -129,17 +150,13 @@ def webhook():
 
     try:
         value = data["entry"][0]["changes"][0]["value"]
-        
-        if "messages" not in value: 
-            return jsonify({"status": "not_a_message"}), 200
+        if "messages" not in value: return jsonify({"status": "not_a_message"}), 200
 
         message = value["messages"][0]
         phone = message["from"]
         msg_recebida = message.get("text", {}).get("body", "").strip() or \
                        message.get("interactive", {}).get("button_reply", {}).get("title", "").strip()
         msg_lower = msg_recebida.lower()
-
-        print(f"💬 MENSAGEM RECEBIDA DE {phone}: {msg_recebida}")
 
         # 1. RESET ABSOLUTO
         if msg_lower in ["reset", "recomeçar", "menu inicial"]:
@@ -166,7 +183,7 @@ def webhook():
                 update_paciente(phone, {"cpf": cpf_limpo, "status": "menu_veterano"})
                 info["cpf"] = cpf_limpo
                 enviar_texto(phone, f"CPF registado! ✅")
-                msg_lower = "reagendar sessão"
+                msg_lower = "reagendar sessão" # Força a busca automática
             else:
                 enviar_texto(phone, "Por favor, digite um CPF válido com 11 números:")
                 return jsonify({"status": "ok"}), 200
