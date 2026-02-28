@@ -35,13 +35,19 @@ if firebase_creds_json and not firebase_admin._apps:
 db = firestore.client() if firebase_admin._apps else None
 
 # ==========================================
+# FUNÇÃO DE SALVAMENTO (A QUE FALTAVA!)
+# ==========================================
+def update_paciente(phone, data):
+    """Garante que os dados são escritos no Firebase"""
+    if not db: return
+    data["lastInteraction"] = firestore.SERVER_TIMESTAMP
+    db.collection("PatientsKanban").document(phone).set(data, merge=True)
+
+# ==========================================
 # 🚀 MOTOR DE CONSULTA FEEGOW (.com.br)
 # ==========================================
 def consultar_agenda_feegow(cpf):
-    """
-    Busca a agenda direto na API Nova do Feegow, que NÃO possui 
-    o bloqueio agressivo de Firewall (Cloudflare) contra a Vercel.
-    """
+    """Busca a agenda direto na API Nova do Feegow (.com.br)"""
     if not FEEGOW_TOKEN or not cpf:
         return [], "CPF ou Token não identificados."
 
@@ -55,7 +61,7 @@ def consultar_agenda_feegow(cpf):
     }
     base_url = "https://api.feegow.com.br/v1"
 
-    # PASSO 1: Descobrir o ID do Paciente (Esta rota funciona 100%)
+    # PASSO 1: Descobrir o ID do Paciente
     try:
         res_pac = requests.get(f"{base_url}/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=8)
         if res_pac.status_code != 200 or not res_pac.json().get("data"):
@@ -64,20 +70,17 @@ def consultar_agenda_feegow(cpf):
     except Exception as e:
         return [], "Falha na comunicação com o servidor da clínica."
 
-    # PASSO 2: Buscar Agendamentos (Tiro triplo em rotas para evitar erros 404/422)
+    # PASSO 2: Buscar Agendamentos
     hoje = datetime.now().strftime("%Y-%m-%d")
     rotas = [
         f"{base_url}/appoints?paciente_id={paciente_id}&data_start={hoje}",
         f"{base_url}/agendamentos?paciente_id={paciente_id}",
-        # Fallback para API Antiga caso a nova não responda
         f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={hoje}"
     ]
 
     for url in rotas:
         try:
-            # Se for a rota antiga, precisa do header x-access-token
             req_headers = {"x-access-token": FEEGOW_TOKEN, "User-Agent": "Mozilla/5.0"} if "api.feegow.com/v1/api" in url else headers_br
-            
             res = requests.get(url, headers=req_headers, timeout=8)
             
             if res.status_code == 200:
@@ -96,11 +99,11 @@ def consultar_agenda_feegow(cpf):
                             sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
                 
                 if sessoes:
-                    return sessoes[:3], ""  # Devolve as 3 sessões mais próximas
+                    return sessoes[:3], ""
         except Exception:
             continue
 
-    return [], ""  # Retorna vazio se não encontrou nada, mas sem erro agressivo
+    return [], ""
 
 # ==========================================
 # MENSAGERIA WHATSAPP
@@ -138,26 +141,48 @@ def webhook():
         phone = message["from"]
         msg_recebida = message.get("text", {}).get("body", "").strip() or \
                        message.get("interactive", {}).get("button_reply", {}).get("title", "").strip()
-
-        # RECUPERAR MEMÓRIA FIREBASE
-        doc_ref = db.collection("PatientsKanban").document(phone) if db else None
-        info = doc_ref.get().to_dict() if doc_ref and doc_ref.get().exists else {}
-
         msg_lower = msg_recebida.lower()
 
-        # ---------------------------------------------------------
-        # COMANDO MÁGICO: REAGENDAR SESSÃO (Foco do Dr. Issa)
-        # ---------------------------------------------------------
+        # 1. RESET ABSOLUTO
+        if msg_lower in ["reset", "recomeçar", "menu inicial"]:
+            if db: db.collection("PatientsKanban").document(phone).delete()
+            enviar_botoes(phone, "Atendimento reiniciado! Como posso ajudar hoje?", ["🗓️ Reagendar Sessão", "➕ Novo Serviço"])
+            return jsonify({"status": "ok"}), 200
+
+        # 2. LER OU CRIAR MEMÓRIA NO FIREBASE (CORRIGIDO!)
+        info = {}
+        if db:
+            doc_ref = db.collection("PatientsKanban").document(phone)
+            doc = doc_ref.get()
+            if doc.exists:
+                info = doc.to_dict()
+                update_paciente(phone, {"lastInteraction": firestore.SERVER_TIMESTAMP}) # Atualiza a hora para subir no Kanban
+            else:
+                # O SEGREDO QUE FALTAVA: Cria a pasta imediatamente se não existir!
+                info = {"cellphone": phone, "status": "menu_veterano", "title": "Paciente Teste"}
+                update_paciente(phone, info)
+
+        # 3. CAPTURA DE CPF
+        if info.get("status") == "aguardando_cpf_agenda":
+            cpf_limpo = re.sub(r'\D', '', msg_recebida)
+            if len(cpf_limpo) == 11:
+                update_paciente(phone, {"cpf": cpf_limpo, "status": "menu_veterano"})
+                info["cpf"] = cpf_limpo
+                enviar_texto(phone, f"CPF registado! ✅")
+                msg_lower = "reagendar sessão" # Força a busca logo a seguir
+            else:
+                enviar_texto(phone, "Por favor, digite um CPF válido com 11 números:")
+                return jsonify({"status": "ok"}), 200
+
+        # 4. COMANDO MÁGICO: REAGENDAR SESSÃO
         if "reagendar sessão" in msg_lower or "agendamentos" in msg_lower:
-            enviar_texto(phone, "Estou consultando a sua agenda diretamente no sistema da clínica... um instante. ⏳")
-            
             cpf_paciente = info.get("cpf")
             if not cpf_paciente:
-                # Fallback: Se o paciente for de teste e não tiver CPF
-                enviar_texto(phone, "Preciso do seu CPF para consultar o sistema. Por favor, digite os 11 números:")
-                if doc_ref: doc_ref.set({"status": "aguardando_cpf_agenda"}, merge=True)
+                enviar_texto(phone, "Para consultar o sistema, por favor, digite o seu CPF (11 números):")
+                update_paciente(phone, {"status": "aguardando_cpf_agenda"})
                 return jsonify({"status": "ok"}), 200
             
+            enviar_texto(phone, "Estou consultando a sua agenda diretamente no sistema da clínica... um instante. ⏳")
             sessoes, erro = consultar_agenda_feegow(cpf_paciente)
             
             if sessoes:
@@ -171,20 +196,8 @@ def webhook():
             
             return jsonify({"status": "ok"}), 200
 
-        # RESET
-        if msg_lower in ["reset", "recomeçar", "menu inicial"]:
-            if doc_ref: doc_ref.delete()
-            enviar_botoes(phone, "Atendimento reiniciado! Como posso ajudar hoje?", ["🗓️ Reagendar Sessão", "➕ Novo Serviço"])
-            return jsonify({"status": "ok"}), 200
-
-        # MENU INICIAL VETERANO SIMULADO
-        cpf = info.get("cpf", "")
-        if len(re.sub(r'\D', '', str(cpf))) >= 11:
-            enviar_botoes(phone, f"Olá! ✨ Que bom ter você de volta na Conectifisio. Como posso ajudar?", ["🗓️ Reagendar Sessão", "🔄 Nova Guia", "➕ Novo Serviço"])
-        else:
-            # Menu Inicial Novo
-            enviar_botoes(phone, "Olá! ✨ Seja bem-vindo à Conectifisio. Qual serviço procura hoje?", ["Fisio Ortopédica", "Pilates Studio", "Recovery"])
-
+        # 5. MENU INICIAL VETERANO SIMULADO
+        enviar_botoes(phone, f"Olá! ✨ Que bom ter você de volta na Conectifisio. Como posso ajudar?", ["🗓️ Reagendar Sessão", "🔄 Nova Guia", "➕ Novo Serviço"])
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
