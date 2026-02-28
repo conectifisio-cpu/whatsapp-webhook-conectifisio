@@ -52,7 +52,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FEEGOW: BUSCAS
+# FEEGOW: BUSCAS & SONDA MÚLTIPLA
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
     if not FEEGOW_TOKEN: return None
@@ -81,83 +81,93 @@ def buscar_feegow_id_por_cpf(cpf):
     except: pass
     return None
 
+def processar_resultado_feegow(dados, hoje):
+    """Extrai a lista de sessões de forma segura, ignorando canceladas"""
+    itens = dados.get("content") or dados.get("data") or []
+    lista_final = []
+    for a in itens:
+        status = str(a.get("status_nome", "")).lower()
+        if "cancelado" not in status and "falta" not in status:
+            data_raw = str(a.get("data", ""))
+            if "T" in data_raw: data_raw = data_raw.split("T")[0]
+            try:
+                dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                if dt_obj.date() >= hoje.date():
+                    proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
+                    hora = str(a.get('horario', ''))[:5]
+                    lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
+            except: pass
+    return lista_final[:3]
+
 def buscar_agendamentos_futuros_com_debug(feegow_id):
-    """Busca as sessões na Rota Oficial do Feegow com Bypass de Firewall"""
-    if not FEEGOW_TOKEN: return [], "ERRO: Token do Feegow não configurado na Vercel."
-    if not feegow_id: return [], "ERRO: O Paciente não tem um feegow_id atrelado no Firebase."
+    """Sonda Múltipla: Atira em 4 endpoints diferentes da Feegow para encontrar o que funciona"""
+    if not FEEGOW_TOKEN: return [], "ERRO: Token do Feegow não configurado."
+    if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
     
-    # Bypass do Cloudflare (User-Agent falso para o Python não ser bloqueado com 403)
-    headers = {
+    headers_old = {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    headers_new = {
+        "Content-Type": "application/json", 
+        "Authorization": f"Bearer {FEEGOW_TOKEN}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
     hoje = datetime.now()
     futuro = hoje + timedelta(days=60)
-    data_start = hoje.strftime('%Y-%m-%d')
-    data_end = futuro.strftime('%Y-%m-%d')
+    d_start = hoje.strftime('%Y-%m-%d')
+    d_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 DEBUG FEEGOW (Bypass WAF)\nID Paciente: {feegow_id}\n"
+    debug_msg = f"🔍 MULTI-PROBE FEEGOW\nID: {feegow_id}\n\n"
     
-    # TENTATIVA 1: Rota Oficial da API (Appoints)
-    url1 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data_start={data_start}&data_end={data_end}"
-    debug_msg += f"\n--- TENTATIVA 1 (/appoints) ---\nURL: {url1}\n"
-    
+    # Sonda 1: POST na API de Search (Geralmente a correta para fugir do WAF 403)
+    url1 = "https://api.feegow.com/v1/api/appoints/search"
+    payload1 = {"paciente_id": int(feegow_id), "data_start": d_start, "data_end": d_end}
     try:
-        res1 = requests.get(url1, headers=headers, timeout=10)
-        debug_msg += f"Status API 1: {res1.status_code}\nRes: {res1.text[:200]}\n"
-        
-        if res1.status_code == 200:
-            dados = res1.json()
-            itens = dados.get("data") or dados.get("content") or []
-            lista_final = []
-            
-            for a in itens:
-                status = str(a.get("status_nome", "")).lower()
-                if "cancelado" not in status and "falta" not in status:
-                    data_raw = str(a.get("data", ""))
-                    if "T" in data_raw: data_raw = data_raw.split("T")[0]
-                    try:
-                        dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
-                        if dt_obj.date() >= hoje.date():
-                            proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
-                            lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
-                    except: pass
-            
-            if lista_final: 
-                return lista_final[:3], "" 
-    except Exception as e:
-        debug_msg += f"Erro Python 1: {str(e)}\n"
+        r1 = requests.post(url1, headers=headers_old, json=payload1, timeout=10)
+        debug_msg += f"Sonda 1 (POST search): {r1.status_code} | {r1.text[:60]}\n"
+        if r1.status_code == 200:
+            d1 = r1.json()
+            if d1.get("success") != False and (d1.get("content") or d1.get("data")):
+                return processar_resultado_feegow(d1, hoje), ""
+    except Exception as e: debug_msg += f"Sonda 1 Erro: {e}\n"
 
-    # TENTATIVA 2: Rota Search (Appoints Search)
-    url2 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={data_start}&data_end={data_end}"
-    debug_msg += f"\n--- TENTATIVA 2 (/appoints/search) ---\nURL: {url2}\n"
-    
+    # Sonda 2: POST na API de Search SEM datas (Algumas versões exigem apenas ID)
+    payload2 = {"paciente_id": int(feegow_id)}
     try:
-        res2 = requests.get(url2, headers=headers, timeout=10)
-        debug_msg += f"Status API 2: {res2.status_code}\nRes: {res2.text[:200]}\n"
-        
-        if res2.status_code == 200:
-            dados = res2.json()
-            itens = dados.get("data") or dados.get("content") or []
-            lista_final = []
-            for a in itens:
-                status = str(a.get("status_nome", "")).lower()
-                if "cancelado" not in status and "falta" not in status:
-                    data_raw = str(a.get("data", ""))
-                    if "T" in data_raw: data_raw = data_raw.split("T")[0]
-                    try:
-                        dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
-                        if dt_obj.date() >= hoje.date():
-                            proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
-                            lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
-                    except: pass
-            if lista_final:
-                return lista_final[:3], ""
-    except Exception as e:
-        debug_msg += f"Erro Python 2: {str(e)}"
+        r2 = requests.post(url1, headers=headers_old, json=payload2, timeout=10)
+        debug_msg += f"Sonda 2 (POST s/ data): {r2.status_code} | {r2.text[:60]}\n"
+        if r2.status_code == 200:
+            d2 = r2.json()
+            if d2.get("success") != False and (d2.get("content") or d2.get("data")):
+                return processar_resultado_feegow(d2, hoje), ""
+    except Exception as e: debug_msg += f"Sonda 2 Erro: {e}\n"
+
+    # Sonda 3: GET na API original sem parâmetros de data (Fugindo do erro 422)
+    url3 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}"
+    try:
+        r3 = requests.get(url3, headers=headers_old, timeout=10)
+        debug_msg += f"Sonda 3 (GET s/ data): {r3.status_code} | {r3.text[:60]}\n"
+        if r3.status_code == 200:
+            d3 = r3.json()
+            if d3.get("success") != False and (d3.get("content") or d3.get("data")):
+                return processar_resultado_feegow(d3, hoje), ""
+    except Exception as e: debug_msg += f"Sonda 3 Erro: {e}\n"
     
+    # Sonda 4: GET na Nova API com Bearer Token
+    url4 = f"https://api.feegow.com.br/v1/appoints?paciente_id={feegow_id}"
+    try:
+        r4 = requests.get(url4, headers=headers_new, timeout=10)
+        debug_msg += f"Sonda 4 (GET api nova): {r4.status_code} | {r4.text[:60]}\n"
+        if r4.status_code == 200:
+            d4 = r4.json()
+            if d4.get("success") != False and (d4.get("content") or d4.get("data")):
+                return processar_resultado_feegow(d4, hoje), ""
+    except Exception as e: debug_msg += f"Sonda 4 Erro: {e}\n"
+
     return [], debug_msg
 
 # ==========================================
@@ -244,8 +254,8 @@ def webhook():
         msg_limpa = msg_recebida.lower().strip()
 
         if msg_limpa in ["recomeçar", "reset", "menu inicial"]:
-            update_paciente(phone, {"status": "menu_veterano"}) # Forçando ir pro menu veterano pro teste
-            botoes = [{"id": "v1", "title": "🗓️ Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
+            update_paciente(phone, {"status": "menu_veterano"})
+            botoes = [{"id": "v1", "title": "🗓️ Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia"}]
             enviar_botoes(phone, "Atendimento reiniciado para o teste de Agendamentos! 👇", botoes)
             return jsonify({"status": "reset"}), 200
 
@@ -256,15 +266,11 @@ def webhook():
             
         status = info.get("status", "menu_veterano")
 
-        # ---------------------------------------------
-        # 🚀 O MENU DO VETERANO (PESQUISA FEEGOW AQUI)
-        # ---------------------------------------------
         if status == "menu_veterano" or status == "vendo_agendamentos" or status == "agendando":
             
             if "Agendamentos" in msg_recebida or "Reagendar" in msg_recebida:
                 feegow_id = info.get("feegow_id")
                 
-                # Busca de resgate profunda para o Feegow ID caso não tenha na memória
                 if not feegow_id:
                     vet = buscar_veterano_feegow_celular(phone)
                     if vet and vet.get("feegow_id"):
@@ -275,7 +281,7 @@ def webhook():
                     if feegow_id:
                         update_paciente(phone, {"feegow_id": feegow_id})
                 
-                # CHAMA A FUNÇÃO COM O RAIO-X!
+                # A MÁGICA: ATIRA AS 4 SONDAS AO MESMO TEMPO
                 lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id)
                 
                 if lista_sessoes:
@@ -286,7 +292,6 @@ def webhook():
                 else:
                     update_paciente(phone, {"status": "agendando"})
                     
-                    # SE ACHAR 0 SESSÕES, ELE MANDA O LOG DO FEEGOW PRO WHATSAPP!
                     msg_erro = "Não encontrei agendamentos futuros para você no sistema. 🤔\n\n"
                     if log_debug:
                         msg_erro += f"*{log_debug}*\n\n"
