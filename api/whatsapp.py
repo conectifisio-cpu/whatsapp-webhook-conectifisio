@@ -3,7 +3,7 @@ import requests
 import traceback
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -48,7 +48,7 @@ def update_paciente(phone, data):
         print(f"❌ ERRO AO SALVAR FIREBASE: {e}")
 
 # ==========================================
-# 🚀 MOTOR DE CONSULTA FEEGOW (TANQUE DE GUERRA)
+# 🚀 MOTOR DE CONSULTA FEEGOW (90 DIAS + ID)
 # ==========================================
 def consultar_agenda_feegow(cpf):
     if not FEEGOW_TOKEN or not cpf: return [], "CPF ou Token ausente."
@@ -60,22 +60,22 @@ def consultar_agenda_feegow(cpf):
     
     paciente_id = None
     
-    # PASSO 1: DESCOBRIR ID DO PACIENTE (ATACA 3 ROTAS DIFERENTES)
-    try: # TENTATIVA 1: Rota Nova
+    # PASSO 1: DESCOBRIR ID DO PACIENTE
+    try: 
         r1 = requests.get(f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=5)
         if r1.status_code == 200 and r1.json().get("data"):
             paciente_id = r1.json()["data"][0]["id"]
     except: pass
     
     if not paciente_id:
-        try: # TENTATIVA 2: Rota Nova com Bearer
+        try: 
             r2 = requests.get(f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_limpo}", headers=headers_br_bearer, timeout=5)
             if r2.status_code == 200 and r2.json().get("data"):
                 paciente_id = r2.json()["data"][0]["id"]
         except: pass
 
     if not paciente_id:
-        try: # TENTATIVA 3: Rota Clássica (A que usamos no teste isolado)
+        try: 
             r3 = requests.get(f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false", headers=headers_old, timeout=5)
             if r3.status_code == 200 and r3.json().get("content"):
                 c = r3.json().get("content", {})
@@ -84,14 +84,19 @@ def consultar_agenda_feegow(cpf):
         except: pass
 
     if not paciente_id:
-        return [], "Paciente não localizado no sistema."
+        return [], "Paciente não localizado."
 
-    # PASSO 2: BUSCAR AGENDAMENTOS FUTUROS
-    hoje = datetime.now().strftime("%Y-%m-%d")
+    # PASSO 2: BUSCAR AGENDAMENTOS FUTUROS (Janela de 90 Dias)
+    hoje = datetime.now()
+    d_start = hoje.strftime('%Y-%m-%d')
+    d_end = (hoje + timedelta(days=90)).strftime('%Y-%m-%d')
+
     rotas_agenda = [
-        (f"https://api.feegow.com.br/v1/appoints?paciente_id={paciente_id}&data_start={hoje}", headers_br),
-        (f"https://api.feegow.com.br/v1/agendamentos?paciente_id={paciente_id}", headers_br),
-        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={hoje}", headers_old)
+        (f"https://api.feegow.com.br/v1/appoints/search?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}", headers_br),
+        (f"https://api.feegow.com.br/v1/appoints?paciente_id={paciente_id}", headers_br),
+        (f"https://api.feegow.com.br/v1/agendamentos?paciente_id={paciente_id}&data_inicio={d_start}&data_fim={d_end}", headers_br),
+        (f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}", headers_old),
+        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={d_start}", headers_old)
     ]
 
     for url, hdrs in rotas_agenda:
@@ -100,22 +105,26 @@ def consultar_agenda_feegow(cpf):
             if res.status_code == 200:
                 dados = res.json()
                 itens = dados.get("data") or dados.get("content") or []
-                if isinstance(itens, dict): itens = [itens] # Proteção extra
+                if isinstance(itens, dict): itens = [itens] 
                 
                 sessoes = []
                 for a in itens:
                     status = str(a.get("status_nome", a.get("status", ""))).lower()
                     if "cancelado" not in status and "falta" not in status:
                         data_raw = str(a.get("data", "")).split("T")[0]
-                        if data_raw >= hoje:
+                        if data_raw >= d_start:
                             proc = a.get("procedimento_nome") or a.get("procedimento", {}).get("nome", "Sessão")
                             hora = str(a.get("horario", a.get("hora", "")))[:5]
                             dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
                             sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
-                if sessoes: return sessoes[:3], ""
+                
+                # Se achou sessões, retorna com o ID para provar que encontrou a pessoa
+                if sessoes: 
+                    return sessoes[:3], str(paciente_id)
         except: continue
         
-    return [], ""
+    # Se não achou sessões em NENHUMA rota, devolve vazio, MAS devolve o ID para provar o sucesso
+    return [], str(paciente_id)
 
 # ==========================================
 # MENSAGERIA WHATSAPP
@@ -183,7 +192,7 @@ def webhook():
                 update_paciente(phone, {"cpf": cpf_limpo, "status": "menu_veterano"})
                 info["cpf"] = cpf_limpo
                 enviar_texto(phone, f"CPF registado! ✅")
-                msg_lower = "reagendar sessão" # Força a busca automática
+                msg_lower = "reagendar sessão"
             else:
                 enviar_texto(phone, "Por favor, digite um CPF válido com 11 números:")
                 return jsonify({"status": "ok"}), 200
@@ -197,15 +206,18 @@ def webhook():
                 return jsonify({"status": "ok"}), 200
             
             enviar_texto(phone, "Estou consultando a sua agenda diretamente no sistema da clínica... um instante. ⏳")
-            sessoes, erro = consultar_agenda_feegow(cpf_paciente)
+            sessoes, info_id = consultar_agenda_feegow(cpf_paciente)
             
             if sessoes:
-                msg = "Localizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes) + "\n\nQual delas você gostaria de reagendar?"
+                msg = f"Localizei o seu cadastro (ID Feegow: {info_id}) e suas próximas sessões: 👇\n\n" + "\n".join(sessoes) + "\n\nQual delas gostaria de reagendar?"
                 enviar_botoes(phone, msg, ["A Primeira", "Outra Data", "Falar com Recepção"])
             else:
-                msg_falha = "Não encontrei agendamentos futuros no sistema."
-                if erro: msg_falha += f" ({erro})"
-                msg_falha += "\n\nMas não se preocupe, vamos agendar agora! Qual o melhor período?"
+                if info_id == "Paciente não localizado.":
+                    msg_falha = "Não encontrei o seu cadastro no sistema Feegow. 🤔"
+                else:
+                    msg_falha = f"O seu cadastro foi localizado com sucesso (ID Feegow: {info_id}) ✅\nPorém, não encontrei nenhum agendamento futuro para você nos próximos 90 dias."
+                    
+                msg_falha += "\n\nMas não se preocupe, vamos agendar agora! Qual o melhor período para você?"
                 enviar_botoes(phone, msg_falha, ["☀️ Manhã", "⛅ Tarde", "⬅️ Voltar"])
             return jsonify({"status": "ok"}), 200
 
