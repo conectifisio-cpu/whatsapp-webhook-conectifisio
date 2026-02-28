@@ -36,7 +36,7 @@ if firebase_creds_json and not firebase_admin._apps:
 db = firestore.client() if firebase_admin._apps else None
 
 # ==========================================
-# FUNÇÃO DE SALVAMENTO FIREBASE
+# FUNÇÕES FIREBASE
 # ==========================================
 def update_paciente(phone, data):
     if not db: return
@@ -47,7 +47,20 @@ def update_paciente(phone, data):
         pass
 
 # ==========================================
-# 🚀 MOTOR DE CONSULTA FEEGOW (FILTRO PYTHON)
+# 🔔 RECEPTOR DE WEBHOOKS FEEGOW
+# ==========================================
+@app.route("/api/feegow-webhook", methods=["POST"])
+def feegow_webhook():
+    try:
+        data = request.get_json()
+        if db and data:
+            db.collection("FeegowWebhooksLog").add({"timestamp": firestore.SERVER_TIMESTAMP, "payload": data})
+        return jsonify({"status": "success"}), 200
+    except:
+        return jsonify({"status": "error"}), 500
+
+# ==========================================
+# 🚀 MOTOR DE CONSULTA FEEGOW (A COMBINAÇÃO DO COFRE)
 # ==========================================
 def consultar_agenda_feegow(cpf):
     if not FEEGOW_TOKEN or not cpf: return [], "CPF ou Token ausente.", "Sem dados"
@@ -61,34 +74,28 @@ def consultar_agenda_feegow(cpf):
     
     # PASSO 1: DESCOBRIR ID DO PACIENTE
     try: 
-        r1 = requests.get(f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=5)
-        if r1.status_code == 200 and r1.json().get("data"):
-            paciente_id = r1.json()["data"][0]["id"]
-            log_debug.append(f"ID (BR): {paciente_id}")
+        r3 = requests.get(f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false", headers=headers_old, timeout=5)
+        if r3.status_code == 200 and r3.json().get("content"):
+            c = r3.json().get("content", {})
+            if isinstance(c, list) and len(c) > 0: paciente_id = c[0].get("id") or c[0].get("paciente_id")
+            elif isinstance(c, dict): paciente_id = c.get("id") or c.get("paciente_id")
+            log_debug.append(f"ID: {paciente_id}")
     except: pass
-    
-    if not paciente_id:
-        try: 
-            r3 = requests.get(f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false", headers=headers_old, timeout=5)
-            if r3.status_code == 200 and r3.json().get("content"):
-                c = r3.json().get("content", {})
-                if isinstance(c, list) and len(c) > 0: paciente_id = c[0].get("id") or c[0].get("paciente_id")
-                elif isinstance(c, dict): paciente_id = c.get("id") or c.get("paciente_id")
-                log_debug.append(f"ID (OLD): {paciente_id}")
-        except: pass
 
     if not paciente_id:
         return [], "Paciente não localizado.", "\n".join(log_debug)
 
-    # PASSO 2: BUSCAR AGENDAMENTOS (SEM FILTRO DE DATA NA API)
+    # PASSO 2: TESTAR COMBINAÇÕES DE DATA NA ROTA ABERTA
     hoje = datetime.now()
     d_start = hoje.strftime('%Y-%m-%d')
+    d_end = (hoje + timedelta(days=90)).strftime('%Y-%m-%d')
+    d_br = hoje.strftime('%d/%m/%Y')
     
-    # Tiramos as datas da URL para evitar o erro 422!
+    # Apenas a rota que deu 422 (sabemos que não está bloqueada pelo WAF)
     rotas_agenda = [
-        (f"https://api.feegow.com.br/v1/agendamentos?paciente_id={paciente_id}", headers_br, "BR_Agendamentos"),
-        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}", headers_old, "OLD_Appoints_All"),
-        (f"https://api.feegow.com/v1/api/patient/{paciente_id}/appoints", headers_old, "OLD_Patient_Appoints")
+        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}", headers_old, "Tentativa_USA"),
+        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={d_br}", headers_old, "Tentativa_BR"),
+        (f"https://api.feegow.com/v1/api/patient/{paciente_id}/appoints?data_start={d_start}&data_end={d_end}", headers_old, "Tentativa_Patient")
     ]
 
     for url, hdrs, nome_rota in rotas_agenda:
@@ -107,7 +114,6 @@ def consultar_agenda_feegow(cpf):
                     status = str(a.get("status_nome", a.get("status", ""))).lower()
                     if "cancelado" not in status and "falta" not in status:
                         data_raw = str(a.get("data", "")).split("T")[0]
-                        # O Python filtra a data aqui, garantindo que só mostre o futuro
                         if data_raw >= d_start:
                             proc = a.get("procedimento_nome") or a.get("procedimento", {}).get("nome", "Sessão")
                             hora = str(a.get("horario", a.get("hora", "")))[:5]
@@ -115,9 +121,8 @@ def consultar_agenda_feegow(cpf):
                             sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
                 
                 if sessoes: 
-                    return sessoes[:3], str(paciente_id), "\n".join(log_debug)
+                    return sessoes[:5], str(paciente_id), "\n".join(log_debug)
             else:
-                # Se der erro, pega o texto que o Feegow cuspiu para lermos a mente dele
                 erro_txt = res.text[:80].replace('\n', '')
                 log_debug.append(f"❌ {nome_rota}: HTTP {res.status_code} ({erro_txt})")
         except Exception as e: 
@@ -205,14 +210,14 @@ def webhook():
                 update_paciente(phone, {"status": "aguardando_cpf_agenda"})
                 return jsonify({"status": "ok"}), 200
             
-            enviar_texto(phone, "Estou consultando a sua agenda na clínica (Raio-X v128)... um instante. ⏳")
+            enviar_texto(phone, "Estou destrancando a sua agenda na clínica... um instante. ⏳")
             sessoes, info_id, log_debug = consultar_agenda_feegow(cpf_paciente)
             
             if sessoes:
                 msg = f"✅ SUCESSO! \n\nLocalizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes) + "\n\nQual delas gostaria de reagendar?"
                 enviar_botoes(phone, msg, ["A Primeira", "Outra Data", "Falar com Recepção"])
             else:
-                msg_falha = f"🔍 *RAIO-X V128*\nID Paciente: {info_id}\n\n*Logs Feegow:*\n{log_debug}\n\n⚠️ Não encontrei sessões futuras. Deseja agendar agora?"
+                msg_falha = f"🔍 *RAIO-X V129*\nID Paciente: {info_id}\n\n*Logs Feegow:*\n{log_debug}\n\n⚠️ Não encontrei sessões futuras. Deseja agendar agora?"
                 enviar_botoes(phone, msg_falha, ["☀️ Manhã", "⛅ Tarde", "⬅️ Voltar"])
             return jsonify({"status": "ok"}), 200
 
