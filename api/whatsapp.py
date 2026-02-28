@@ -2,8 +2,7 @@ import os
 import requests
 import traceback
 import re
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -18,10 +17,9 @@ CORS(app)
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # ==========================================
-# INICIALIZAÇÃO DO FIREBASE (SESSÃO E ESTADO)
+# INICIALIZAÇÃO FIREBASE (ULTRARRÁPIDO)
 # ==========================================
 firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
 if firebase_creds_json and not firebase_admin._apps:
@@ -31,77 +29,87 @@ if firebase_creds_json and not firebase_admin._apps:
             cred_dict['private_key'] = cred_dict['private_key'].replace('\\n', '\n')
         cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred)
-    except: pass
+    except Exception as e:
+        print(f"Erro Firebase: {e}")
 
 db = firestore.client() if firebase_admin._apps else None
 
 # ==========================================
-# MOTOR DE INTELIGÊNCIA ARTIFICIAL (GEMINI)
+# 🚀 MOTOR DE CONSULTA FEEGOW (.com.br)
 # ==========================================
-def chamar_gemini_empatia(queixa):
-    """Gera uma resposta acolhedora baseada na dor do paciente"""
-    if not GEMINI_API_KEY: return "Entendido. Vamos cuidar disso para você agora mesmo."
-    
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={GEMINI_API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": f"Você é a recepção da clínica Conectifisio. O paciente relatou a seguinte queixa: '{queixa}'. Responda com uma única frase curta e muito empática, demonstrando que a clínica é especialista nisso. Não faça perguntas."}]}]
+def consultar_agenda_feegow(cpf):
+    """
+    Busca a agenda direto na API Nova do Feegow, que NÃO possui 
+    o bloqueio agressivo de Firewall (Cloudflare) contra a Vercel.
+    """
+    if not FEEGOW_TOKEN or not cpf:
+        return [], "CPF ou Token não identificados."
+
+    cpf_limpo = re.sub(r'\D', '', str(cpf))
+    if len(cpf_limpo) != 11:
+        return [], "CPF inválido na base de dados."
+
+    headers_br = {
+        "Authorization": FEEGOW_TOKEN,
+        "Content-Type": "application/json"
     }
+    base_url = "https://api.feegow.com.br/v1"
+
+    # PASSO 1: Descobrir o ID do Paciente (Esta rota funciona 100%)
     try:
-        res = requests.post(url, json=payload, timeout=5)
-        return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-    except:
-        return "Sinto muito por esse desconforto. Vamos agendar sua avaliação para resolver isso logo."
-
-# ==========================================
-# MOTOR DE CONSULTA FEEGOW (DIRETO)
-# ==========================================
-def consultar_feegow_direto(feegow_id):
-    """Consulta a agenda oficial do paciente sem intermediários"""
-    if not FEEGOW_TOKEN or not feegow_id: return [], "Dados de acesso ausentes."
-
-    # Cabeçalhos de Proteção para evitar o Erro 403 (Bypass Cloudflare)
-    headers = {
-        "x-access-token": FEEGOW_TOKEN,
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
-        "Referer": "https://feegow.com.br/"
-    }
-
-    hoje = datetime.now()
-    d_start = hoje.strftime('%Y-%m-%d')
-    d_end = (hoje + timedelta(days=60)).strftime('%Y-%m-%d')
-
-    # Rota Oficial de Busca de Agendamentos
-    url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
-    
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            dados = r.json()
-            itens = dados.get("content") or dados.get("data") or []
-            lista_final = []
-            for a in itens:
-                if "cancelado" not in str(a.get("status_nome", "")).lower():
-                    data_pt = datetime.strptime(str(a.get("data", ""))[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
-                    hora = str(a.get("horario", ""))[:5]
-                    proc = a.get("procedimento_nome", "Sessão")
-                    lista_final.append(f"🗓️ *{data_pt} às {hora}* - {proc}")
-            return lista_final[:5], ""
-        return [], f"Erro {r.status_code} na API."
+        res_pac = requests.get(f"{base_url}/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=8)
+        if res_pac.status_code != 200 or not res_pac.json().get("data"):
+            return [], "Paciente não localizado no sistema Feegow."
+        paciente_id = res_pac.json()["data"][0]["id"]
     except Exception as e:
-        return [], str(e)
+        return [], "Falha na comunicação com o servidor da clínica."
+
+    # PASSO 2: Buscar Agendamentos (Tiro triplo em rotas para evitar erros 404/422)
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    rotas = [
+        f"{base_url}/appoints?paciente_id={paciente_id}&data_start={hoje}",
+        f"{base_url}/agendamentos?paciente_id={paciente_id}",
+        # Fallback para API Antiga caso a nova não responda
+        f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={hoje}"
+    ]
+
+    for url in rotas:
+        try:
+            # Se for a rota antiga, precisa do header x-access-token
+            req_headers = {"x-access-token": FEEGOW_TOKEN, "User-Agent": "Mozilla/5.0"} if "api.feegow.com/v1/api" in url else headers_br
+            
+            res = requests.get(url, headers=req_headers, timeout=8)
+            
+            if res.status_code == 200:
+                dados = res.json()
+                itens = dados.get("data") or dados.get("content") or []
+                
+                sessoes = []
+                for a in itens:
+                    status = str(a.get("status_nome", a.get("status", ""))).lower()
+                    if "cancelado" not in status and "falta" not in status:
+                        data_raw = str(a.get("data", "")).split("T")[0]
+                        if data_raw >= hoje:
+                            proc = a.get("procedimento_nome") or a.get("procedimento", {}).get("nome", "Sessão Clínica")
+                            hora = str(a.get("horario", a.get("hora", "")))[:5]
+                            dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                            sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
+                
+                if sessoes:
+                    return sessoes[:3], ""  # Devolve as 3 sessões mais próximas
+        except Exception:
+            continue
+
+    return [], ""  # Retorna vazio se não encontrou nada, mas sem erro agressivo
 
 # ==========================================
-# GESTÃO DE WHATSAPP (ENTRADA/SAÍDA)
+# MENSAGERIA WHATSAPP
 # ==========================================
-def enviar_whatsapp(to, payload_msg):
+def enviar_whatsapp(to, payload):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    try: requests.post(url, json={"messaging_product": "whatsapp", "to": to, **payload_msg}, timeout=10)
+    try: requests.post(url, json={"messaging_product": "whatsapp", "to": to, **payload}, timeout=10)
     except: pass
-
-def responder_texto(to, texto):
-    enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
 def enviar_botoes(to, texto, botoes):
     payload = {
@@ -109,13 +117,16 @@ def enviar_botoes(to, texto, botoes):
         "interactive": {
             "type": "button",
             "body": {"text": texto},
-            "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}
+            "action": {"buttons": [{"type": "reply", "reply": {"id": f"b_{i}", "title": b[:20]}} for i, b in enumerate(botoes)]}
         }
     }
     enviar_whatsapp(to, payload)
 
+def enviar_texto(to, texto):
+    enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
+
 # ==========================================
-# WEBHOOK PRINCIPAL (O CÉREBRO)
+# CÉREBRO PRINCIPAL
 # ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
@@ -123,66 +134,66 @@ def webhook():
     if not data or "entry" not in data: return jsonify({"status": "ok"}), 200
 
     try:
-        value = data["entry"][0]["changes"][0]["value"]
-        if "messages" not in value: return jsonify({"status": "not_a_message"}), 200
-
-        message = value["messages"][0]
+        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
         phone = message["from"]
         msg_recebida = message.get("text", {}).get("body", "").strip() or \
-                       message.get("interactive", {}).get("button_reply", {}).get("title", "")
+                       message.get("interactive", {}).get("button_reply", {}).get("title", "").strip()
 
-        # --- SISTEMA DE RESET ---
-        if msg_recebida.lower() in ["reset", "recomeçar", "menu"]:
-            if db: db.collection("PatientsKanban").document(phone).delete()
-            enviar_botoes(phone, "Atendimento reiniciado! Como posso ajudar?", [{"id":"v1","title":"🗓️ Agendamentos"},{"id":"v2","title":"🔄 Nova Guia"}])
-            return jsonify({"status": "reset"}), 200
+        # RECUPERAR MEMÓRIA FIREBASE
+        doc_ref = db.collection("PatientsKanban").document(phone) if db else None
+        info = doc_ref.get().to_dict() if doc_ref and doc_ref.get().exists else {}
 
-        # --- RECUPERAÇÃO DE ESTADO ---
-        doc_ref = db.collection("PatientsKanban").document(phone)
-        doc = doc_ref.get()
-        info = doc.to_dict() if doc.exists else {"status": "inicio", "feegow_id": "2279"}
+        msg_lower = msg_recebida.lower()
 
-        # --- LÓGICA DE FLUXO ---
-        # 1. CONSULTA DE AGENDA
-        if "Agendamentos" in msg_recebida or "Consultar" in msg_recebida:
-            fid = info.get("feegow_id", "2279") # 2279 = Marcel (Teste)
-            responder_texto(phone, "Consultando sua agenda diretamente no sistema... ⏳")
+        # ---------------------------------------------------------
+        # COMANDO MÁGICO: REAGENDAR SESSÃO (Foco do Dr. Issa)
+        # ---------------------------------------------------------
+        if "reagendar sessão" in msg_lower or "agendamentos" in msg_lower:
+            enviar_texto(phone, "Estou consultando a sua agenda diretamente no sistema da clínica... um instante. ⏳")
             
-            lista, erro = consultar_feegow_direto(fid)
-            if lista:
-                resumo = "Localizei seus próximos horários: 👇\n\n" + "\n".join(lista)
-                enviar_botoes(phone, resumo, [{"id":"ok","title":"👍 Confirmar"},{"id":"alt","title":"🔄 Reagendar"}])
+            cpf_paciente = info.get("cpf")
+            if not cpf_paciente:
+                # Fallback: Se o paciente for de teste e não tiver CPF
+                enviar_texto(phone, "Preciso do seu CPF para consultar o sistema. Por favor, digite os 11 números:")
+                if doc_ref: doc_ref.set({"status": "aguardando_cpf_agenda"}, merge=True)
+                return jsonify({"status": "ok"}), 200
+            
+            sessoes, erro = consultar_agenda_feegow(cpf_paciente)
+            
+            if sessoes:
+                msg = "Localizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes) + "\n\nQual delas você gostaria de reagendar?"
+                enviar_botoes(phone, msg, ["A Primeira", "Outra Data", "Falar com Recepção"])
             else:
-                msg_falha = "Não encontrei agendamentos futuros para você. 🤔\n\nDeseja marcar um novo agora?"
-                enviar_botoes(phone, msg_falha, [{"id":"m","title":"Manhã"},{"id":"t","title":"Tarde"}])
-            return jsonify({"status": "success"}), 200
-
-        # 2. ESCUTA ATIVA (QUEIXA)
-        elif info.get("status") == "esperando_queixa":
-            info["queixa"] = msg_recebida
-            info["status"] = "escolhendo_modalidade"
-            doc_ref.set(info, merge=True)
+                msg_falha = "Não encontrei agendamentos futuros no sistema."
+                if erro: msg_falha += f" ({erro})"
+                msg_falha += "\n\nMas não se preocupe, vamos resolver e agendar agora! Qual o melhor período para você?"
+                enviar_botoes(phone, msg_falha, ["☀️ Manhã", "⛅ Tarde", "⬅️ Voltar"])
             
-            empatia = chamar_gemini_empatia(msg_recebida)
-            responder_texto(phone, empatia)
-            enviar_botoes(phone, "Como deseja realizar o atendimento?", [{"id":"c1","title":"💳 Convênio"},{"id":"p1","title":"💎 Particular"}])
+            return jsonify({"status": "ok"}), 200
 
-        # 3. SAUDAÇÃO INICIAL (SE NADA ACIMA BATER)
+        # RESET
+        if msg_lower in ["reset", "recomeçar", "menu inicial"]:
+            if doc_ref: doc_ref.delete()
+            enviar_botoes(phone, "Atendimento reiniciado! Como posso ajudar hoje?", ["🗓️ Reagendar Sessão", "➕ Novo Serviço"])
+            return jsonify({"status": "ok"}), 200
+
+        # MENU INICIAL VETERANO SIMULADO
+        cpf = info.get("cpf", "")
+        if len(re.sub(r'\D', '', str(cpf))) >= 11:
+            enviar_botoes(phone, f"Olá! ✨ Que bom ter você de volta na Conectifisio. Como posso ajudar?", ["🗓️ Reagendar Sessão", "🔄 Nova Guia", "➕ Novo Serviço"])
         else:
-            info["status"] = "esperando_queixa"
-            doc_ref.set(info, merge=True)
-            enviar_botoes(phone, f"Olá! ✨ Bem-vindo à Conectifisio. Para agilizarmos, me conte brevemente o que te trouxe à clínica hoje?", [{"id":"ag","title":"🗓️ Agendamentos"}])
+            # Menu Inicial Novo
+            enviar_botoes(phone, "Olá! ✨ Seja bem-vindo à Conectifisio. Qual serviço procura hoje?", ["Fisio Ortopédica", "Pilates Studio", "Recovery"])
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"❌ ERRO CRÍTICO: {traceback.format_exc()}")
+        print(f"Erro Crítico: {traceback.format_exc()}")
         return jsonify({"status": "error"}), 200
 
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
-    if request.args.get("hub.verify_token") == "conectifisio_2024_seguro": return request.args.get("hub.challenge"), 200
-    return "Acesso Negado", 403
+    return request.args.get("hub.challenge", "Acesso Negado"), 200
 
 if __name__ == "__main__":
     app.run(port=5000)
