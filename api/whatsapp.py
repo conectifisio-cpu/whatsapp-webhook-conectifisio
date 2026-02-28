@@ -52,7 +52,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FEEGOW: BUSCAS & SONDA MÚLTIPLA JSON
+# FEEGOW: BUSCAS & SONDA MÚLTIPLA COM UNIDADE
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
     if not FEEGOW_TOKEN: return None
@@ -82,7 +82,7 @@ def buscar_feegow_id_por_cpf(cpf):
     return None
 
 def processar_resultado_feegow(dados, hoje):
-    """Extrai a lista de sessões de forma segura, ignorando canceladas"""
+    """Extrai a lista de sessões de forma segura"""
     itens = dados.get("content") or dados.get("data") or []
     lista_final = []
     for a in itens:
@@ -99,59 +99,70 @@ def processar_resultado_feegow(dados, hoje):
             except: pass
     return lista_final[:3]
 
-def buscar_agendamentos_futuros_com_debug(feegow_id):
-    """Sonda Múltipla JSON: Força a Feegow a não enviar páginas HTML de erro."""
-    if not FEEGOW_TOKEN: return [], "ERRO: Token do Feegow não configurado."
+def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
+    """Sonda Injeta o Local ID para tentar quebrar o erro 422"""
+    if not FEEGOW_TOKEN: return [], "ERRO: Token não configurado."
     if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
     
-    headers = {
-        "Content-Type": "application/json", 
-        "Accept": "application/json", # <-- O PULO DO GATO (Exige resposta em código)
-        "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    
+    local_id = 1 if "ipiranga" in str(unidade_nome).lower() else 0
     hoje = datetime.now()
     futuro = hoje + timedelta(days=60)
     d_start = hoje.strftime('%Y-%m-%d')
     d_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 MULTI-PROBE JSON\nID: {feegow_id}\n\n"
+    headers_old = {
+        "Content-Type": "application/json", 
+        "Accept": "application/json", 
+        "x-access-token": FEEGOW_TOKEN
+    }
     
-    # Sonda 1: GET /appoints/search (A oficial que deve funcionar)
-    url1 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
+    # Formato idêntico ao que funciona no WIX para a nova API
+    headers_new = {
+        "Content-Type": "application/json", 
+        "Accept": "application/json", 
+        "Authorization": FEEGOW_TOKEN 
+    }
+    
+    debug_msg = f"🔍 PROBE LOCAL_ID\nID: {feegow_id} | Local: {local_id}\n\n"
+    
+    # Sonda 1: Old API /appoints com RANGE e LOCAL_ID (Para corrigir o 422)
+    url1 = f"https://api.feegow.com/v1/api/appoints?local_id={local_id}&paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
     try:
-        r1 = requests.get(url1, headers=headers, timeout=10)
-        debug_msg += f"S1 (GET search): {r1.status_code} | {r1.text[:60]}\n"
+        r1 = requests.get(url1, headers=headers_old, timeout=5)
+        debug_msg += f"S1 (Old c/ Range): {r1.status_code} | {r1.text[:50]}\n"
         if r1.status_code == 200 and r1.json().get("success") != False:
-            return processar_resultado_feegow(r1.json(), hoje), ""
+            res = processar_resultado_feegow(r1.json(), hoje)
+            if res: return res, ""
     except Exception as e: debug_msg += f"S1 Erro: {e}\n"
 
-    # Sonda 2: Trocando os nomes dos parâmetros de data
-    url2 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data_inicio={d_start}&data_fim={d_end}"
+    # Sonda 2: Old API /appoints APENAS PARA HOJE (Para ver se devolve 200)
+    url2 = f"https://api.feegow.com/v1/api/appoints?local_id={local_id}&paciente_id={feegow_id}&data={d_start}"
     try:
-        r2 = requests.get(url2, headers=headers, timeout=10)
-        debug_msg += f"S2 (GET appoints): {r2.status_code} | {r2.text[:60]}\n"
+        r2 = requests.get(url2, headers=headers_old, timeout=5)
+        debug_msg += f"S2 (Old Dia Único): {r2.status_code} | {r2.text[:50]}\n"
         if r2.status_code == 200 and r2.json().get("success") != False:
-            return processar_resultado_feegow(r2.json(), hoje), ""
+            res = processar_resultado_feegow(r2.json(), hoje)
+            if res: return res, ""
     except Exception as e: debug_msg += f"S2 Erro: {e}\n"
 
-    # Sonda 3: Rota do Paciente Direta
-    url3 = f"https://api.feegow.com/v1/api/patient/{feegow_id}/appoints"
+    # Sonda 3: Nova API com Header idêntico ao do WIX
+    url3 = f"https://api.feegow.com.br/v1/agendamentos?paciente_id={feegow_id}"
     try:
-        r3 = requests.get(url3, headers=headers, timeout=10)
-        debug_msg += f"S3 (GET patient): {r3.status_code} | {r3.text[:60]}\n"
+        r3 = requests.get(url3, headers=headers_new, timeout=5)
+        debug_msg += f"S3 (New Agendamentos): {r3.status_code} | {r3.text[:50]}\n"
         if r3.status_code == 200 and r3.json().get("success") != False:
-            return processar_resultado_feegow(r3.json(), hoje), ""
+            res = processar_resultado_feegow(r3.json(), hoje)
+            if res: return res, ""
     except Exception as e: debug_msg += f"S3 Erro: {e}\n"
-    
-    # Sonda 4: Rota de agenda do dia sem período (Para testar validação)
-    url4 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data={d_start}"
+
+    # Sonda 4: Rota relacional de Paciente na Nova API
+    url4 = f"https://api.feegow.com.br/v1/pacientes/{feegow_id}/agendamentos"
     try:
-        r4 = requests.get(url4, headers=headers, timeout=10)
-        debug_msg += f"S4 (GET dia): {r4.status_code} | {r4.text[:60]}\n"
+        r4 = requests.get(url4, headers=headers_new, timeout=5)
+        debug_msg += f"S4 (New Pacientes/Agend): {r4.status_code} | {r4.text[:50]}\n"
         if r4.status_code == 200 and r4.json().get("success") != False:
-            return processar_resultado_feegow(r4.json(), hoje), ""
+            res = processar_resultado_feegow(r4.json(), hoje)
+            if res: return res, ""
     except Exception as e: debug_msg += f"S4 Erro: {e}\n"
 
     return [], debug_msg
@@ -267,7 +278,8 @@ def webhook():
                     if feegow_id:
                         update_paciente(phone, {"feegow_id": feegow_id})
                 
-                lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id)
+                unidade_nome = info.get("unit", "SCS") # Pega a unidade salva
+                lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome)
                 
                 if lista_sessoes:
                     msg_agenda = "Localizei suas próximas sessões: 👇\n\n" + "\n".join(lista_sessoes) + "\n\nO que deseja fazer?"
