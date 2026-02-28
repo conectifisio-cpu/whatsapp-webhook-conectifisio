@@ -2,6 +2,7 @@ import os
 import requests
 import traceback
 import re
+import json
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -100,7 +101,6 @@ def enviar_whatsapp(to, payload):
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     try: 
         res = requests.post(url, json={"messaging_product": "whatsapp", "to": to, **payload}, headers=headers, timeout=10)
-        # O RADAR: Imprime a resposta da Meta na Vercel!
         print(f"📩 META RESPONSE ({res.status_code}): {res.text}")
     except Exception as e: 
         print(f"❌ ERRO AO ENVIAR WHATSAPP: {e}")
@@ -130,7 +130,6 @@ def webhook():
     try:
         value = data["entry"][0]["changes"][0]["value"]
         
-        # Filtra os avisos de "mensagem lida/entregue" da Meta para não dar erro
         if "messages" not in value: 
             return jsonify({"status": "not_a_message"}), 200
 
