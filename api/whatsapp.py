@@ -82,67 +82,80 @@ def buscar_feegow_id_por_cpf(cpf):
     return None
 
 def buscar_agendamentos_futuros_com_debug(feegow_id):
-    """Busca as sessões e retorna a lista OU a string de debug para descobrirmos o erro"""
+    """Busca as sessões na Rota Oficial em Português do Feegow"""
     if not FEEGOW_TOKEN: return [], "ERRO: Token do Feegow não configurado na Vercel."
     if not feegow_id: return [], "ERRO: O Paciente não tem um feegow_id atrelado no Firebase."
     
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    # Header idêntico ao que funciona no seu Wix
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "Authorization": FEEGOW_TOKEN
+    }
+    
     hoje = datetime.now()
     futuro = hoje + timedelta(days=60)
     data_start = hoje.strftime('%Y-%m-%d')
     data_end = futuro.strftime('%Y-%m-%d')
     
-    # Tentativa 1 (API Oficial Appoints Search)
-    url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={data_start}&data_end={data_end}"
-    debug_msg = f"🔍 DEBUG FEEGOW\nID Paciente: {feegow_id}\nData: {data_start} a {data_end}\nURL: {url}\n"
+    debug_msg = f"🔍 DEBUG FEEGOW\nID Paciente: {feegow_id}\n"
+    
+    # TENTATIVA 1: Rota Oficial Pública (/agendamentos) com filtro de data
+    url1 = f"https://api.feegow.com.br/v1/agendamentos?paciente_id={feegow_id}&data_inicio={data_start}&data_fim={data_end}"
+    debug_msg += f"\n--- TENTATIVA 1 (Agendamentos BR) ---\nURL: {url1}\n"
     
     try:
-        res = requests.get(url, headers=headers, timeout=10)
-        debug_msg += f"Status API 1: {res.status_code}\nResposta 1: {res.text[:300]}\n"
+        res1 = requests.get(url1, headers=headers, timeout=10)
+        debug_msg += f"Status API 1: {res1.status_code}\nRes: {res1.text[:200]}\n"
         
-        if res.status_code == 200:
-            dados = res.json()
-            itens = dados.get("content") or dados.get("data") or []
+        if res1.status_code == 200:
+            dados = res1.json()
+            itens = dados.get("data") or dados.get("content") or []
             lista_final = []
             
             for a in itens:
                 status = str(a.get("status_nome", "")).lower()
                 if "cancelado" not in status and "falta" not in status:
-                    data_raw = a.get("data", "")
+                    data_raw = str(a.get("data", ""))
                     if "T" in data_raw: data_raw = data_raw.split("T")[0]
                     try:
                         dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
                         if dt_obj.date() >= hoje.date():
-                            lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {a.get('procedimento_nome', 'Sessão')}")
+                            # Extrai o nome do procedimento em várias estruturas possíveis
+                            proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
+                            lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
                     except: pass
             
             if lista_final: 
-                return lista_final[:3], "" # Sucesso total, retorna a lista
+                return lista_final[:3], "" # Sucesso!
     except Exception as e:
         debug_msg += f"Erro Python 1: {str(e)}\n"
 
-    # Tentativa 2 (Fallback: Lista Geral de Agendamentos)
-    url2 = f"https://api.feegow.com.br/v1/appoints?paciente_id={feegow_id}"
-    debug_msg += f"\n--- TENTATIVA 2 ---\nURL: {url2}\n"
+    # TENTATIVA 2: Busca Geral (Traz todo o histórico e nós filtramos as futuras)
+    url2 = f"https://api.feegow.com.br/v1/agendamentos?paciente_id={feegow_id}"
+    debug_msg += f"\n--- TENTATIVA 2 (Geral) ---\nURL: {url2}\n"
+    
     try:
         res2 = requests.get(url2, headers=headers, timeout=10)
-        debug_msg += f"Status API 2: {res2.status_code}\nResposta 2: {res2.text[:300]}\n"
+        debug_msg += f"Status API 2: {res2.status_code}\nRes: {res2.text[:200]}\n"
         
         if res2.status_code == 200:
-            dados2 = res2.json()
-            itens2 = dados2.get("data") or []
-            lista_final2 = []
-            for a in itens2:
-                data_raw = a.get("data", "")
-                if "T" in data_raw: data_raw = data_raw.split("T")[0]
-                try:
-                    dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
-                    if dt_obj.date() >= hoje.date():
-                        proc = a.get('procedimento', {}).get('nome', 'Sessão') if isinstance(a.get('procedimento'), dict) else 'Sessão'
-                        lista_final2.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
-                except: pass
-            if lista_final2:
-                return lista_final2[:3], ""
+            dados = res2.json()
+            itens = dados.get("data") or dados.get("content") or []
+            lista_final = []
+            for a in itens:
+                status = str(a.get("status_nome", "")).lower()
+                if "cancelado" not in status and "falta" not in status:
+                    data_raw = str(a.get("data", ""))
+                    if "T" in data_raw: data_raw = data_raw.split("T")[0]
+                    try:
+                        dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                        if dt_obj.date() >= hoje.date():
+                            proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
+                            lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
+                    except: pass
+            if lista_final:
+                return lista_final[:3], ""
     except Exception as e:
         debug_msg += f"Erro Python 2: {str(e)}"
     
