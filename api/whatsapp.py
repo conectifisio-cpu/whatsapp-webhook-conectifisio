@@ -47,7 +47,7 @@ def update_paciente(phone, data):
         pass
 
 # ==========================================
-# 🚀 MOTOR DE CONSULTA FEEGOW (15 DIAS)
+# 🚀 MOTOR DE CONSULTA FEEGOW (FILTRO PYTHON)
 # ==========================================
 def consultar_agenda_feegow(cpf):
     if not FEEGOW_TOKEN or not cpf: return [], "CPF ou Token ausente.", "Sem dados"
@@ -64,7 +64,7 @@ def consultar_agenda_feegow(cpf):
         r1 = requests.get(f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_limpo}", headers=headers_br, timeout=5)
         if r1.status_code == 200 and r1.json().get("data"):
             paciente_id = r1.json()["data"][0]["id"]
-            log_debug.append(f"ID achado na Rota Nova: {paciente_id}")
+            log_debug.append(f"ID (BR): {paciente_id}")
     except: pass
     
     if not paciente_id:
@@ -74,43 +74,40 @@ def consultar_agenda_feegow(cpf):
                 c = r3.json().get("content", {})
                 if isinstance(c, list) and len(c) > 0: paciente_id = c[0].get("id") or c[0].get("paciente_id")
                 elif isinstance(c, dict): paciente_id = c.get("id") or c.get("paciente_id")
-                log_debug.append(f"ID achado na Rota Antiga: {paciente_id}")
+                log_debug.append(f"ID (OLD): {paciente_id}")
         except: pass
 
     if not paciente_id:
         return [], "Paciente não localizado.", "\n".join(log_debug)
 
-    # PASSO 2: BUSCAR AGENDAMENTOS FUTUROS (Janela de 15 Dias Exata)
+    # PASSO 2: BUSCAR AGENDAMENTOS (SEM FILTRO DE DATA NA API)
     hoje = datetime.now()
     d_start = hoje.strftime('%Y-%m-%d')
-    d_end = (hoje + timedelta(days=15)).strftime('%Y-%m-%d')
     
-    log_debug.append(f"Buscando de {d_start} até {d_end}")
-
+    # Tiramos as datas da URL para evitar o erro 422!
     rotas_agenda = [
-        (f"https://api.feegow.com.br/v1/appoints/search?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}", headers_br, "BR_Search"),
-        (f"https://api.feegow.com.br/v1/appoints?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}", headers_br, "BR_Appoints"),
-        (f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}", headers_old, "OLD_Search"),
-        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}&data={d_start}", headers_old, "OLD_Appoints_Single")
+        (f"https://api.feegow.com.br/v1/agendamentos?paciente_id={paciente_id}", headers_br, "BR_Agendamentos"),
+        (f"https://api.feegow.com/v1/api/appoints?paciente_id={paciente_id}", headers_old, "OLD_Appoints_All"),
+        (f"https://api.feegow.com/v1/api/patient/{paciente_id}/appoints", headers_old, "OLD_Patient_Appoints")
     ]
 
     for url, hdrs, nome_rota in rotas_agenda:
         try:
-            res = requests.get(url, headers=hdrs, timeout=5)
-            log_debug.append(f"Rota {nome_rota}: HTTP {res.status_code}")
+            res = requests.get(url, headers=hdrs, timeout=6)
             
             if res.status_code == 200:
                 dados = res.json()
                 itens = dados.get("data") or dados.get("content") or []
                 if isinstance(itens, dict): itens = [itens] 
                 
-                log_debug.append(f"-> Retornou {len(itens)} itens")
+                log_debug.append(f"✅ {nome_rota}: 200 OK (Trouxe {len(itens)} itens)")
                 
                 sessoes = []
                 for a in itens:
                     status = str(a.get("status_nome", a.get("status", ""))).lower()
                     if "cancelado" not in status and "falta" not in status:
                         data_raw = str(a.get("data", "")).split("T")[0]
+                        # O Python filtra a data aqui, garantindo que só mostre o futuro
                         if data_raw >= d_start:
                             proc = a.get("procedimento_nome") or a.get("procedimento", {}).get("nome", "Sessão")
                             hora = str(a.get("horario", a.get("hora", "")))[:5]
@@ -118,10 +115,13 @@ def consultar_agenda_feegow(cpf):
                             sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
                 
                 if sessoes: 
-                    log_debug.append(f"-> SUCESSO: Achou {len(sessoes)} sessões ativas!")
                     return sessoes[:3], str(paciente_id), "\n".join(log_debug)
+            else:
+                # Se der erro, pega o texto que o Feegow cuspiu para lermos a mente dele
+                erro_txt = res.text[:80].replace('\n', '')
+                log_debug.append(f"❌ {nome_rota}: HTTP {res.status_code} ({erro_txt})")
         except Exception as e: 
-            log_debug.append(f"Rota {nome_rota} falhou localmente.")
+            log_debug.append(f"⚠️ {nome_rota} falhou na conexão.")
             continue
         
     return [], str(paciente_id), "\n".join(log_debug)
@@ -205,15 +205,14 @@ def webhook():
                 update_paciente(phone, {"status": "aguardando_cpf_agenda"})
                 return jsonify({"status": "ok"}), 200
             
-            enviar_texto(phone, "Estou consultando a sua agenda na clínica (Raio-X ativado)... um instante. ⏳")
+            enviar_texto(phone, "Estou consultando a sua agenda na clínica (Raio-X v128)... um instante. ⏳")
             sessoes, info_id, log_debug = consultar_agenda_feegow(cpf_paciente)
             
             if sessoes:
                 msg = f"✅ SUCESSO! \n\nLocalizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes) + "\n\nQual delas gostaria de reagendar?"
                 enviar_botoes(phone, msg, ["A Primeira", "Outra Data", "Falar com Recepção"])
             else:
-                # O Raio-X entra em acção se falhar
-                msg_falha = f"🔍 *RAIO-X DO FEEGOW*\nID Paciente: {info_id}\n\n*Log da API:*\n{log_debug}\n\n⚠️ Não encontrei sessões nos próximos 15 dias. Deseja agendar agora?"
+                msg_falha = f"🔍 *RAIO-X V128*\nID Paciente: {info_id}\n\n*Logs Feegow:*\n{log_debug}\n\n⚠️ Não encontrei sessões futuras. Deseja agendar agora?"
                 enviar_botoes(phone, msg_falha, ["☀️ Manhã", "⛅ Tarde", "⬅️ Voltar"])
             return jsonify({"status": "ok"}), 200
 
