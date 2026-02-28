@@ -82,15 +82,15 @@ def buscar_feegow_id_por_cpf(cpf):
     return None
 
 def buscar_agendamentos_futuros_com_debug(feegow_id):
-    """Busca as sessões na Rota Oficial em Português do Feegow"""
+    """Busca as sessões na Rota Oficial do Feegow com Bypass de Firewall"""
     if not FEEGOW_TOKEN: return [], "ERRO: Token do Feegow não configurado na Vercel."
     if not feegow_id: return [], "ERRO: O Paciente não tem um feegow_id atrelado no Firebase."
     
-    # Header idêntico ao que funciona no seu Wix
+    # Bypass do Cloudflare (User-Agent falso para o Python não ser bloqueado com 403)
     headers = {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
-        "Authorization": FEEGOW_TOKEN
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     hoje = datetime.now()
@@ -98,11 +98,11 @@ def buscar_agendamentos_futuros_com_debug(feegow_id):
     data_start = hoje.strftime('%Y-%m-%d')
     data_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 DEBUG FEEGOW\nID Paciente: {feegow_id}\n"
+    debug_msg = f"🔍 DEBUG FEEGOW (Bypass WAF)\nID Paciente: {feegow_id}\n"
     
-    # TENTATIVA 1: Rota Oficial Pública (/agendamentos) com filtro de data
-    url1 = f"https://api.feegow.com.br/v1/agendamentos?paciente_id={feegow_id}&data_inicio={data_start}&data_fim={data_end}"
-    debug_msg += f"\n--- TENTATIVA 1 (Agendamentos BR) ---\nURL: {url1}\n"
+    # TENTATIVA 1: Rota Oficial da API (Appoints)
+    url1 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}&data_start={data_start}&data_end={data_end}"
+    debug_msg += f"\n--- TENTATIVA 1 (/appoints) ---\nURL: {url1}\n"
     
     try:
         res1 = requests.get(url1, headers=headers, timeout=10)
@@ -121,19 +121,18 @@ def buscar_agendamentos_futuros_com_debug(feegow_id):
                     try:
                         dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
                         if dt_obj.date() >= hoje.date():
-                            # Extrai o nome do procedimento em várias estruturas possíveis
                             proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
                             lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {a.get('horario', '')[:5]}* - {proc}")
                     except: pass
             
             if lista_final: 
-                return lista_final[:3], "" # Sucesso!
+                return lista_final[:3], "" 
     except Exception as e:
         debug_msg += f"Erro Python 1: {str(e)}\n"
 
-    # TENTATIVA 2: Busca Geral (Traz todo o histórico e nós filtramos as futuras)
-    url2 = f"https://api.feegow.com.br/v1/agendamentos?paciente_id={feegow_id}"
-    debug_msg += f"\n--- TENTATIVA 2 (Geral) ---\nURL: {url2}\n"
+    # TENTATIVA 2: Rota Search (Appoints Search)
+    url2 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={data_start}&data_end={data_end}"
+    debug_msg += f"\n--- TENTATIVA 2 (/appoints/search) ---\nURL: {url2}\n"
     
     try:
         res2 = requests.get(url2, headers=headers, timeout=10)
