@@ -52,7 +52,38 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FEEGOW: BUSCAS & SONDA MÚLTIPLA
+# 🔔 RECEPTOR DE WEBHOOKS DO FEEGOW 🔔
+# ==========================================
+@app.route("/api/feegow-webhook", methods=["POST"])
+def feegow_webhook():
+    """
+    Esta é a nova porta de entrada. O Feegow vai 'bater' aqui 
+    sempre que houver uma alteração na agenda lá no sistema deles.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"status": "error", "message": "Sem dados"}), 400
+
+        # Grava TUDO no Firebase para podermos analisar a estrutura
+        if db:
+            db.collection("FeegowWebhooksLog").add({
+                "timestamp": firestore.SERVER_TIMESTAMP,
+                "payload": data
+            })
+            
+        print("🔔 WEBHOOK FEEGOW RECEBIDO:", data)
+        
+        # O Feegow exige que a gente responda rápido com Sucesso (200)
+        # para ele saber que a mensagem foi entregue.
+        return jsonify({"status": "success", "message": "Recebido com sucesso"}), 200
+
+    except Exception as e:
+        print(f"❌ Erro no Webhook do Feegow: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# ==========================================
+# FEEGOW: BUSCAS & SONDA (MANTIDOS POR SEGURANÇA)
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
     if not FEEGOW_TOKEN: return None
@@ -82,7 +113,6 @@ def buscar_feegow_id_por_cpf(cpf):
     return None
 
 def processar_resultado_feegow(dados, hoje):
-    """Extrai a lista de sessões de forma segura"""
     itens = dados.get("content") or dados.get("data") or []
     lista_final = []
     for a in itens:
@@ -100,7 +130,7 @@ def processar_resultado_feegow(dados, hoje):
     return lista_final[:3]
 
 def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
-    """Sonda Hacker V2: Falsificação de Método via Formulário"""
+    """Sonda mantida ativada apenas como fallback enquanto os Webhooks registram dados"""
     if not FEEGOW_TOKEN: return [], "ERRO: Token não configurado."
     if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
     
@@ -109,11 +139,10 @@ def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
     d_start = hoje.strftime('%Y-%m-%d')
     d_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 HACKER PROBE V2\nID: {feegow_id}\n\n"
-    url_search = "https://api.feegow.com/v1/api/appoints/search"
+    debug_msg = f"🔍 AGUARDANDO WEBHOOKS\nID: {feegow_id}\n\nAguarde o primeiro webhook registar a sua sessão no Firebase."
     
-    # Sonda 1: Form URL-Encoded Spoofing (O Verdadeiro Cavalo de Troia)
-    # Cloudflare deixa o POST passar. Feegow lê o _method=GET como se fosse nativo.
+    # Mantive a sonda de formulário caso o firewall abra alguma brecha
+    url_search = "https://api.feegow.com/v1/api/appoints/search"
     try:
         headers_form = {
             "x-access-token": FEEGOW_TOKEN,
@@ -126,50 +155,16 @@ def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
             "data_end": d_end
         }
         r1 = requests.post(url_search, data=payload_form, headers=headers_form, timeout=5)
-        debug_msg += f"S1 (Form Spoof): {r1.status_code} | {r1.text[:40]}\n"
         if r1.status_code == 200 and r1.json().get("success") != False:
             res = processar_resultado_feegow(r1.json(), hoje)
             if res: return res, ""
-    except Exception as e: debug_msg += f"S1 Erro: {e}\n"
-
-    # Sonda 2: Query String Spoofing
-    # Passamos o disfarce direto na URL do POST
-    try:
-        url_qs = f"{url_search}?_method=GET&paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
-        headers_qs = {"x-access-token": FEEGOW_TOKEN}
-        r2 = requests.post(url_qs, headers=headers_qs, timeout=5)
-        debug_msg += f"S2 (QS Spoof): {r2.status_code} | {r2.text[:40]}\n"
-        if r2.status_code == 200 and r2.json().get("success") != False:
-            res = processar_resultado_feegow(r2.json(), hoje)
-            if res: return res, ""
-    except Exception as e: debug_msg += f"S2 Erro: {e}\n"
-
-    # Sonda 3: Cloudflare Evasion Headers
-    # Tentamos um GET, mas camuflado exatamente como um navegador de um usuário humano
-    try:
-        headers_evasion = {
-            "x-access-token": FEEGOW_TOKEN,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "pt-BR,pt;q=0.9",
-            "Sec-Ch-Ua": '"Chromium";v="122", "Google Chrome";v="122"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "cross-site",
-            "Referer": "https://feegow.com.br/"
-        }
-        url_get = f"{url_search}?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
-        r3 = requests.get(url_get, headers=headers_evasion, timeout=5)
-        debug_msg += f"S3 (GET Evasion): {r3.status_code} | {r3.text[:40]}\n"
-        if r3.status_code == 200 and r3.json().get("success") != False:
-            res = processar_resultado_feegow(r3.json(), hoje)
-            if res: return res, ""
-    except Exception as e: debug_msg += f"S3 Erro: {e}\n"
+    except Exception as e: pass
 
     return [], debug_msg
 
+# ==========================================
+# MOTOR DE AGENDAMENTO (CRIAR NOVOS)
+# ==========================================
 def get_proximos_dias_uteis(quantidade=3):
     dias = []
     data_atual = datetime.now()
@@ -227,7 +222,7 @@ def responder_texto(to, texto): enviar_whatsapp(to, {"type": "text", "text": {"b
 def enviar_botoes(to, texto, botoes): enviar_whatsapp(to, {"type": "interactive", "interactive": {"type": "button", "body": {"text": texto}, "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}}})
 
 # ==========================================
-# WEBHOOK POST PRINCIPAL
+# WEBHOOK POST PRINCIPAL DO WHATSAPP
 # ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
@@ -279,7 +274,7 @@ def webhook():
                         update_paciente(phone, {"feegow_id": feegow_id})
                 
                 unidade_nome = info.get("unit", "SCS")
-                # Chama a versão DEFINITIVA
+                
                 lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome)
                 
                 if lista_sessoes:
