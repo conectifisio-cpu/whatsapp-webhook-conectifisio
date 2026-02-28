@@ -3,7 +3,6 @@ import requests
 import traceback
 import re
 import json
-import base64
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -16,6 +15,7 @@ CORS(app)
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE
 # ==========================================
+# Estas variáveis devem ser configuradas no painel da Vercel
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -39,56 +39,47 @@ if firebase_creds_json and not firebase_admin._apps:
 db = firestore.client() if firebase_admin._apps else None
 
 # ==========================================
-# FUNÇÕES DE MEMÓRIA
+# FUNÇÕES DE MEMÓRIA (FIREBASE)
 # ==========================================
 def get_paciente(phone):
+    """Recupera os dados do paciente do Firestore usando o telefone como ID"""
     if not db: return {}
     doc = db.collection("PatientsKanban").document(phone).get()
     return doc.to_dict() if doc.exists else {}
 
 def update_paciente(phone, data):
+    """Atualiza ou cria o registro do paciente no Firestore"""
     if not db: return
     data["lastInteraction"] = firestore.SERVER_TIMESTAMP
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# 🔔 RECEPTOR DE WEBHOOKS DO FEEGOW 🔔
+# 🔔 RECEPTOR DE WEBHOOKS (ESCUTA PASSIVA)
 # ==========================================
 @app.route("/api/feegow-webhook", methods=["POST"])
 def feegow_webhook():
-    """
-    Esta é a nova porta de entrada. O Feegow vai 'bater' aqui 
-    sempre que houver uma alteração na agenda lá no sistema deles.
-    """
+    """Porta de entrada para avisos automáticos vindos do Feegow"""
     try:
         data = request.get_json()
-        if not data:
-            return jsonify({"status": "error", "message": "Sem dados"}), 400
-
-        # Grava TUDO no Firebase para podermos analisar a estrutura
-        if db:
+        if db and data:
+            # Regista o log para análise posterior da estrutura
             db.collection("FeegowWebhooksLog").add({
-                "timestamp": firestore.SERVER_TIMESTAMP,
+                "timestamp": firestore.SERVER_TIMESTAMP, 
                 "payload": data
             })
-            
-        print("🔔 WEBHOOK FEEGOW RECEBIDO:", data)
-        
-        # O Feegow exige que a gente responda rápido com Sucesso (200)
-        # para ele saber que a mensagem foi entregue.
-        return jsonify({"status": "success", "message": "Recebido com sucesso"}), 200
-
-    except Exception as e:
-        print(f"❌ Erro no Webhook do Feegow: {traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "success"}), 200
+    except:
+        return jsonify({"status": "error"}), 500
 
 # ==========================================
-# FEEGOW: BUSCAS & SONDA (MANTIDOS POR SEGURANÇA)
+# FEEGOW: SUPER RADAR DE BUSCA DE AGENDAMENTOS
 # ==========================================
 def buscar_veterano_feegow_celular(phone):
+    """Tenta localizar o paciente no Feegow usando o número do telemóvel"""
     if not FEEGOW_TOKEN: return None
     celular = re.sub(r'\D', '', phone)
     if celular.startswith("55") and len(celular) > 11: celular = celular[2:]
+    
     headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
     url = f"https://api.feegow.com/v1/api/patient/list?celular={celular}"
     try:
@@ -97,119 +88,102 @@ def buscar_veterano_feegow_celular(phone):
             dados = res.json()
             if dados.get("success") and dados.get("content"):
                 p = dados["content"][0]
-                return {"feegow_id": p.get("id") or p.get("paciente_id"), "title": p.get("nome", "Paciente"), "cpf": re.sub(r'\D', '', str(p.get("cpf", "")))}
+                return {
+                    "feegow_id": p.get("id") or p.get("paciente_id"), 
+                    "title": p.get("nome", "Paciente"), 
+                    "cpf": re.sub(r'\D', '', str(p.get("cpf", "")))
+                }
     except: pass
     return None
 
-def buscar_feegow_id_por_cpf(cpf):
-    if not FEEGOW_TOKEN or not cpf: return None
-    cpf_limpo = re.sub(r'\D', '', cpf)
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
-    try:
-        res = requests.get(f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false", headers=headers, timeout=5)
-        if res.status_code == 200 and res.json().get("success"):
-            return res.json().get("content", {}).get("paciente_id") or res.json().get("content", {}).get("id")
-    except: pass
-    return None
-
-def processar_resultado_feegow(dados, hoje):
+def processar_lista_agendas(dados, hoje):
+    """Filtra e formata os agendamentos das diversas APIs do Feegow"""
     itens = dados.get("content") or dados.get("data") or []
+    if not isinstance(itens, list): itens = [itens] if itens else []
+    
     lista_final = []
     for a in itens:
-        status = str(a.get("status_nome", "")).lower()
+        # Ignora sessões canceladas ou faltas
+        status = str(a.get("status_nome", a.get("status", ""))).lower()
         if "cancelado" not in status and "falta" not in status:
             data_raw = str(a.get("data", ""))
             if "T" in data_raw: data_raw = data_raw.split("T")[0]
             try:
                 dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                # Apenas datas de hoje em diante
                 if dt_obj.date() >= hoje.date():
-                    proc = a.get("procedimento", {}).get("nome", a.get("procedimento_nome", "Sessão")) if isinstance(a.get("procedimento"), dict) else a.get("procedimento_nome", "Sessão")
-                    hora = str(a.get('horario', ''))[:5]
-                    lista_final.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
+                    # Identifica o nome do procedimento (vários formatos de API)
+                    proc = "Sessão"
+                    if isinstance(a.get("procedimento"), dict): 
+                        proc = a.get("procedimento", {}).get("nome", "Sessão")
+                    elif a.get("procedimento_nome"): 
+                        proc = a.get("procedimento_nome")
+                    
+                    hora = str(a.get('horario', a.get('hora', '')))[:5]
+                    item = f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}"
+                    if item not in lista_final: lista_final.append(item)
             except: pass
-    return lista_final[:3]
+    
+    # Ordena por data mais próxima
+    return sorted(lista_final)
 
-def buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome):
-    """Sonda mantida ativada apenas como fallback enquanto os Webhooks registram dados"""
-    if not FEEGOW_TOKEN: return [], "ERRO: Token não configurado."
-    if not feegow_id: return [], "ERRO: O Paciente não tem feegow_id atrelado."
+def buscar_agendamentos_futuros_com_debug(feegow_id):
+    """
+    SUPER RADAR: Tenta 3 rotas diferentes para localizar sessões.
+    Ideal para encontrar tanto sessões de 'Equipamento Alocado' quanto da 'Agenda Diária'.
+    """
+    if not FEEGOW_TOKEN or not feegow_id: 
+        return [], "🔍 DEBUG: feegow_id não encontrado para este paciente."
+    
+    headers = {
+        "x-access-token": FEEGOW_TOKEN,
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"
+    }
     
     hoje = datetime.now()
     futuro = hoje + timedelta(days=60)
     d_start = hoje.strftime('%Y-%m-%d')
     d_end = futuro.strftime('%Y-%m-%d')
     
-    debug_msg = f"🔍 AGUARDANDO WEBHOOKS\nID: {feegow_id}\n\nAguarde o primeiro webhook registar a sua sessão no Firebase."
+    log_debug = f"🔍 SUPER RADAR ATIVO\nID Paciente: {feegow_id}\n"
     
-    # Mantive a sonda de formulário caso o firewall abra alguma brecha
-    url_search = "https://api.feegow.com/v1/api/appoints/search"
+    # ROTA 1: Pesquisa Oficial (Busca Agendas Diárias Clínicas)
     try:
-        headers_form = {
-            "x-access-token": FEEGOW_TOKEN,
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        payload_form = {
-            "_method": "GET",
-            "paciente_id": feegow_id,
-            "data_start": d_start,
-            "data_end": d_end
-        }
-        r1 = requests.post(url_search, data=payload_form, headers=headers_form, timeout=5)
-        if r1.status_code == 200 and r1.json().get("success") != False:
-            res = processar_resultado_feegow(r1.json(), hoje)
-            if res: return res, ""
-    except Exception as e: pass
-
-    return [], debug_msg
-
-# ==========================================
-# MOTOR DE AGENDAMENTO (CRIAR NOVOS)
-# ==========================================
-def get_proximos_dias_uteis(quantidade=3):
-    dias = []
-    data_atual = datetime.now()
-    while len(dias) < quantidade:
-        data_atual += timedelta(days=1)
-        if data_atual.weekday() < 5: dias.append(data_atual)
-    return dias
-
-def gerar_horarios_disponiveis(periodo):
-    dias = get_proximos_dias_uteis(3)
-    slots = ["08:00", "09:30", "11:00"] if periodo.lower() == "manhã" else ["14:00", "15:30", "17:00"]
-    return [f"{dias[i].strftime('%d/%m')} às {slots[i]}" for i in range(3)]
-
-def buscar_horarios_feegow(unidade_nome, servico_nome, periodo, is_veteran):
-    if not FEEGOW_TOKEN: return [f"🗓️ {h}" for h in gerar_horarios_disponiveis(periodo)[:2]]
-    local_id = 1 if "ipiranga" in str(unidade_nome).lower() else 0
-    proc_id = 21 if "acupuntura" in str(servico_nome).lower() else 9
-    dias_adicionais = 0 if is_veteran else 1
-    data_alvo = datetime.now() + timedelta(days=dias_adicionais)
-    if data_alvo.weekday() == 5: data_alvo += timedelta(days=2)
-    elif data_alvo.weekday() == 6: data_alvo += timedelta(days=1)
-    
-    url = f"https://api.feegow.com.br/v1/appoints/available-schedule?local_id={local_id}&procedimento_id={proc_id}&data={data_alvo.strftime('%Y-%m-%d')}"
-    headers = {"x-access-token": FEEGOW_TOKEN, "Content-Type": "application/json"}
-    slots = []
-    try:
-        res = requests.get(url, headers=headers, timeout=5)
-        if res.status_code == 200:
-            for prof in (res.json().get("data") or res.json().get("content") or []):
-                for h in prof.get("horarios", []):
-                    hora_str = h.get("hora", "")
-                    try:
-                        hora_int = int(hora_str.split(":")[0])
-                        if periodo.lower() == "manhã" and hora_int < 12: slots.append(hora_str[:5])
-                        elif periodo.lower() == "tarde" and 12 <= hora_int < 18: slots.append(hora_str[:5])
-                        elif periodo.lower() == "noite" and hora_int >= 18: slots.append(hora_str[:5])
-                    except: pass
+        url1 = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={feegow_id}&data_start={d_start}&data_end={d_end}"
+        r1 = requests.get(url1, headers=headers, timeout=8)
+        log_debug += f"R1 (Search): {r1.status_code}\n"
+        if r1.status_code == 200:
+            res = processar_lista_agendas(r1.json(), hoje)
+            if res: return res[:3], ""
     except: pass
-    
-    slots = sorted(list(set(slots)))
-    if slots: return [f"🗓️ {data_alvo.strftime('%d/%m')} às {s}" for s in slots[:2]]
-    return [f"🗓️ {h}" for h in gerar_horarios_disponiveis(periodo)[:2]]
+
+    # ROTA 2: Lista Geral de Agendamentos (Frequente para Equipamentos/Sessões Seriadas)
+    try:
+        url2 = f"https://api.feegow.com/v1/api/appoints?paciente_id={feegow_id}"
+        r2 = requests.get(url2, headers=headers, timeout=8)
+        log_debug += f"R2 (Geral): {r2.status_code}\n"
+        if r2.status_code == 200:
+            res = processar_lista_agendas(r2.json(), hoje)
+            if res: return res[:3], ""
+    except: pass
+
+    # ROTA 3: Endpoint de Agendamentos por ID de Paciente (Nova API)
+    try:
+        url3 = f"https://api.feegow.com.br/v1/patient/{feegow_id}/appoints"
+        h3 = headers.copy()
+        h3["Authorization"] = FEEGOW_TOKEN
+        r3 = requests.get(url3, headers=h3, timeout=8)
+        log_debug += f"R3 (Relacional): {r3.status_code}\n"
+        if r3.status_code == 200:
+            res = processar_lista_agendas(r3.json(), hoje)
+            if res: return res[:3], ""
+    except: pass
+
+    return [], log_debug
 
 # ==========================================
-# MENSAGERIA
+# MENSAGERIA WHATSAPP
 # ==========================================
 def enviar_whatsapp(to, payload_msg):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
@@ -218,17 +192,28 @@ def enviar_whatsapp(to, payload_msg):
     try: requests.post(url, json=payload, headers=headers, timeout=10)
     except: pass
 
-def responder_texto(to, texto): enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
-def enviar_botoes(to, texto, botoes): enviar_whatsapp(to, {"type": "interactive", "interactive": {"type": "button", "body": {"text": texto}, "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}}})
+def enviar_botoes(to, texto, botoes):
+    """Envia botões interativos para facilitar a vida do paciente"""
+    payload = {
+        "type": "interactive", 
+        "interactive": {
+            "type": "button", 
+            "body": {"text": texto}, 
+            "action": {
+                "buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]
+            }
+        }
+    }
+    enviar_whatsapp(to, payload)
 
 # ==========================================
-# WEBHOOK POST PRINCIPAL DO WHATSAPP
+# WEBHOOK POST PRINCIPAL (ROTA DO WHATSAPP)
 # ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
     data = request.get_json()
     if not data or "entry" not in data: return jsonify({"status": "ok"}), 200
-
+    
     try:
         value = data["entry"][0]["changes"][0]["value"]
         if "messages" not in value: return jsonify({"status": "not_a_message"}), 200
@@ -241,83 +226,66 @@ def webhook():
         if msg_type == "text": 
             msg_recebida = message["text"]["body"].strip()
         elif msg_type == "interactive":
-            msg_recebida = message["interactive"].get("button_reply", {}).get("title", message["interactive"].get("list_reply", {}).get("title", ""))
+            msg_recebida = message["interactive"].get("button_reply", {}).get("title", "")
 
-        msg_limpa = msg_recebida.lower().strip()
-
-        if msg_limpa in ["recomeçar", "reset", "menu inicial"]:
+        # Comando de Reset
+        if msg_recebida.lower() in ["reset", "recomeçar", "menu"]:
             update_paciente(phone, {"status": "menu_veterano"})
-            botoes = [{"id": "v1", "title": "🗓️ Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia"}]
-            enviar_botoes(phone, "Atendimento reiniciado para o teste de Agendamentos! 👇", botoes)
+            enviar_botoes(phone, "Atendimento reiniciado para teste de agenda! 👇", [
+                {"id": "v1", "title": "🗓️ Agendamentos"}, 
+                {"id": "v2", "title": "🔄 Nova Guia"}
+            ])
             return jsonify({"status": "reset"}), 200
 
         info = get_paciente(phone)
         if not info:
             info = {"cellphone": phone, "status": "menu_veterano"}
             update_paciente(phone, info)
-            
-        status = info.get("status", "menu_veterano")
 
-        if status == "menu_veterano" or status == "vendo_agendamentos" or status == "agendando":
+        # FLUXO DE BUSCA DE AGENDA (O FOCO DO TESTE)
+        if "Agendamentos" in msg_recebida:
+            feegow_id = info.get("feegow_id")
             
-            if "Agendamentos" in msg_recebida or "Reagendar" in msg_recebida:
-                feegow_id = info.get("feegow_id")
-                
-                if not feegow_id:
-                    vet = buscar_veterano_feegow_celular(phone)
-                    if vet and vet.get("feegow_id"):
-                        feegow_id = vet["feegow_id"]
-                    elif info.get("cpf"):
-                        feegow_id = buscar_feegow_id_por_cpf(info.get("cpf"))
-                    
-                    if feegow_id:
-                        update_paciente(phone, {"feegow_id": feegow_id})
-                
-                unidade_nome = info.get("unit", "SCS")
-                
-                lista_sessoes, log_debug = buscar_agendamentos_futuros_com_debug(feegow_id, unidade_nome)
-                
-                if lista_sessoes:
-                    msg_agenda = "Localizei suas próximas sessões: 👇\n\n" + "\n".join(lista_sessoes) + "\n\nO que deseja fazer?"
-                    botoes = [{"id": "ag_ok", "title": "👍 Apenas Consultar"}, {"id": "ag_mudar", "title": "🔄 Reagendar/Cancelar"}]
-                    update_paciente(phone, {"status": "vendo_agendamentos"})
-                    enviar_botoes(phone, msg_agenda, botoes)
-                else:
-                    update_paciente(phone, {"status": "agendando"})
-                    
-                    msg_erro = "Não encontrei agendamentos futuros para você no sistema. 🤔\n\n"
-                    if log_debug:
-                        msg_erro += f"*{log_debug}*\n\n"
-                        
-                    msg_erro += "Posso agendar um agora! Qual o melhor período? ☀️ ⛅"
-                    
-                    botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}]
-                    enviar_botoes(phone, msg_erro, botoes)
+            # Se não tem ID, tenta resgatar pelo telefone
+            if not feegow_id:
+                vet = buscar_veterano_feegow_celular(phone)
+                if vet: 
+                    feegow_id = vet["feegow_id"]
+                    update_paciente(phone, {"feegow_id": feegow_id, "title": vet["title"]})
+
+            # DISPARA O SUPER RADAR
+            lista, log = buscar_agendamentos_futuros_com_debug(feegow_id)
             
-            elif "Nova Guia" in msg_recebida or "Novo Serviço" in msg_recebida:
-                responder_texto(phone, "Para focarmos no teste da agenda, por favor clique em '🗓️ Agendamentos'. Se quiser recomeçar, digite 'Reset'.")
-                
-            elif status == "vendo_agendamentos":
-                if "Reagendar" in msg_recebida:
-                    responder_texto(phone, "Entendido! A nossa equipe da recepção foi notificada para realizar a alteração do horário com prioridade. Aguarde um instante! 👩‍⚕️")
-                else:
-                    responder_texto(phone, "Perfeito! Qualquer outra dúvida, estou por aqui. Tenha uma ótima sessão! ✨")
-                    
-            elif status == "agendando" and msg_recebida in ["Manhã", "Tarde", "Noite"]:
-                responder_texto(phone, f"Horário de {msg_recebida} recebido (Fim do fluxo de teste). Digite 'Reset' para testar novamente.")
+            if lista:
+                msg = f"Olá, {info.get('title', 'Paciente')}! Localizei as suas próximas sessões: 👇\n\n" + "\n".join(lista)
+                enviar_botoes(phone, msg, [
+                    {"id": "ok", "title": "👍 Consultar outro"}, 
+                    {"id": "ajuda", "title": "👤 Falar com Recepção"}
+                ])
             else:
-                botoes = [{"id": "v1", "title": "🗓️ Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia"}]
-                enviar_botoes(phone, "Estamos no modo de Teste de Agenda. Por favor, clique abaixo:", botoes)
+                msg_erro = "Não encontrei agendamentos futuros para você no sistema. 🤔\n"
+                if log: msg_erro += f"\n*{log}*"
+                msg_erro += "\n\nPosso agendar um novo agora! Qual o melhor período para você?"
+                enviar_botoes(phone, msg_erro, [
+                    {"id": "m", "title": "Manhã"}, 
+                    {"id": "t", "title": "Tarde"}
+                ])
+        else:
+            # Menu Inicial Padrão do Teste
+            enviar_botoes(phone, "Olá! Como posso ajudar hoje?", [
+                {"id": "v1", "title": "🗓️ Agendamentos"}, 
+                {"id": "v2", "title": "🔄 Nova Guia"}
+            ])
 
         return jsonify({"status": "success"}), 200
-
-    except Exception as e:
-        print(f"❌ Erro Crítico POST: {traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 200
+    except:
+        print(f"❌ Erro Crítico: {traceback.format_exc()}")
+        return jsonify({"status": "ok"}), 200
 
 @app.route("/api/whatsapp", methods=["GET"])
-def verify_or_data():
-    if request.args.get("hub.verify_token") == "conectifisio_2024_seguro": return request.args.get("hub.challenge"), 200
+def verify():
+    if request.args.get("hub.verify_token") == "conectifisio_2024_seguro": 
+        return request.args.get("hub.challenge"), 200
     return "Acesso Negado", 403
 
 if __name__ == "__main__":
