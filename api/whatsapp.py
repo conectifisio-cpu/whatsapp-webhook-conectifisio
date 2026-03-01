@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
 from firebase_admin import credentials, firestore
-import requests # Mantido apenas para enviar mensagens do WhatsApp
+import requests
 
 app = Flask(__name__)
 CORS(app)
@@ -55,7 +55,7 @@ def feegow_webhook():
         data = request.get_json()
         if not db or not data: return jsonify({"status": "ok"}), 200
         
-        # 1. Guarda log bruto de segurança (como você viu no painel)
+        # 1. Guarda log bruto de segurança
         db.collection("FeegowWebhooksLog").add({
             "timestamp": firestore.SERVER_TIMESTAMP, 
             "payload": data
@@ -66,7 +66,6 @@ def feegow_webhook():
         appt_id = payload.get("id")
         
         if appt_id:
-            # Limpa o telefone que vem do Feegow (ex: 11971904516)
             telefone_sujo = str(payload.get("telefone", ""))
             telefone_puro = re.sub(r'\D', '', telefone_sujo)
             
@@ -90,25 +89,33 @@ def feegow_webhook():
 # 🚀 MOTOR DE CONSULTA (LEITURA DO ESPELHO)
 # ==========================================
 def consultar_agenda_espelho(phone):
-    """Lê a agenda direto do nosso Firebase (Imune a Cloudflare)"""
+    """Lê a agenda direto do nosso Firebase corrigindo o Bug do 9º Dígito"""
     if not db: return [], "Banco de dados inacessível."
     
-    # O telefone do WhatsApp chega como 55119... Removemos o 55 para bater com o Feegow
-    telefone_busca = re.sub(r'\D', '', str(phone))
-    if telefone_busca.startswith("55") and len(telefone_busca) > 11:
-        telefone_busca = telefone_busca[2:] 
+    # 1. Limpa o telefone que vem do WhatsApp (Seu celular pessoal via Meta)
+    telefone_whatsapp = re.sub(r'\D', '', str(phone))
+    if telefone_whatsapp.startswith("55") and len(telefone_whatsapp) > 11:
+        telefone_whatsapp = telefone_whatsapp[2:] 
         
-    # As vezes a secretária cadastra sem o dígito 9. Criamos as duas versões.
-    tel_sem_9 = telefone_busca[:2] + telefone_busca[3:] if len(telefone_busca) == 11 else telefone_busca
+    # 2. A MÁGICA: Criamos sempre as duas versões para garantir o match perfeito
+    if len(telefone_whatsapp) == 11:
+        tel_com_9 = telefone_whatsapp
+        tel_sem_9 = telefone_whatsapp[:2] + telefone_whatsapp[3:]
+    else: # Se a Meta enviar com 10 dígitos (sem o 9)
+        tel_sem_9 = telefone_whatsapp
+        tel_com_9 = telefone_whatsapp[:2] + '9' + telefone_whatsapp[2:]
 
     sessoes = []
     
     try:
-        # Busca na nossa base local as consultas atreladas a este número
-        docs1 = db.collection("FeegowAppointments").where("telefone", "==", telefone_busca).stream()
-        docs2 = db.collection("FeegowAppointments").where("telefone", "==", tel_sem_9).stream() if tel_sem_9 != telefone_busca else []
+        # Busca nas duas variações matemáticas para não deixar margem de erro
+        docs1 = list(db.collection("FeegowAppointments").where("telefone", "==", tel_com_9).stream())
+        docs2 = list(db.collection("FeegowAppointments").where("telefone", "==", tel_sem_9).stream())
         
-        all_docs = list(docs1) + list(docs2)
+        # Junta os resultados sem duplicados
+        all_docs_dict = {doc.id: doc for doc in docs1 + docs2}
+        all_docs = list(all_docs_dict.values())
+        
         hoje_str = datetime.now().strftime('%Y-%m-%d')
         
         for doc in all_docs:
@@ -116,20 +123,20 @@ def consultar_agenda_espelho(phone):
             status = str(d.get("status", "")).lower()
             data_raw = str(d.get("data", ""))
             
-            # Filtra apenas consultas futuras não canceladas
+            # Filtra consultas futuras
             if data_raw >= hoje_str and "cancelado" not in status and "falta" not in status:
                 hora = str(d.get("hora", ""))[:5]
                 dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
                 sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {d.get('clinica', 'Conectifisio')}")
 
-        # Remove duplicadas e ordena por data
         sessoes = list(set(sessoes))
         sessoes.sort()
         
         if sessoes:
             return sessoes[:5], ""
         else:
-            return [], "Não encontrei sessões futuras espelhadas no sistema."
+            log_debug = f"Procurei por '{tel_com_9}' e '{tel_sem_9}', mas só encontrei 0 consultas válidas."
+            return [], f"Não encontrei sessões futuras espelhadas no sistema.\n\n🔍 RAIO-X TÉCNICO:\n{log_debug}"
             
     except Exception as e:
         return [], f"Erro ao ler espelho: {str(e)}"
@@ -202,7 +209,7 @@ def webhook():
                 msg = f"✅ SUCESSO!\n\nLocalizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes_futuras) + "\n\nQual delas gostaria de reagendar?"
                 enviar_botoes(phone, msg, ["A Primeira", "Outra Data", "Falar com Recepção"])
             else:
-                msg_falha = f"⚠️ {log_erro}\n\nPara garantir que não haja erros, deseja agendar um novo horário com nossa equipe agora?"
+                msg_falha = f"⚠️ {log_erro}\n\nDeseja agendar um novo horário com nossa equipe agora?"
                 enviar_botoes(phone, msg_falha, ["☀️ Manhã", "⛅ Tarde", "⬅️ Voltar"])
             return jsonify({"status": "ok"}), 200
 
