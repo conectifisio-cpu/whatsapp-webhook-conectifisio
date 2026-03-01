@@ -2,9 +2,7 @@ import os
 import json
 import traceback
 import re
-import urllib.request
-import urllib.error
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -19,7 +17,6 @@ CORS(app)
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 
 # ==========================================
 # INICIALIZAÇÃO FIREBASE
@@ -38,7 +35,7 @@ if firebase_creds_json and not firebase_admin._apps:
 db = firestore.client() if firebase_admin._apps else None
 
 # ==========================================
-# FUNÇÕES FIREBASE
+# FUNÇÕES DE ESTADO DO PACIENTE
 # ==========================================
 def update_paciente(phone, data):
     if not db: return
@@ -49,100 +46,93 @@ def update_paciente(phone, data):
         pass
 
 # ==========================================
-# 🔔 RECEPTOR DE WEBHOOKS FEEGOW
+# 🔔 RECEPTOR DE WEBHOOKS (ALIMENTADOR DO ESPELHO)
 # ==========================================
 @app.route("/api/feegow-webhook", methods=["POST"])
 def feegow_webhook():
+    """Recebe o aviso do Feegow e guarda na nossa agenda espelho"""
     try:
         data = request.get_json()
-        if db and data:
-            db.collection("FeegowWebhooksLog").add({
-                "timestamp": firestore.SERVER_TIMESTAMP, 
-                "payload": data
-            })
+        if not db or not data: return jsonify({"status": "ok"}), 200
+        
+        # 1. Guarda log bruto de segurança (como você viu no painel)
+        db.collection("FeegowWebhooksLog").add({
+            "timestamp": firestore.SERVER_TIMESTAMP, 
+            "payload": data
+        })
+        
+        # 2. Cria o Espelho de Agendamentos Inteligente
+        payload = data.get("payload", {})
+        appt_id = payload.get("id")
+        
+        if appt_id:
+            # Limpa o telefone que vem do Feegow (ex: 11971904516)
+            telefone_sujo = str(payload.get("telefone", ""))
+            telefone_puro = re.sub(r'\D', '', telefone_sujo)
+            
+            db.collection("FeegowAppointments").document(str(appt_id)).set({
+                "paciente_id": payload.get("PacienteID"),
+                "data": payload.get("Data"),
+                "hora": payload.get("Hora"),
+                "status": payload.get("Status"),
+                "telefone": telefone_puro,
+                "paciente_nome": payload.get("NomePaciente"),
+                "clinica": payload.get("NomeClinica"),
+                "updatedAt": firestore.SERVER_TIMESTAMP
+            }, merge=True)
+
         return jsonify({"status": "success"}), 200
-    except:
+    except Exception as e:
+        print(f"Erro Webhook: {traceback.format_exc()}")
         return jsonify({"status": "error"}), 500
 
 # ==========================================
-# 🚀 MOTOR DE CONSULTA FEEGOW (MODO FANTASMA)
+# 🚀 MOTOR DE CONSULTA (LEITURA DO ESPELHO)
 # ==========================================
-def consultar_agenda_feegow(cpf):
-    if not FEEGOW_TOKEN or not cpf: return [], 0, "CPF ou Token ausente.", "Sem dados"
-    cpf_limpo = re.sub(r'\D', '', str(cpf))
+def consultar_agenda_espelho(phone):
+    """Lê a agenda direto do nosso Firebase (Imune a Cloudflare)"""
+    if not db: return [], "Banco de dados inacessível."
     
-    # Cabeçalhos perfeitos de um navegador Chrome no Windows
-    headers_browser = {
-        "x-access-token": FEEGOW_TOKEN,
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://app.feegow.com.br/"
-    }
-    
-    paciente_id = None
-    log_debug = []
-    
-    # PASSO 1: DESCOBRIR ID DO PACIENTE (Usando urllib para evitar fingerprinting)
-    url_busca = f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false"
-    try: 
-        req = urllib.request.Request(url_busca, headers=headers_browser)
-        with urllib.request.urlopen(req, timeout=8) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            if res_data.get("content"):
-                c = res_data.get("content", {})
-                if isinstance(c, list) and len(c) > 0: paciente_id = c[0].get("id") or c[0].get("paciente_id")
-                elif isinstance(c, dict): paciente_id = c.get("id") or c.get("paciente_id")
-                log_debug.append(f"ID: {paciente_id}")
-    except Exception as e: 
-        log_debug.append(f"Erro Busca ID: {str(e)}")
-
-    if not paciente_id:
-        return [], 0, "Paciente não localizado.", "\n".join(log_debug)
-
-    # PASSO 2: A MÁQUINA DO TEMPO EM MODO FANTASMA
-    hoje = datetime.now()
-    d_start = (hoje - timedelta(days=365)).strftime('%Y-%m-%d')
-    d_end = (hoje + timedelta(days=365)).strftime('%Y-%m-%d')
-    hoje_str = hoje.strftime('%Y-%m-%d')
-    
-    url_agenda = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={d_start}&data_end={d_end}"
-    sessoes_futuras = []
-    qtd_passadas = 0
-
-    try:
-        # MODO FANTASMA: Usando urllib em vez de requests para burlar o WAF Cloudflare
-        req = urllib.request.Request(url_agenda, headers=headers_browser)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            log_debug.append("Rota Search: HTTP 200 OK (Bypass Concluído!)")
-            
-            itens = res_data.get("data") or res_data.get("content") or []
-            if isinstance(itens, dict): itens = [itens] 
-            
-            for a in itens:
-                status = str(a.get("status_nome", a.get("status", ""))).lower()
-                if "cancelado" not in status and "falta" not in status:
-                    data_raw = str(a.get("data", "")).split("T")[0]
-                    proc = a.get("procedimento_nome") or a.get("procedimento", {}).get("nome", "Sessão")
-                    hora = str(a.get("horario", a.get("hora", "")))[:5]
-                    
-                    if data_raw >= hoje_str:
-                        dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
-                        sessoes_futuras.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {proc}")
-                    else:
-                        qtd_passadas += 1
-                        
-            return sessoes_futuras[:5], qtd_passadas, str(paciente_id), "\n".join(log_debug)
-            
-    except urllib.error.HTTPError as e:
-        erro_txt = e.read().decode('utf-8')[:80].replace('\n', '')
-        log_debug.append(f"Erro Search: HTTP {e.code} - {erro_txt}")
-    except Exception as e: 
-        log_debug.append(f"Falha de conexão Ghost: {str(e)}")
+    # O telefone do WhatsApp chega como 55119... Removemos o 55 para bater com o Feegow
+    telefone_busca = re.sub(r'\D', '', str(phone))
+    if telefone_busca.startswith("55") and len(telefone_busca) > 11:
+        telefone_busca = telefone_busca[2:] 
         
-    return sessoes_futuras, qtd_passadas, str(paciente_id), "\n".join(log_debug)
+    # As vezes a secretária cadastra sem o dígito 9. Criamos as duas versões.
+    tel_sem_9 = telefone_busca[:2] + telefone_busca[3:] if len(telefone_busca) == 11 else telefone_busca
+
+    sessoes = []
+    
+    try:
+        # Busca na nossa base local as consultas atreladas a este número
+        docs1 = db.collection("FeegowAppointments").where("telefone", "==", telefone_busca).stream()
+        docs2 = db.collection("FeegowAppointments").where("telefone", "==", tel_sem_9).stream() if tel_sem_9 != telefone_busca else []
+        
+        all_docs = list(docs1) + list(docs2)
+        hoje_str = datetime.now().strftime('%Y-%m-%d')
+        
+        for doc in all_docs:
+            d = doc.to_dict()
+            status = str(d.get("status", "")).lower()
+            data_raw = str(d.get("data", ""))
+            
+            # Filtra apenas consultas futuras não canceladas
+            if data_raw >= hoje_str and "cancelado" not in status and "falta" not in status:
+                hora = str(d.get("hora", ""))[:5]
+                dt_obj = datetime.strptime(data_raw, "%Y-%m-%d")
+                sessoes.append(f"🗓️ *{dt_obj.strftime('%d/%m/%Y')} às {hora}* - {d.get('clinica', 'Conectifisio')}")
+
+        # Remove duplicadas e ordena por data
+        sessoes = list(set(sessoes))
+        sessoes.sort()
+        
+        if sessoes:
+            return sessoes[:5], ""
+        else:
+            return [], "Não encontrei sessões futuras espelhadas no sistema."
+            
+    except Exception as e:
+        return [], f"Erro ao ler espelho: {str(e)}"
 
 # ==========================================
 # MENSAGERIA WHATSAPP
@@ -185,7 +175,7 @@ def webhook():
                        message.get("interactive", {}).get("button_reply", {}).get("title", "").strip()
         msg_lower = msg_recebida.lower()
 
-        # 1. RESET ABSOLUTO
+        # 1. RESET
         if msg_lower in ["reset", "recomeçar", "menu inicial"]:
             if db: db.collection("PatientsKanban").document(phone).delete()
             enviar_botoes(phone, "Atendimento reiniciado! Como posso ajudar hoje?", ["🗓️ Reagendar Sessão", "➕ Novo Serviço"])
@@ -203,43 +193,20 @@ def webhook():
                 info = {"cellphone": phone, "status": "menu_veterano", "title": "Paciente Teste"}
                 update_paciente(phone, info)
 
-        # 3. CAPTURA DE CPF
-        if info.get("status") == "aguardando_cpf_agenda":
-            cpf_limpo = re.sub(r'\D', '', msg_recebida)
-            if len(cpf_limpo) == 11:
-                update_paciente(phone, {"cpf": cpf_limpo, "status": "menu_veterano"})
-                info["cpf"] = cpf_limpo
-                enviar_texto(phone, f"CPF registado! ✅")
-                msg_lower = "reagendar sessão"
-            else:
-                enviar_texto(phone, "Por favor, digite um CPF válido com 11 números:")
-                return jsonify({"status": "ok"}), 200
-
-        # 4. COMANDO MÁGICO: REAGENDAR SESSÃO
+        # 3. COMANDO MÁGICO: REAGENDAR SESSÃO (AGORA USA O ESPELHO)
         if "reagendar sessão" in msg_lower or "agendamentos" in msg_lower:
-            cpf_paciente = info.get("cpf")
-            if not cpf_paciente:
-                enviar_texto(phone, "Para consultar o sistema, por favor, digite o seu CPF (11 números):")
-                update_paciente(phone, {"status": "aguardando_cpf_agenda"})
-                return jsonify({"status": "ok"}), 200
-            
-            enviar_texto(phone, "Acedendo à sua agenda no Feegow (Modo Fantasma)... um instante. ⏳")
-            sessoes_futuras, qtd_passadas, info_id, log_debug = consultar_agenda_feegow(cpf_paciente)
+            enviar_texto(phone, "Consultando nossos registros sincronizados... ⏳")
+            sessoes_futuras, log_erro = consultar_agenda_espelho(phone)
             
             if sessoes_futuras:
-                msg = f"✅ SUCESSO! \n\nLocalizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes_futuras) + "\n\nQual delas gostaria de reagendar?"
+                msg = f"✅ SUCESSO!\n\nLocalizei suas próximas sessões: 👇\n\n" + "\n".join(sessoes_futuras) + "\n\nQual delas gostaria de reagendar?"
                 enviar_botoes(phone, msg, ["A Primeira", "Outra Data", "Falar com Recepção"])
             else:
-                msg_falha = f"🔍 *RAIO-X V131*\nID Paciente: {info_id}\n*Logs:* {log_debug}\n\n"
-                if qtd_passadas > 0:
-                    msg_falha += f"⚠️ Encontrei **{qtd_passadas} sessões no seu histórico passado**, mas NENHUMA marcada para o futuro!\n\nDeseja agendar uma nova sessão agora?"
-                else:
-                    msg_falha += "⚠️ Não encontrei nenhuma sessão no seu histórico. Deseja agendar agora?"
-                    
+                msg_falha = f"⚠️ {log_erro}\n\nPara garantir que não haja erros, deseja agendar um novo horário com nossa equipe agora?"
                 enviar_botoes(phone, msg_falha, ["☀️ Manhã", "⛅ Tarde", "⬅️ Voltar"])
             return jsonify({"status": "ok"}), 200
 
-        # 5. MENU INICIAL
+        # 4. MENU INICIAL
         enviar_botoes(phone, f"Olá! ✨ Que bom ter você de volta na Conectifisio. Como posso ajudar?", ["🗓️ Reagendar Sessão", "🔄 Nova Guia", "➕ Novo Serviço"])
         return jsonify({"status": "success"}), 200
 
