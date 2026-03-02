@@ -58,7 +58,6 @@ def enviar_whatsapp(to, payload):
     except: pass
 
 def enviar_botoes(to, texto, botoes):
-    """Até 3 opções: Cria botões azuis interativos na tela"""
     simular_digitacao()
     payload = {
         "type": "interactive",
@@ -71,7 +70,6 @@ def enviar_botoes(to, texto, botoes):
     enviar_whatsapp(to, payload)
 
 def enviar_lista(to, texto, titulo_botao, secoes):
-    """Mais de 3 opções: Cria uma gaveta de menu suspensa no celular"""
     simular_digitacao()
     payload = {
         "type": "interactive",
@@ -91,7 +89,7 @@ def enviar_texto(to, texto):
     enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
 # ==========================================
-# LISTAS OFICIAIS DO MENU SUSPENSO
+# LISTAS OFICIAIS (MENUS SUSPENSOS)
 # ==========================================
 def get_secoes_especialidades():
     return [
@@ -127,6 +125,25 @@ def get_secoes_veterano():
         }
     ]
 
+def get_secoes_convenios():
+    return [
+        {
+            "title": "Planos Atendidos",
+            "rows": [
+                {"id": "c1", "title": "Amil"},
+                {"id": "c2", "title": "Bradesco Saúde"},
+                {"id": "c3", "title": "Porto Seguro Saúde"},
+                {"id": "c4", "title": "Prevent Senior"},
+                {"id": "c5", "title": "Cassi"},
+                {"id": "c6", "title": "Saúde Caixa"},
+                {"id": "c7", "title": "Saúde Petrobras"},
+                {"id": "c8", "title": "GEAP"},
+                {"id": "c9", "title": "Mediservice"},
+                {"id": "c10", "title": "Outro / Não listado"}
+            ]
+        }
+    ]
+
 # ==========================================
 # CÉREBRO MASTER (A MÁQUINA DE ESTADOS)
 # ==========================================
@@ -143,7 +160,6 @@ def webhook():
         phone = message["from"]
         msg_type = message.get("type", "text")
         
-        # Lógica Universal para Ler Textos, Botões e Menus Suspensos
         msg_recebida = ""
         if msg_type == "text":
             msg_recebida = message.get("text", {}).get("body", "")
@@ -158,12 +174,12 @@ def webhook():
 
         # 🛡️ BARREIRA DE ÁUDIO E LIGAÇÕES
         if msg_type == "audio":
-            enviar_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Para que eu possa te ajudar agora, por favor use os botões ou digite sua resposta.")
+            enviar_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Para que eu possa te ajudar agora, por favor use os botões ou digite sua resposta em texto.")
             return jsonify({"status": "ok"}), 200
         if msg_type in ["system", "unsupported", "unknown"]:
             return jsonify({"status": "ok"}), 200
 
-        # IDENTIFICAÇÃO AUTOMÁTICA DE UNIDADE (Pela Meta)
+        # IDENTIFICAÇÃO AUTOMÁTICA DE UNIDADE
         display_phone = value.get("metadata", {}).get("display_phone_number", "")
         unidade_auto = "Ipiranga" if "23629360" in str(display_phone) else "SCS"
 
@@ -209,46 +225,41 @@ def webhook():
         elif status == "confirmar_unidade":
             if "trocar" in msg_lower:
                 nova_unidade = "Ipiranga" if info.get("unit") == "SCS" else "SCS"
-                enviar_texto(phone, f"Sem problemas! Transferimos para a unidade {nova_unidade}. ✅\n\nPara começarmos, como gostaria de ser chamado(a)?")
+                enviar_texto(phone, f"Sem problemas! Transferimos para a unidade {nova_unidade}. ✅\n\nPara começarmos o seu atendimento e garantirmos o seu cadastro, por favor, digite o seu **NOME COMPLETO**:")
                 update_paciente(phone, {"status": "aguardando_nome", "unit": nova_unidade})
             elif "continuar" in msg_lower or "aqui" in msg_lower or "sim" in msg_lower:
-                enviar_texto(phone, "Perfeito! ✅ Para começarmos o seu atendimento, como gostaria de ser chamado(a)?")
+                enviar_texto(phone, "Perfeito! ✅ Para começarmos o seu atendimento e garantirmos o seu cadastro, por favor, digite o seu **NOME COMPLETO**:")
                 update_paciente(phone, {"status": "aguardando_nome"})
             else:
-                # TRAVA DE SEGURANÇA: Obriga a usar o botão
                 enviar_botoes(phone, "Por favor, utilize os botões abaixo para confirmar a unidade:", ["✅ Continuar aqui", "📍 Trocar Unidade"])
             return jsonify({"status": "ok"}), 200
 
         elif status == "aguardando_nome":
-            nome = msg_recebida.title()
-            update_paciente(phone, {"title": nome})
+            nome_completo = msg_recebida.title()
+            primeiro_nome = nome_completo.split()[0]
+            update_paciente(phone, {"title": nome_completo})
             
-            # MAGIA DA BÍBLIA: Se é veterano, manda menu de veterano. Se é novo, lista de serviços.
             if is_veterano:
-                enviar_lista(phone, f"Olá, {nome}! ✨ Que bom ter você de volta na Conectifisio. Em que posso te ajudar hoje?", "Abrir Menu", get_secoes_veterano())
+                enviar_lista(phone, f"Olá, {primeiro_nome}! ✨ Que bom ter você de volta na Conectifisio. Em que posso te ajudar hoje?", "Abrir Menu", get_secoes_veterano())
                 update_paciente(phone, {"status": "menu_veterano"})
             else:
-                enviar_lista(phone, f"Prazer em conhecer, {nome}! 😊 Para direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", get_secoes_especialidades())
+                enviar_lista(phone, f"Prazer em conhecer, {primeiro_nome}! 😊 Para direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", get_secoes_especialidades())
                 update_paciente(phone, {"status": "aguardando_servico"})
             return jsonify({"status": "ok"}), 200
 
         # ========================================================
-        # 🔄 FASE 2: O FLUXO DO VETERANO (AUTOATENDIMENTO)
+        # 🔄 FASE 2: O FLUXO DO VETERANO
         # ========================================================
         elif status == "menu_veterano":
             if "reagendar" in msg_lower:
-                # Bypass temporário do Espelho para não dar erro enquanto a Feegow não abre as portas
                 enviar_botoes(phone, "Como estamos a atualizar o sistema da clínica, vou recolher a sua preferência e a recepção confirma em seguida!\n\nQual o melhor período para você?", ["☀️ Manhã", "⛅ Tarde"])
                 update_paciente(phone, {"status": "aguardando_data_remarcacao"})
-            
             elif "nova guia" in msg_lower or "continuar" in msg_lower:
                 enviar_botoes(phone, "Excelente! As novas sessões serão pelo seu CONVÊNIO ou PARTICULAR?", ["💳 Convênio", "💎 Particular"])
                 update_paciente(phone, {"status": "veterano_modalidade"})
-            
             elif "novo" in msg_lower:
                 enviar_lista(phone, "Perfeito! Qual novo serviço você deseja conhecer?", "Ver Serviços", get_secoes_especialidades())
                 update_paciente(phone, {"status": "aguardando_servico"})
-                
             elif "outras" in msg_lower:
                 enviar_lista(phone, "Certo! Qual solicitação administrativa você precisa?", "Opções", [{"title": "Solicitações", "rows": [{"id": "o1", "title": "📄 Atestado"}, {"id": "o2", "title": "📝 Relatório"}, {"id": "o3", "title": "👤 Recepção"}]}])
                 update_paciente(phone, {"status": "outras_solicitacoes"})
@@ -262,6 +273,9 @@ def webhook():
             return jsonify({"status": "ok"}), 200
 
         elif status == "aguardando_data_remarcacao":
+            if msg_lower in ["a primeira", "outra data"]:
+                enviar_texto(phone, "Entendido! 🗓️ Para qual data e período (Manhã/Tarde) você gostaria de mudar a sua sessão?")
+                return jsonify({"status": "ok"}), 200 
             enviar_texto(phone, "Recebido com sucesso! ✅ Nossa equipe vai confirmar a agenda e te envia a confirmação final por aqui. Até já! 👩‍⚕️")
             update_paciente(phone, {"status": "atendimento_humano", "queixa": f"[REMARCAÇÃO PEDIDA]: {msg_recebida}"})
             return jsonify({"status": "ok"}), 200
@@ -279,10 +293,10 @@ def webhook():
 
         elif status == "veterano_check_plano":
             if "troquei" in msg_lower:
-                enviar_texto(phone, "Entendido! Vamos atualizar o sistema. Qual o NOME do seu NOVO convênio?")
+                enviar_lista(phone, "Entendido! Vamos atualizar o sistema. Por favor, selecione o nome do seu NOVO convênio na lista abaixo:", "Ver Convênios", get_secoes_convenios())
                 update_paciente(phone, {"status": "aguardando_nome_plano"})
             elif "mesmo" in msg_lower:
-                enviar_texto(phone, "Perfeito! Você já está com o NOVO PEDIDO MÉDICO em mãos? Se sim, por favor envie uma FOTO NÍTIDA dele agora. 📸")
+                enviar_texto(phone, "Perfeito! Você já está com o NOVO PEDIDO MÉDICO em mãos? Se sim, por favor envie uma FOTO ou PDF dele agora. 📸")
                 update_paciente(phone, {"status": "aguardando_foto_pedido"})
             else:
                 enviar_botoes(phone, "Por favor, utilize os botões:", ["✅ Mesmo Convênio", "🔄 Troquei de Plano"])
@@ -302,12 +316,12 @@ def webhook():
             elif "libera" in msg_lower: servico = "Liberação Miofascial"
             
             if not servico:
-                enviar_lista(phone, "Por favor, utilize o botão 'Ver Serviços' para escolher. 😊", "Ver Serviços", get_secoes_especialidades())
+                enviar_lista(phone, "Por favor, utilize o botão 'Ver Serviços' para escolher a especialidade. 😊", "Ver Serviços", get_secoes_especialidades())
                 return jsonify({"status": "ok"}), 200
 
             update_paciente(phone, {"servico": servico})
 
-            # ATALHO PREMIUM (Recovery / Liberação)
+            # ATALHO PREMIUM (Recovery / Liberação) - Pula Convênio
             if servico in ["Recovery", "Liberação Miofascial"]:
                 update_paciente(phone, {"modalidade": "Particular"})
                 enviar_texto(phone, f"Ótima escolha! O serviço de {servico} é focado em alta performance e realizado de forma particular. 💎")
@@ -315,7 +329,7 @@ def webhook():
                     enviar_botoes(phone, "Como você já é nosso paciente, vamos direto para a agenda! Qual o melhor período?", ["☀️ Manhã", "⛅ Tarde", "🌙 Noite"])
                     update_paciente(phone, {"status": "aguardando_periodo_particular_antes"})
                 else:
-                    enviar_texto(phone, "Para iniciarmos o seu cadastro de forma ágil, digite seu CPF (apenas os 11 números):")
+                    enviar_texto(phone, "Para iniciarmos o seu cadastro de forma ágil, digite seu CPF (apenas os 11 números, sem pontos ou traços):")
                     update_paciente(phone, {"status": "aguardando_cpf"})
                 return jsonify({"status": "ok"}), 200
 
@@ -329,19 +343,25 @@ def webhook():
                     update_paciente(phone, {"status": "pilates_modalidade"})
                 return jsonify({"status": "ok"}), 200
                 
-            # TRIAGEM NEURO
+            # TRIAGEM NEURO (Didática)
             if servico == "Fisio Neurológica":
-                enviar_botoes(phone, "Como está a mobilidade do paciente?", ["🔹 Independente", "🤝 Semidependente", "👨‍🦽 Dependente"])
+                msg_neuro = (
+                    "Para garantirmos o especialista ideal e direcionarmos você para a agenda correta, precisamos entender a mobilidade do paciente:\n\n"
+                    "🔹 *Independente:* Realiza as atividades de forma autônoma e segura.\n"
+                    "🤝 *Semidependente:* Precisa de ajuda parcial ou uso de apoio (bengala/andador).\n"
+                    "👨‍🦽 *Dependente:* Precisa de auxílio integral para se locomover."
+                )
+                enviar_botoes(phone, msg_neuro, ["🔹 Independente", "🤝 Semidependente", "👨‍🦽 Dependente"])
                 update_paciente(phone, {"status": "triagem_neuro"})
                 return jsonify({"status": "ok"}), 200
             
-            # FLUXO CLÍNICO NORMAL -> Escuta Ativa
+            # FLUXO CLÍNICO NORMAL
             enviar_texto(phone, "Entendido! Me conte brevemente: o que te trouxe à clínica hoje? (Ex: dor lombar, pós-cirúrgico...)")
             update_paciente(phone, {"status": "aguardando_queixa"})
             return jsonify({"status": "ok"}), 200
 
         # ========================================================
-        # 🧘‍♀️ FASE 4: FLUXOS ISOLADOS
+        # 🧘‍♀️ FASE 4: FLUXOS ISOLADOS E CORREÇÃO DO WELLHUB
         # ========================================================
         elif status == "pilates_transferencia":
             if "mudar" in msg_lower or "sim" in msg_lower:
@@ -357,15 +377,16 @@ def webhook():
                 enviar_botoes(phone, "No nosso estúdio, você conta com especialistas de ponta! ✨ Gostaria de agendar uma AULA EXPERIMENTAL GRATUITA?", ["Sim, gostaria", "Não, quero começar"])
                 update_paciente(phone, {"status": "pilates_experimental", "modalidade": "Particular"})
             elif "caixa" in msg_lower:
-                enviar_texto(phone, "Entendido! 🏦 Para Saúde Caixa, é obrigatório pedido médico (Pilates ou Fisioterapia). Para seu cadastro, digite seu CPF (apenas 11 números):")
+                enviar_texto(phone, "Entendido! 🏦 Para Saúde Caixa, é obrigatório pedido médico (Pilates ou Fisioterapia). Para iniciarmos o seu cadastro de liberação, digite seu CPF (apenas 11 números):")
                 update_paciente(phone, {"status": "aguardando_cpf", "modalidade": "Convênio", "convenio": "Saúde Caixa"})
             elif "wellhub" in msg_lower or "totalpass" in msg_lower or "app" in msg_lower:
+                update_paciente(phone, {"modalidade": "Parceria App"})
                 if is_veterano:
-                    enviar_botoes(phone, "Ótimo! Para facilitar seu dia a dia, como prefere agendar suas aulas?", ["📱 App da Clínica", "🎫 App Parceiro"])
-                    update_paciente(phone, {"status": "pilates_app", "modalidade": "Parceria App"})
+                    enviar_texto(phone, f"Ótimo ter você com a gente novamente! ✨\n\nPara validarmos o seu acesso, por favor, informe o seu **Wellhub ID** ou **Token do Totalpass** (você encontra essa numeração no seu perfil do aplicativo):")
+                    update_paciente(phone, {"status": "aguardando_id_parceiro"})
                 else:
-                    enviar_texto(phone, "Perfeito! Aceitamos Wellhub e Totalpass. Para seu cadastro inicial obrigatório, digite seu CPF (apenas 11 números):")
-                    update_paciente(phone, {"status": "aguardando_cpf", "modalidade": "Parceria App"})
+                    enviar_texto(phone, "Perfeito! Aceitamos Wellhub e Totalpass. Para o seu cadastro inicial obrigatório, por favor, digite seu CPF (apenas 11 números):")
+                    update_paciente(phone, {"status": "aguardando_cpf"})
             else:
                 enviar_botoes(phone, "Por favor, escolha uma das modalidades:", ["💎 Particular", "🏦 Saúde Caixa", "💪 Wellhub/Totalpass"])
             return jsonify({"status": "ok"}), 200
@@ -395,15 +416,16 @@ def webhook():
                 update_paciente(phone, {"status": "aguardando_queixa"})
                 return jsonify({"status": "ok"}), 200
             else:
-                enviar_botoes(phone, "Por favor, utilize os botões para indicar a mobilidade:", ["🔹 Independente", "🤝 Semidependente", "👨‍🦽 Dependente"])
+                msg_neuro_erro = "Por favor, utilize os botões para indicar a mobilidade:\n🔹 Independente\n🤝 Semidependente\n👨‍🦽 Dependente"
+                enviar_botoes(phone, msg_neuro_erro, ["🔹 Independente", "🤝 Semidependente", "👨‍🦽 Dependente"])
                 return jsonify({"status": "ok"}), 200
 
         # ========================================================
-        # 🪜 FASE 5: A ESCADA DE DADOS
+        # 🪜 FASE 5: A ESCADA DE DADOS E BUROCRACIA (Clínico)
         # ========================================================
         elif status == "aguardando_queixa":
             update_paciente(phone, {"queixa": msg_recebida})
-            enviar_texto(phone, "Compreendo a situação. Fique tranquilo que vamos avaliar o melhor tratamento para você voltar a se movimentar bem e sem dores! 💙")
+            enviar_texto(phone, "Compreendo perfeitamente a sua situação. Fique tranquilo que vamos avaliar a melhor forma de cuidar de você para aliviar essa dor! 💙")
             simular_digitacao()
             enviar_botoes(phone, "Para seguirmos com o agendamento, deseja realizar o atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?", ["💳 Convênio", "💎 Particular"])
             update_paciente(phone, {"status": "escolha_modalidade"})
@@ -414,7 +436,7 @@ def webhook():
                 enviar_botoes(phone, "Ótima escolha! Para agilizarmos, qual o melhor período para você?", ["☀️ Manhã", "⛅ Tarde", "🌙 Noite"])
                 update_paciente(phone, {"status": "aguardando_periodo_particular_antes", "modalidade": "Particular"})
             elif "conv" in msg_lower:
-                enviar_texto(phone, "Entendido! Qual o NOME do seu plano de saúde? (Ex: Amil, Bradesco, etc)")
+                enviar_lista(phone, "Entendido! Por favor, selecione o nome do seu plano de saúde na lista abaixo:", "Ver Convênios", get_secoes_convenios())
                 update_paciente(phone, {"status": "aguardando_nome_plano", "modalidade": "Convênio"})
             else:
                 enviar_botoes(phone, "Por favor, utilize os botões:", ["💳 Convênio", "💎 Particular"])
@@ -422,16 +444,34 @@ def webhook():
 
         elif status == "aguardando_nome_plano":
             plano = msg_recebida
+            
+            # Se ele clicou em "Outro"
+            if "outro" in msg_lower:
+                enviar_texto(phone, "Certo, por favor, digite o NOME do seu plano de saúde:")
+                update_paciente(phone, {"status": "aguardando_nome_plano_texto"})
+                return jsonify({"status": "ok"}), 200
+                
             update_paciente(phone, {"convenio": plano})
             serv = info.get("servico", "")
             
-            # MATRIZ DE COBERTURA
+            # MATRIZ DE COBERTURA PÉLVICA
             if serv == "Fisio Pélvica" and any(x in plano.lower() for x in ["amil", "bradesco"]):
                 enviar_botoes(phone, f"O plano {plano} não cobre Fisioterapia Pélvica diretamente. Mas realizamos no Particular com recibo para reembolso. Deseja seguir no particular?", ["✅ Sim, Particular", "❌ Não, obrigado"])
                 update_paciente(phone, {"status": "valida_reembolso"})
                 return jsonify({"status": "ok"}), 200
                 
-            enviar_texto(phone, "Plano registrado! ✅ Para iniciarmos seu cadastro oficial, digite o seu CPF (apenas 11 números, sem traços):")
+            if is_veterano:
+                 enviar_texto(phone, f"Plano {plano} registrado! ✅ Como você trocou de plano, envie uma FOTO ou PDF da sua NOVA CARTEIRINHA (frente). 📸")
+                 update_paciente(phone, {"status": "aguardando_foto_carteirinha"})
+            else:
+                 enviar_texto(phone, f"Plano {plano} registrado! ✅ Para iniciarmos seu cadastro oficial, digite o seu CPF (apenas 11 números, sem traços):")
+                 update_paciente(phone, {"status": "aguardando_cpf"})
+            return jsonify({"status": "ok"}), 200
+
+        elif status == "aguardando_nome_plano_texto":
+            plano = msg_recebida
+            update_paciente(phone, {"convenio": plano})
+            enviar_texto(phone, f"Plano {plano} registrado! ✅ Para iniciarmos seu cadastro oficial, digite o seu CPF (apenas 11 números, sem traços):")
             update_paciente(phone, {"status": "aguardando_cpf"})
             return jsonify({"status": "ok"}), 200
             
@@ -444,6 +484,7 @@ def webhook():
                 update_paciente(phone, {"status": "finalizado"})
             return jsonify({"status": "ok"}), 200
 
+        # CADASTRO SEQUENCIAL
         elif status == "aguardando_cpf":
             cpf_limpo = re.sub(r'\D', '', msg_recebida)
             if len(cpf_limpo) != 11:
@@ -466,19 +507,28 @@ def webhook():
             mod = info.get("modalidade", "")
             
             if mod == "Convênio":
-                enviar_texto(phone, "Cadastro concluído! 🎉\nAgora, precisamos das fotos para liberar seu plano. Envie uma FOTO NÍTIDA da sua CARTEIRINHA (frente). 📸")
-                update_paciente(phone, {"status": "aguardando_foto_carteirinha"})
+                # O Degrau do NÚMERO da carteirinha (antes da foto)
+                enviar_texto(phone, "Cadastro concluído! 🎉\nAgora, vamos à documentação do plano. Por favor, digite o NÚMERO DA SUA CARTEIRINHA:")
+                update_paciente(phone, {"status": "aguardando_num_carteirinha"})
             elif mod == "Parceria App":
-                enviar_botoes(phone, "Cadastro concluído! 🎉 Para facilitar seu dia a dia, como prefere agendar suas aulas de Pilates?", ["📱 App da Clínica", "🎫 App Parceiro"])
-                update_paciente(phone, {"status": "pilates_app"})
+                # O Degrau do ID do Parceiro para os NOVATOS do Pilates
+                enviar_texto(phone, "Cadastro concluído! 🎉\n\nPara validarmos o seu acesso, por favor, informe o seu **Wellhub ID** ou **Token do Totalpass** (você encontra no seu perfil do aplicativo):")
+                update_paciente(phone, {"status": "aguardando_id_parceiro"})
             else:
                 enviar_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para finalizar os detalhes e confirmar o seu horário. Aguarde um momento! 👩‍⚕️")
                 update_paciente(phone, {"status": "finalizado"})
             return jsonify({"status": "ok"}), 200
             
+        # DEGURAUS ESPECÍFICOS PÓS-EMAIL
+        elif status == "aguardando_id_parceiro":
+            update_paciente(phone, {"id_parceiro": msg_recebida})
+            enviar_botoes(phone, "ID recebido! ✅ Para facilitar o seu dia a dia, como prefere agendar suas aulas de Pilates?", ["📱 App da Clínica", "🎫 App Parceiro"])
+            update_paciente(phone, {"status": "pilates_app"})
+            return jsonify({"status": "ok"}), 200
+            
         elif status == "pilates_app":
             if "clínica" in msg_lower or "clinica" in msg_lower or "app" in msg_lower:
-                msg = "Ótima escolha! 📲 Com o nosso App você tem total autonomia.\n\nBaixe o App NextFit, faça um cadastro rápido e busque por: Conectifisio - Ictus Fisioterapia SCS.\n\nNossa equipe vai assumir agora para te liberar o acesso. Aguarde! 👩‍⚕️"
+                msg = "Ótima escolha! 📲 Com o nosso App você tem total autonomia.\n\nBaixe o App **NextFit** na sua loja de aplicativos (Android ou iOS), faça um cadastro rápido e busque por: **Conectifisio - Ictus Fisioterapia SCS**.\n\nNossa equipe vai assumir agora para te liberar o acesso. Aguarde um instante! 👩‍⚕️"
             else:
                 msg = "Perfeito! Você pode agendar suas aulas buscando nosso estúdio diretamente no seu app parceiro.\n\nNossa equipe assumirá o atendimento agora para confirmar seu primeiro check-in! 👩‍⚕️"
             enviar_texto(phone, msg)
@@ -486,21 +536,31 @@ def webhook():
             return jsonify({"status": "ok"}), 200
 
         # ========================================================
-        # 📄 FASE 6: DOCUMENTOS E FINALIZAÇÃO
+        # 📄 FASE 6: DOCUMENTOS DE CONVÊNIO (Burocracia Pesada)
         # ========================================================
+        elif status == "aguardando_num_carteirinha":
+            update_paciente(phone, {"numCarteirinha": msg_recebida})
+            enviar_texto(phone, "Número registado! ✅ Agora, envie uma FOTO NÍTIDA ou o ARQUIVO (PDF) da sua carteirinha (frente). 📸")
+            update_paciente(phone, {"status": "aguardando_foto_carteirinha"})
+            return jsonify({"status": "ok"}), 200
+
         elif status == "aguardando_foto_carteirinha":
-            if msg_type != 'image':
-                enviar_texto(phone, "Por favor, utilize o botão de clipe (anexo) ou a câmera do WhatsApp para nos enviar a FOTO da carteirinha. 📸")
+            # 🛡️ CORREÇÃO DE WHATSAPP WEB: Aceita Image e Document
+            if msg_type not in ['image', 'document']:
+                enviar_texto(phone, "Por favor, utilize o botão de clipe (anexo) ou a câmera para nos enviar a FOTO ou o ARQUIVO (PDF) da carteirinha. 📸")
                 return jsonify({"status": "ok"}), 200
-            enviar_texto(phone, "Carteirinha recebida! ✅ Agora, envie a FOTO DO SEU PEDIDO MÉDICO (que foi emitido há menos de 60 dias).")
+            
+            enviar_texto(phone, "Carteirinha recebida! ✅ Para finalizarmos a burocracia, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO (que foi emitido há menos de 60 dias).")
             update_paciente(phone, {"status": "aguardando_foto_pedido"})
             return jsonify({"status": "ok"}), 200
 
         elif status == "aguardando_foto_pedido":
-            if msg_type != 'image' and msg_type != 'document':
-                enviar_texto(phone, "Por favor, nos envie a FOTO ou PDF do pedido médico. 📸")
+            # 🛡️ CORREÇÃO DE WHATSAPP WEB: Aceita Image e Document
+            if msg_type not in ['image', 'document']:
+                enviar_texto(phone, "Por favor, nos envie a FOTO ou o ARQUIVO (PDF) do pedido médico. 📸")
                 return jsonify({"status": "ok"}), 200
-            enviar_botoes(phone, "Documentos recebidos com sucesso! 🎉 Para buscarmos vagas na agenda, qual o melhor período para você?", ["☀️ Manhã", "⛅ Tarde", "🌙 Noite"])
+            
+            enviar_botoes(phone, "Documentos recebidos com sucesso! 🎉 Para buscarmos vagas na nossa agenda de avaliações, qual o melhor período para você?", ["☀️ Manhã", "⛅ Tarde", "🌙 Noite"])
             update_paciente(phone, {"status": "aguardando_periodo"})
             return jsonify({"status": "ok"}), 200
 
@@ -516,7 +576,7 @@ def webhook():
 
     except Exception as e:
         print(f"❌ ERRO CRÍTICO NO CÓDIGO: {traceback.format_exc()}")
-        return jsonify({"status": "error"}), 200
+        return jsonify({"status": "error"}), 500
 
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
