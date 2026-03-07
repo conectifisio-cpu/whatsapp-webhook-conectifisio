@@ -15,26 +15,15 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 
-# ==========================================
-# FUNÇÕES DE MENSAGERIA
-# ==========================================
 def responder_texto(to, texto):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": texto}
-    }
+    payload = {"messaging_product": "whatsapp", "to": to, "type": "text", "text": {"body": texto}}
     try:
         requests.post(url, json=payload, headers=headers, timeout=10)
     except Exception as e:
-        print(f"Erro ao enviar WPP: {e}")
+        pass
 
-# ==========================================
-# WEBHOOK POST (MÉTODO DE TESTE DIRETO)
-# ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -45,57 +34,61 @@ def webhook():
         if "messages" not in value: return jsonify({"status": "not_a_message"}), 200
 
         message = value["messages"][0]
-        phone = message["from"]  # Este é o seu número (ex: 5511971904516)
+        phone = message["from"]  # Ex: 5511971904516
 
-        # Avisa que começou o teste
-        responder_texto(phone, f"🕵️‍♂️ *Iniciando Teste Raio-X*\nSeu número bruto recebido do WhatsApp: {phone}\nTestando busca no Feegow...")
+        responder_texto(phone, f"🕵️‍♂️ *Iniciando Raio-X Extremo*\nTestando todas as máscaras para: {phone}...")
 
-        # Formatações possíveis para tentar achar no Feegow
-        # 1. Tenta o número exatamente como o WhatsApp manda (geralmente com 55)
+        # Gera todas as variações possíveis
         celular_bruto = re.sub(r'\D', '', phone)
-        
-        # 2. Tenta sem o 55 (padrão Brasil)
         celular_sem_55 = celular_bruto[2:] if celular_bruto.startswith("55") else celular_bruto
-        
-        # 3. Tenta sem o 9 (Alguns sistemas antigos salvam como DDD + 8 dígitos)
-        celular_sem_9 = celular_sem_55[:2] + celular_sem_55[3:] if len(celular_sem_55) == 11 else celular_sem_55
+        ddd = celular_sem_55[:2]
+        numero = celular_sem_55[2:]
+        numero_sem_9 = numero[1:] if len(numero) == 9 else numero
+
+        # A lista de todas as tentativas
+        tentativas = [
+            f"+{celular_bruto}",          # T1: +5511971904516
+            f"{celular_bruto}",           # T2: 5511971904516
+            f"+55{celular_sem_55}",       # T3: +5511971904516 (garantindo o +)
+            f"{celular_sem_55}",          # T4: 11971904516
+            f"({ddd}){numero}",           # T5: (11)971904516
+            f"({ddd}) {numero}",          # T6: (11) 971904516
+            f"({ddd}) {numero[:5]}-{numero[5:]}", # T7: (11) 97190-4516 (Exatamente como aparece no seu Feegow)
+            f"{ddd}{numero_sem_9}",       # T8: 1171904516
+            f"({ddd}) {numero_sem_9[:4]}-{numero_sem_9[4:]}" # T9: (11) 7190-4516
+        ]
 
         headers = {"x-access-token": FEEGOW_TOKEN, "Content-Type": "application/json"}
-        
         resultados_teste = []
+        achou = False
 
-        # TENTATIVA 1: Celular Bruto (Com 55)
-        try:
-            res1 = requests.get(f"https://api.feegow.com/v1/api/patient/search?celular={celular_bruto}", headers=headers, timeout=5)
-            if res1.status_code == 200 and res1.json().get("content"):
-                resultados_teste.append(f"✅ Achou com formato '{celular_bruto}': {res1.json()['content'][0].get('nome_completo')}")
-            else:
-                resultados_teste.append(f"❌ Falhou formato '{celular_bruto}'")
-        except Exception as e:
-            resultados_teste.append(f"⚠️ Erro form 1: {e}")
+        for formato in tentativas:
+            try:
+                # É crucial codificar a URL (URL Encode) para formatos com espaços e parêntesis
+                import urllib.parse
+                formato_codificado = urllib.parse.quote(formato)
+                
+                url_busca = f"https://api.feegow.com/v1/api/patient/search?celular={formato_codificado}"
+                res = requests.get(url_busca, headers=headers, timeout=5)
+                
+                if res.status_code == 200:
+                    dados = res.json()
+                    if dados.get("success") != False and dados.get("content"):
+                        nome = dados['content'][0].get('nome_completo', 'Desconhecido')
+                        resultados_teste.append(f"✅ SUCESSO: '{formato}' -> Achou: {nome}")
+                        achou = True
+                        break # Para no primeiro que achar
+                    else:
+                        pass # Falhou silencioso para não poluir
+                else:
+                    pass # Falhou silencioso
+            except Exception as e:
+                resultados_teste.append(f"⚠️ Erro em '{formato}': {str(e)[:20]}")
 
-        # TENTATIVA 2: Celular sem 55 (O mais provável de funcionar)
-        try:
-            res2 = requests.get(f"https://api.feegow.com/v1/api/patient/search?celular={celular_sem_55}", headers=headers, timeout=5)
-            if res2.status_code == 200 and res2.json().get("content"):
-                resultados_teste.append(f"✅ Achou com formato '{celular_sem_55}': {res2.json()['content'][0].get('nome_completo')}")
-            else:
-                resultados_teste.append(f"❌ Falhou formato '{celular_sem_55}'")
-        except Exception as e:
-            resultados_teste.append(f"⚠️ Erro form 2: {e}")
+        if not achou:
+             resultados_teste.append("❌ FALHA TOTAL: O Feegow não retornou dados para NENHUMA das 9 combinações de máscara. A API de busca por telemóvel deles pode estar quebrada ou não lê o campo 'Celular'.")
 
-        # TENTATIVA 3: Celular sem o 9
-        try:
-            res3 = requests.get(f"https://api.feegow.com/v1/api/patient/search?celular={celular_sem_9}", headers=headers, timeout=5)
-            if res3.status_code == 200 and res3.json().get("content"):
-                resultados_teste.append(f"✅ Achou com formato '{celular_sem_9}': {res3.json()['content'][0].get('nome_completo')}")
-            else:
-                resultados_teste.append(f"❌ Falhou formato '{celular_sem_9}'")
-        except Exception as e:
-            resultados_teste.append(f"⚠️ Erro form 3: {e}")
-
-        # Manda o relatório final de volta para o seu WhatsApp
-        relatorio = "*RESULTADO DA BUSCA NO FEEGOW:*\n\n" + "\n".join(resultados_teste)
+        relatorio = "*RESULTADO FINAL FEEGOW:*\n\n" + "\n".join(resultados_teste)
         responder_texto(phone, relatorio)
 
         return jsonify({"status": "success"}), 200
@@ -104,9 +97,6 @@ def webhook():
         print(f"❌ Erro Crítico POST: {e}")
         return jsonify({"status": "error", "message": str(e)}), 200
 
-# ==========================================
-# WEBHOOK GET (Meta)
-# ==========================================
 @app.route("/api/whatsapp", methods=["GET"])
 def verify():
     if request.args.get("hub.verify_token") == "conectifisio_2024_seguro":
