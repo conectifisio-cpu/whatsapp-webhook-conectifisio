@@ -39,49 +39,46 @@ def webhook():
         if message.get("type") != "text":
             return jsonify({"status": "ok"}), 200
             
-        numero_alvo = message["text"]["body"].strip()
-        responder_texto(phone, f"🕵️‍♂️ *Extraindo o Erro 422...*\nTestando novas rotas para: {numero_alvo}")
+        mensagem_recebida = message["text"]["body"].strip()
+        
+        # Limpa tudo o que não for número
+        cpf_alvo = re.sub(r'\D', '', mensagem_recebida)
+        
+        # Se não tiver 11 números, avisa e para o teste
+        if len(cpf_alvo) != 11:
+            responder_texto(phone, f"❌ Teste inválido. Por favor, digite apenas um número de CPF válido (11 dígitos). Você enviou: {mensagem_recebida}")
+            return jsonify({"status": "ok"}), 200
+
+        responder_texto(phone, f"🕵️‍♂️ *Raio-X de CPF Iniciado...*\nBuscando o CPF: {cpf_alvo} no Feegow.")
 
         if not FEEGOW_TOKEN:
-            responder_texto(phone, "❌ ERRO: FEEGOW_TOKEN ausente.")
+            responder_texto(phone, "❌ ERRO: FEEGOW_TOKEN ausente na Vercel.")
             return jsonify({"status": "error"}), 200
 
-        # Tratamento de numero
-        celular_bruto = re.sub(r'\D', '', numero_alvo)
-        celular_sem_55 = celular_bruto[2:] if celular_bruto.startswith("55") else celular_bruto
-        ddd = celular_sem_55[:2] if len(celular_sem_55) >= 10 else ""
-        numero = celular_sem_55[2:] if len(celular_sem_55) >= 10 else ""
-        mascara = f"({ddd}) {numero[:5]}-{numero[5:]}" if ddd else celular_sem_55
-
-        # 🔑 As duas formas de autenticar no Feegow
+        # As rotas de busca por CPF que o Feegow suporta
         headers_antigo = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
         headers_novo = {"Content-Type": "application/json", "Authorization": FEEGOW_TOKEN}
 
-        # 🛣️ As Varias Rotas e Parametros que a Feegow pode aceitar
         tentativas = [
             {
-                "nome": "API NOVA (?celular=)", 
-                "url": f"https://api.feegow.com.br/v1/pacientes?celular={celular_sem_55}", 
-                "headers": headers_novo
-            },
-            {
-                "nome": "API NOVA (?telefone=)", 
-                "url": f"https://api.feegow.com.br/v1/pacientes?telefone={celular_sem_55}", 
-                "headers": headers_novo
-            },
-            {
-                "nome": "API ANTIGA (?paciente_celular=)", 
-                "url": f"https://api.feegow.com/v1/api/patient/search?paciente_celular={celular_sem_55}", 
+                "nome": "Busca Antiga (/patient/search?paciente_cpf=)", 
+                "url": f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_alvo}", 
                 "headers": headers_antigo
             },
             {
-                "nome": "API ANTIGA COM MASCARA", 
-                "url": f"https://api.feegow.com/v1/api/patient/search?celular={urllib.parse.quote(mascara)}", 
+                "nome": "Busca Antiga 2 (/patient/search?cpf=)", 
+                "url": f"https://api.feegow.com/v1/api/patient/search?cpf={cpf_alvo}", 
                 "headers": headers_antigo
+            },
+            {
+                "nome": "Busca Nova (/pacientes?cpf=)", 
+                "url": f"https://api.feegow.com.br/v1/pacientes?cpf={cpf_alvo}", 
+                "headers": headers_novo
             }
         ]
 
         resultados = []
+        achou = False
 
         for t in tentativas:
             try:
@@ -89,25 +86,33 @@ def webhook():
                 
                 if res.status_code == 200:
                     dados = res.json()
-                    # A Feegow tem formatos diferentes de resposta
                     conteudo = dados.get("data") or dados.get("content")
+                    
                     if dados.get("success") != False and conteudo and len(conteudo) > 0:
-                        resultados.append(f"✅ SUCESSO: {t['nome']}")
-                    else:
-                        resultados.append(f"❌ Retornou Vazio: {t['nome']}")
-                else:
-                    # 🎯 CAPTURANDO A MENSAGEM DO ERRO DA FEEGOW (O Pulo do Gato)
-                    try:
-                        erro_json = res.json()
-                        msg_erro = erro_json.get('message') or erro_json.get('error') or str(erro_json)[:50]
-                    except:
-                        msg_erro = res.text[:50].replace('\n', ' ')
+                        # Pega o primeiro paciente encontrado
+                        paciente = conteudo[0] if isinstance(conteudo, list) else conteudo
+                        nome = paciente.get("nome_completo") or paciente.get("nome") or "Nome não encontrado"
+                        id_feegow = paciente.get("id") or paciente.get("paciente_id") or "ID não encontrado"
                         
-                    resultados.append(f"⚠️ {res.status_code} ({t['nome']}): {msg_erro}")
+                        resultados.append(f"✅ SUCESSO: {t['nome']}\n👤 Paciente: {nome}\n🆔 ID Feegow: {id_feegow}")
+                        achou = True
+                        break # Se achou numa rota, não precisa testar as outras para não poluir a tela
+                    else:
+                        resultados.append(f"❌ Não encontrado em: {t['nome']}")
+                else:
+                    # Capturando erro
+                    try:
+                        msg_erro = res.json().get('message', res.text[:50])
+                    except:
+                        msg_erro = res.text[:50]
+                    resultados.append(f"⚠️ Erro {res.status_code} ({t['nome']}): {msg_erro}")
             except Exception as e:
-                resultados.append(f"🚨 Falha de Conexao: {t['nome']}")
+                resultados.append(f"🚨 Falha de Conexão: {t['nome']}")
 
-        relatorio = f"*DIAGNOSTICO FINAL PARA: {numero_alvo}*\n\n" + "\n\n".join(resultados)
+        if achou:
+             relatorio = "*🎯 RESULTADO POSITIVO PARA O CPF:*\n\n" + "\n\n".join([r for r in resultados if "✅" in r])
+        else:
+             relatorio = f"*DIAGNÓSTICO FINAL PARA O CPF {cpf_alvo}:*\n\n" + "\n\n".join(resultados) + "\n\n😭 Nenhuma rota encontrou este CPF."
         
         responder_texto(phone, relatorio)
         return jsonify({"status": "success"}), 200
