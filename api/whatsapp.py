@@ -9,15 +9,12 @@ app = Flask(__name__)
 CORS(app)
 
 # ==========================================
-# CONFIGURAÇÕES DE AMBIENTE (Vercel)
+# CONFIGURAÇÕES DA VERCEL
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 
-# ==========================================
-# FUNÇÕES DE MENSAGERIA
-# ==========================================
 def responder_texto(to, texto):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -25,106 +22,102 @@ def responder_texto(to, texto):
     try:
         requests.post(url, json=payload, headers=headers, timeout=10)
     except Exception as e:
-        print(f"Erro ao enviar mensagem: {e}")
+        print(f"Erro WPP: {e}")
 
-# ==========================================
-# WEBHOOK POST (MÉTODO RAIO-X POR TEXTO)
-# ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
     data = request.get_json()
-    
-    if not data or "entry" not in data: 
-        return jsonify({"status": "ok"}), 200
+    if not data or "entry" not in data: return jsonify({"status": "ok"}), 200
 
     try:
         value = data["entry"][0]["changes"][0]["value"]
-        if "messages" not in value: 
-            return jsonify({"status": "not_a_message"}), 200
+        if "messages" not in value: return jsonify({"status": "not_a_message"}), 200
 
         message = value["messages"][0]
-        phone = message["from"]  # O seu número (para o robô saber para quem devolver a resposta)
+        phone = message["from"]
         
-        # Garante que recebeu texto
         if message.get("type") != "text":
-            responder_texto(phone, "❌ Por favor, digite apenas um número de telefone para eu testar no Feegow.")
             return jsonify({"status": "ok"}), 200
             
-        # Pega o número que o Dr. Issa digitou na mensagem
         numero_alvo = message["text"]["body"].strip()
-
-        responder_texto(phone, f"🕵️‍♂️ *Raio-X Feegow Iniciado*\nAnalisando o número que você me enviou: {numero_alvo}")
+        responder_texto(phone, f"🕵️‍♂️ *Extraindo o Erro 422...*\nTestando novas rotas para: {numero_alvo}")
 
         if not FEEGOW_TOKEN:
-            responder_texto(phone, "❌ ERRO: FEEGOW_TOKEN não encontrado na Vercel.")
+            responder_texto(phone, "❌ ERRO: FEEGOW_TOKEN ausente.")
             return jsonify({"status": "error"}), 200
 
-        # Tratamento do número ALVO (o que você digitou)
+        # Tratamento de numero
         celular_bruto = re.sub(r'\D', '', numero_alvo)
         celular_sem_55 = celular_bruto[2:] if celular_bruto.startswith("55") else celular_bruto
-        
-        if len(celular_sem_55) < 10:
-            responder_texto(phone, "❌ O número que você digitou é muito curto. Envie com o DDD.")
-            return jsonify({"status": "ok"}), 200
+        ddd = celular_sem_55[:2] if len(celular_sem_55) >= 10 else ""
+        numero = celular_sem_55[2:] if len(celular_sem_55) >= 10 else ""
+        mascara = f"({ddd}) {numero[:5]}-{numero[5:]}" if ddd else celular_sem_55
 
-        ddd = celular_sem_55[:2]
-        numero = celular_sem_55[2:]
-        numero_sem_9 = numero[1:] if len(numero) == 9 else numero
+        # 🔑 As duas formas de autenticar no Feegow
+        headers_antigo = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+        headers_novo = {"Content-Type": "application/json", "Authorization": FEEGOW_TOKEN}
 
-        # As 7 formatações mágicas
+        # 🛣️ As Varias Rotas e Parametros que a Feegow pode aceitar
         tentativas = [
-            {"nome": "+55DDI", "valor": f"+55{celular_sem_55}"},
-            {"nome": "55DDI", "valor": f"55{celular_sem_55}"},
-            {"nome": "SÓ NÚMEROS", "valor": f"{celular_sem_55}"},
-            {"nome": "(XX)YYYYYYYYY", "valor": f"({ddd}){numero}"},
-            {"nome": "(XX) YYYYYYYYY", "valor": f"({ddd}) {numero}"},
-            {"nome": "(XX) YYYYY-YYYY", "valor": f"({ddd}) {numero[:5]}-{numero[5:]}"},
-            {"nome": "SEM O 9", "valor": f"{ddd}{numero_sem_9}"}
+            {
+                "nome": "API NOVA (?celular=)", 
+                "url": f"https://api.feegow.com.br/v1/pacientes?celular={celular_sem_55}", 
+                "headers": headers_novo
+            },
+            {
+                "nome": "API NOVA (?telefone=)", 
+                "url": f"https://api.feegow.com.br/v1/pacientes?telefone={celular_sem_55}", 
+                "headers": headers_novo
+            },
+            {
+                "nome": "API ANTIGA (?paciente_celular=)", 
+                "url": f"https://api.feegow.com/v1/api/patient/search?paciente_celular={celular_sem_55}", 
+                "headers": headers_antigo
+            },
+            {
+                "nome": "API ANTIGA COM MASCARA", 
+                "url": f"https://api.feegow.com/v1/api/patient/search?celular={urllib.parse.quote(mascara)}", 
+                "headers": headers_antigo
+            }
         ]
 
-        headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
         resultados = []
 
         for t in tentativas:
             try:
-                formato_codificado = urllib.parse.quote(t["valor"])
-                url = f"https://api.feegow.com/v1/api/patient/search?celular={formato_codificado}"
-                
-                res = requests.get(url, headers=headers, timeout=5)
+                res = requests.get(t["url"], headers=t["headers"], timeout=5)
                 
                 if res.status_code == 200:
                     dados = res.json()
-                    if dados.get("success") != False and dados.get("content") and len(dados["content"]) > 0:
-                        nome = dados["content"][0].get("nome_completo") or dados["content"][0].get("nome") or "Desconhecido"
-                        resultados.append(f"✅ SUCESSO! {t['nome']} -> {nome}")
+                    # A Feegow tem formatos diferentes de resposta
+                    conteudo = dados.get("data") or dados.get("content")
+                    if dados.get("success") != False and conteudo and len(conteudo) > 0:
+                        resultados.append(f"✅ SUCESSO: {t['nome']}")
                     else:
-                        resultados.append(f"❌ Falhou: {t['nome']}")
+                        resultados.append(f"❌ Retornou Vazio: {t['nome']}")
                 else:
-                    resultados.append(f"⚠️ Erro HTTP {res.status_code}: {t['nome']}")
+                    # 🎯 CAPTURANDO A MENSAGEM DO ERRO DA FEEGOW (O Pulo do Gato)
+                    try:
+                        erro_json = res.json()
+                        msg_erro = erro_json.get('message') or erro_json.get('error') or str(erro_json)[:50]
+                    except:
+                        msg_erro = res.text[:50].replace('\n', ' ')
+                        
+                    resultados.append(f"⚠️ {res.status_code} ({t['nome']}): {msg_erro}")
             except Exception as e:
-                resultados.append(f"🚨 Erro na API: {t['nome']}")
+                resultados.append(f"🚨 Falha de Conexao: {t['nome']}")
 
-        relatorio = f"*RESULTADOS DA BUSCA PARA: {numero_alvo}*\n\n" + "\n".join(resultados)
+        relatorio = f"*DIAGNOSTICO FINAL PARA: {numero_alvo}*\n\n" + "\n\n".join(resultados)
         
-        if "✅" not in relatorio:
-            relatorio += "\n\n😭 Nenhuma formatação funcionou para este número. Tem certeza que ele está no campo 'Celular' principal do Feegow?"
-            
         responder_texto(phone, relatorio)
-
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"❌ Erro Crítico POST: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 200
+        return jsonify({"status": "error"}), 200
 
-# ==========================================
-# WEBHOOK GET
-# ==========================================
 @app.route("/api/whatsapp", methods=["GET"])
 def verify_or_data():
-    if request.args.get("hub.verify_token") == "conectifisio_2024_seguro":
-        return request.args.get("hub.challenge"), 200
-    return "Acesso Negado", 403
+    return request.args.get("hub.challenge", "OK"), 200
 
 if __name__ == "__main__":
     app.run(port=5000)
