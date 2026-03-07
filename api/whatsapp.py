@@ -28,13 +28,12 @@ def responder_texto(to, texto):
         print(f"Erro ao enviar mensagem: {e}")
 
 # ==========================================
-# WEBHOOK POST (MÉTODO RAIO-X EXPRESSO)
+# WEBHOOK POST (MÉTODO RAIO-X POR TEXTO)
 # ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
     data = request.get_json()
     
-    # Validação básica de segurança da Meta
     if not data or "entry" not in data: 
         return jsonify({"status": "ok"}), 200
 
@@ -44,27 +43,35 @@ def webhook():
             return jsonify({"status": "not_a_message"}), 200
 
         message = value["messages"][0]
-        phone = message["from"]  # O seu número (ex: 5511971904516)
+        phone = message["from"]  # O seu número (para o robô saber para quem devolver a resposta)
+        
+        # Garante que recebeu texto
+        if message.get("type") != "text":
+            responder_texto(phone, "❌ Por favor, digite apenas um número de telefone para eu testar no Feegow.")
+            return jsonify({"status": "ok"}), 200
+            
+        # Pega o número que o Dr. Issa digitou na mensagem
+        numero_alvo = message["text"]["body"].strip()
 
-        responder_texto(phone, f"🕵️‍♂️ *Raio-X Feegow Iniciado*\nTestando o número: {phone}")
+        responder_texto(phone, f"🕵️‍♂️ *Raio-X Feegow Iniciado*\nAnalisando o número que você me enviou: {numero_alvo}")
 
         if not FEEGOW_TOKEN:
             responder_texto(phone, "❌ ERRO: FEEGOW_TOKEN não encontrado na Vercel.")
             return jsonify({"status": "error"}), 200
 
-        # Tratamento do número
-        celular_bruto = re.sub(r'\D', '', phone)
+        # Tratamento do número ALVO (o que você digitou)
+        celular_bruto = re.sub(r'\D', '', numero_alvo)
         celular_sem_55 = celular_bruto[2:] if celular_bruto.startswith("55") else celular_bruto
         
         if len(celular_sem_55) < 10:
-            responder_texto(phone, "❌ Número inválido ou muito curto.")
-            return jsonify({"status": "error"}), 200
+            responder_texto(phone, "❌ O número que você digitou é muito curto. Envie com o DDD.")
+            return jsonify({"status": "ok"}), 200
 
         ddd = celular_sem_55[:2]
         numero = celular_sem_55[2:]
         numero_sem_9 = numero[1:] if len(numero) == 9 else numero
 
-        # As 7 formatações que o Feegow pode exigir
+        # As 7 formatações mágicas
         tentativas = [
             {"nome": "+55DDI", "valor": f"+55{celular_sem_55}"},
             {"nome": "55DDI", "valor": f"55{celular_sem_55}"},
@@ -78,10 +85,8 @@ def webhook():
         headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
         resultados = []
 
-        # O Loop Mágico de Testes
         for t in tentativas:
             try:
-                # O segredo está aqui: o Feegow pode precisar do "URL Encode" para aceitar () e -
                 formato_codificado = urllib.parse.quote(t["valor"])
                 url = f"https://api.feegow.com/v1/api/patient/search?celular={formato_codificado}"
                 
@@ -89,7 +94,6 @@ def webhook():
                 
                 if res.status_code == 200:
                     dados = res.json()
-                    # O Feegow retornou "success: true" E encontrou conteúdo?
                     if dados.get("success") != False and dados.get("content") and len(dados["content"]) > 0:
                         nome = dados["content"][0].get("nome_completo") or dados["content"][0].get("nome") or "Desconhecido"
                         resultados.append(f"✅ SUCESSO! {t['nome']} -> {nome}")
@@ -100,11 +104,10 @@ def webhook():
             except Exception as e:
                 resultados.append(f"🚨 Erro na API: {t['nome']}")
 
-        # Compila o relatório e envia para o seu WhatsApp
-        relatorio = "*RESULTADOS DA BUSCA:*\n\n" + "\n".join(resultados)
+        relatorio = f"*RESULTADOS DA BUSCA PARA: {numero_alvo}*\n\n" + "\n".join(resultados)
         
         if "✅" not in relatorio:
-            relatorio += "\n\n😭 Nenhuma formatação funcionou. O Feegow não reconheceu este número no campo 'Celular'."
+            relatorio += "\n\n😭 Nenhuma formatação funcionou para este número. Tem certeza que ele está no campo 'Celular' principal do Feegow?"
             
         responder_texto(phone, relatorio)
 
@@ -115,7 +118,7 @@ def webhook():
         return jsonify({"status": "error", "message": str(e)}), 200
 
 # ==========================================
-# WEBHOOK GET (Obrigatório para a Meta)
+# WEBHOOK GET
 # ==========================================
 @app.route("/api/whatsapp", methods=["GET"])
 def verify_or_data():
