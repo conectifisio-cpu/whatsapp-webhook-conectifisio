@@ -170,11 +170,10 @@ def integrar_feegow(phone, info):
     # SE O PACIENTE JÁ EXISTIA, ATUALIZA O CONVÊNIO (EDIT)
     elif feegow_id and convenio_id > 0:
         try:
+            # CORREÇÃO CRÍTICA: Remoção do CPF e Nome do payload.
+            # Evita o bug de "CPF já cadastrado" da API da Feegow no endpoint de Edit.
             payload_edit = {
                 "paciente_id": int(feegow_id),
-                "nome_completo": info.get("title", "Paciente"),
-                "cpf": cpf,
-                "celular1": celular,
                 "convenio_id": convenio_id,
                 "plano_id": 0,
                 "matricula": matricula
