@@ -120,8 +120,9 @@ def buscar_feegow_por_cpf(cpf):
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             dados = res.json()
-            if dados.get("success") != False and dados.get("content"):
-                paciente = dados["content"][0]
+            conteudo = dados.get("content")
+            if dados.get("success") != False and conteudo:
+                paciente = conteudo[0] if isinstance(conteudo, list) else conteudo
                 return {
                     "id": paciente.get("paciente_id") or paciente.get("id"),
                     "nome": paciente.get("nome_completo") or paciente.get("nome")
@@ -304,8 +305,9 @@ def webhook():
             msg_recebida = "Anexo Recebido"
             media_id = message.get(msg_type, {}).get("id")
 
+        # FIX 1: O recomeçar agora manda para 'escolhendo_unidade' para evitar o envio duplo dos botões de unidade
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
-            update_paciente(phone, {"status": "triagem", "cellphone": phone, "servico": "", "modalidade": "", "cpf": ""})
+            update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": "", "cpf": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
             enviar_botoes(phone, "Atendimento reiniciado. 🔄\n\nEm qual unidade deseja ser atendido?", botoes)
             return jsonify({"status": "reset"}), 200
@@ -316,6 +318,19 @@ def webhook():
             update_paciente(phone, info)
 
         status = info.get("status", "triagem")
+        
+        # FIX 2: Proteção Absoluta contra anexos indesejados (Impede que a foto vire o nome do paciente)
+        estados_anexo_permitido = [
+            "foto_carteirinha", 
+            "foto_pedido_medico", 
+            "pilates_caixa_foto_cart", 
+            "pilates_caixa_foto_pedido"
+        ]
+        
+        if tem_anexo and status not in estados_anexo_permitido:
+            responder_texto(phone, "❌ Por favor, responda com *texto* ou clique nos botões. Ainda não é o momento de enviar fotos ou arquivos.")
+            return jsonify({"status": "anexo_bloqueado"}), 200
+
         servico = info.get("servico", "")
         cpf_salvo = info.get("cpf", "")
         
@@ -325,7 +340,6 @@ def webhook():
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade and servico in ["Recovery", "Liberação Miofascial"]: modalidade = "Particular"
 
-        # --- ESCUDO ANTI-LOOP E CORTESIA ---
         msg_limpa = msg_recebida.lower().strip()
         is_courtesy = False
         is_greeting = False
@@ -544,6 +558,8 @@ def webhook():
             elif status == "pilates_part_nome":
                 update_paciente(phone, {"title": msg_recebida, "status": "pilates_part_cpf"})
                 responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+            
+            # FIX 3: O Feegow agora é pesquisado OBRIGATORIAMENTE em todas as coletas de CPF
             elif status == "pilates_part_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
                 if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
@@ -554,7 +570,8 @@ def webhook():
                         responder_texto(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna. 👩‍⚕️")
                     else:
                         update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_part_nasc"})
-                        responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
+                        responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+            
             elif status == "pilates_part_nasc":
                 update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_part_email"})
                 responder_texto(phone, "Para completarmos, qual seu melhor E-MAIL?")
@@ -565,6 +582,8 @@ def webhook():
             elif status == "pilates_app_nome_completo":
                 update_paciente(phone, {"title": msg_recebida, "status": "pilates_app_cpf"})
                 responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+            
+            # FIX 3: Busca no Feegow no fluxo Pilates App
             elif status == "pilates_app_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
                 if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
@@ -576,7 +595,8 @@ def webhook():
                         enviar_botoes(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨ Qual desses aplicativos você utiliza para o seu plano?", botoes)
                     else:
                         update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_app_nasc"})
-                        responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
+                        responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+            
             elif status == "pilates_app_nasc":
                 update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_app_email"})
                 responder_texto(phone, "Para completarmos o registro, qual seu melhor E-MAIL?")
@@ -613,6 +633,8 @@ def webhook():
             elif status == "pilates_caixa_nome":
                 update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
                 responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
+            
+            # FIX 3: Busca no Feegow no fluxo Pilates Caixa
             elif status == "pilates_caixa_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
                 if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
@@ -624,6 +646,7 @@ def webhook():
                     else:
                         update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_caixa_nasc"})
                         responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
+            
             elif status == "pilates_caixa_nasc":
                 update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_caixa_email"})
                 responder_texto(phone, "Ótimo! Qual seu melhor E-MAIL?")
@@ -725,6 +748,7 @@ def webhook():
             update_paciente(phone, {"title": msg_recebida, "status": "cpf"})
             responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
 
+        # FIX 3: Busca no Feegow no fluxo Clínico Principal
         elif status == "cpf":
             cpf_limpo = re.sub(r'\D', '', msg_recebida)
             if len(cpf_limpo) != 11:
