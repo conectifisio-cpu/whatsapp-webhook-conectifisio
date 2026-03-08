@@ -148,7 +148,7 @@ def integrar_feegow(phone, info):
     matricula = info.get("numCarteirinha", "")
     msg_erro_convenio = ""
 
-    # Se não existe no Feegow, CRIA
+    # 1. Se não existe no Feegow, CRIA O PACIENTE NOVO
     if not feegow_id:
         payload_create = {
             "nome_completo": info.get("title", "Paciente Sem Nome"),
@@ -164,35 +164,57 @@ def integrar_feegow(phone, info):
 
         try:
             res_create = requests.post(f"{base_url}/patient/create", json=payload_create, headers=headers, timeout=10)
-            feegow_id = res_create.json().get("content", {}).get("paciente_id")
-        except: return {"feegow_status": "Falha de Conexão Feegow"}
+            dados_c = res_create.json()
+            if res_create.status_code == 200 and dados_c.get("success") != False:
+                feegow_id = dados_c.get("content", {}).get("paciente_id") or dados_c.get("paciente_id")
+            else:
+                msg_erro_convenio = f"Erro Criação: {dados_c.get('message', '')}"
+        except Exception as e: 
+            msg_erro_convenio = "Falha de Conexão Feegow"
 
-    # SE O PACIENTE JÁ EXISTIA, ATUALIZA O CONVÊNIO (EDIT)
+    # 2. SE O PACIENTE JÁ EXISTIA, ATUALIZA O CONVÊNIO (EDIT BLINDADO)
     elif feegow_id and convenio_id > 0:
         try:
-            # CORREÇÃO CRÍTICA: Remoção do CPF e Nome do payload.
-            # Evita o bug de "CPF já cadastrado" da API da Feegow no endpoint de Edit.
+            # O Pulo do Gato: Buscar os dados exatos do paciente no Feegow primeiro
+            res_pac = requests.get(f"{base_url}/patient/search?paciente_id={feegow_id}&photo=false", headers=headers, timeout=10)
+            
+            pac_nome = info.get("title", "Paciente")
+            pac_nasc = formatar_data_feegow(info.get("birthDate", ""))
+            pac_email = info.get("email", "")
+            
+            if res_pac.status_code == 200 and res_pac.json().get("success") != False:
+                conteudo = res_pac.json().get("content", [])
+                if conteudo:
+                    pac_data = conteudo[0]
+                    pac_nome = pac_data.get("nome_completo", pac_data.get("nome", pac_nome))
+                    if pac_data.get("data_nascimento"): pac_nasc = pac_data.get("data_nascimento")
+                    if pac_data.get("email1"): pac_email = pac_data.get("email1")
+
             payload_edit = {
                 "paciente_id": int(feegow_id),
+                "nome_completo": pac_nome,
+                "data_nascimento": pac_nasc,
+                "celular1": celular,
+                "email1": pac_email,
                 "convenio_id": convenio_id,
                 "plano_id": 0,
                 "matricula": matricula
             }
+            if cpf: payload_edit["cpf"] = cpf
+
             res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
             d_edit = res_edit.json()
             if res_edit.status_code != 200 or d_edit.get("success") == False:
                 msg_erro_convenio = d_edit.get("message", "Falha Edit API")
-                print(f"Erro ao editar convênio no Feegow: {d_edit}")
         except Exception as e: 
-            msg_erro_convenio = "Erro Conexão Edit"
-            print(f"Exceção ao editar Feegow: {e}")
+            msg_erro_convenio = f"Erro Conexão Edit: {e}"
 
-    # SALVAR FOTOS DE DOCUMENTOS
+    # 3. SALVAR FOTOS DE DOCUMENTOS NO PRONTUÁRIO FEEGOW
+    fotos_enviadas = []
     if feegow_id:
         feegow_id_int = int(feegow_id) 
         carteirinha_id = info.get("carteirinha_media_id")
         pedido_id = info.get("pedido_media_id")
-        fotos_enviadas = []
 
         if carteirinha_id:
             try:
@@ -218,7 +240,7 @@ def integrar_feegow(phone, info):
         
         return {"feegow_id": feegow_id_int, "feegow_status": status_final}
         
-    return {"feegow_status": "Erro na Integração"}
+    return {"feegow_status": f"Erro Integração: {msg_erro_convenio}"}
 
 # ==========================================
 # FUNÇÕES DE MENSAGERIA E IA
