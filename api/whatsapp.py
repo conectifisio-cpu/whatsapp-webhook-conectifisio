@@ -175,37 +175,24 @@ def integrar_feegow(phone, info):
     # 2. SE O PACIENTE JÁ EXISTIA, ATUALIZA O CONVÊNIO (EDIT BLINDADO)
     elif feegow_id and convenio_id > 0:
         try:
-            # O Pulo do Gato: Buscar os dados exatos do paciente no Feegow primeiro
-            res_pac = requests.get(f"{base_url}/patient/search?paciente_id={feegow_id}&photo=false", headers=headers, timeout=10)
-            
-            pac_nome = info.get("title", "Paciente")
-            pac_nasc = formatar_data_feegow(info.get("birthDate", ""))
-            pac_email = info.get("email", "")
-            
-            if res_pac.status_code == 200 and res_pac.json().get("success") != False:
-                conteudo = res_pac.json().get("content", [])
-                if conteudo:
-                    pac_data = conteudo[0]
-                    pac_nome = pac_data.get("nome_completo", pac_data.get("nome", pac_nome))
-                    if pac_data.get("data_nascimento"): pac_nasc = pac_data.get("data_nascimento")
-                    if pac_data.get("email1"): pac_email = pac_data.get("email1")
-
+            # FIX: Para evitar o bug do Feegow de "CPF já cadastrado",
+            # enviamos APENAS os dados essenciais para atualizar o convênio.
             payload_edit = {
                 "paciente_id": int(feegow_id),
-                "nome_completo": pac_nome,
-                "data_nascimento": pac_nasc,
-                "celular1": celular,
-                "email1": pac_email,
                 "convenio_id": convenio_id,
                 "plano_id": 0,
-                "matricula": matricula
+                "matricula": matricula,
+                "celular1": celular
             }
-            if cpf: payload_edit["cpf"] = cpf
+            if info.get("title") and info.get("title") != "Paciente Novo":
+                payload_edit["nome_completo"] = info.get("title")
 
             res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
             d_edit = res_edit.json()
+            
             if res_edit.status_code != 200 or d_edit.get("success") == False:
                 msg_erro_convenio = d_edit.get("message", "Falha Edit API")
+                print(f"Erro ao editar convênio no Feegow: {d_edit}")
         except Exception as e: 
             msg_erro_convenio = f"Erro Conexão Edit: {e}"
 
@@ -332,7 +319,6 @@ def webhook():
             msg_recebida = "Anexo Recebido"
             media_id = message.get(msg_type, {}).get("id")
 
-        # FIX 1: O comando de Reset NÃO APAGA o CPF, para o paciente nunca perder o status de Veterano
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
@@ -346,7 +332,6 @@ def webhook():
 
         status = info.get("status", "triagem")
         
-        # FIX 2: Proteção Absoluta contra anexos indesejados e "lixo"
         estados_anexo_permitido = [
             "foto_carteirinha", 
             "foto_pedido_medico", 
@@ -410,7 +395,6 @@ def webhook():
             else:
                 update_paciente(phone, {"unit": msg_recebida})
                 if is_veteran:
-                    # FIX: Veteranos pulam a etapa de pedir o nome, evitando o loop.
                     nome_salvo = info.get("title", "Paciente")
                     update_paciente(phone, {"status": "menu_veterano"})
                     botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
@@ -420,7 +404,6 @@ def webhook():
                     responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
 
         elif status == "cadastrando_nome":
-            # PROTEÇÃO: Impede envio de números ou textos curtos como "a"
             if len(msg_limpa) < 2 or msg_recebida.isdigit():
                 responder_texto(phone, "❌ Por favor, digite um nome válido contendo letras.")
             else:
@@ -494,8 +477,6 @@ def webhook():
             elif msg_recebida == "Fisio Neurológica":
                 update_paciente(phone, {"servico": msg_recebida, "status": "triagem_neuro"})
                 botoes = [{"id": "n1", "title": "1️⃣ Auxílio integral"}, {"id": "n2", "title": "2️⃣ Auxílio parcial"}, {"id": "n3", "title": "3️⃣ Autonomia total"}]
-                
-                # 🩺 MANUAL DE IDENTIDADE: NEURO APLICADO
                 texto_neuro = (
                     "Queremos garantir que sua experiência na Conectifisio seja a mais confortável e segura possível. 😊\n\n"
                     "Poderia nos contar em qual dessas opções de suporte você se enquadra hoje?\n\n"
@@ -885,7 +866,6 @@ def webhook():
                 
                 update_paciente(phone, update_data)
                 
-                # 🩺 MANUAL DE IDENTIDADE: MENSAGEM FINAL DE AGENDA
                 texto_final = (
                     f"Período selecionado com sucesso! ✅\n\n"
                     f"Agora, nossa equipe de recepção está verificando as agendas para encontrar o melhor horário para você dentro desse período.\n\n"
