@@ -683,11 +683,11 @@ def webhook():
                 enviar_botoes(phone, f"⚠️ O seu plano *{convenio_selecionado}* não possui cobertura direta para *{servico}* na nossa clínica.\n\nNo entanto, você pode realizar o atendimento de forma Particular e emitimos o recibo para você solicitar o reembolso ao plano. Deseja seguir no particular?", botoes)
             else:
                 if is_veteran:
-                    update_paciente(phone, {"convenio": convenio_selecionado, "status": "foto_carteirinha"})
-                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nComo você já é nosso paciente, pulei o preenchimento de CPF e E-mail! Por favor, envie uma FOTO NÍTIDA da sua carteirinha.")
+                    update_paciente(phone, {"convenio": convenio_selecionado, "status": "num_carteirinha"})
+                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nComo você já é nosso paciente, pulei o preenchimento de CPF e E-mail! Para atualizarmos o seu cadastro, qual o NÚMERO DA SUA NOVA CARTEIRINHA? (Apenas números)")
                 else:
                     update_paciente(phone, {"convenio": convenio_selecionado, "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
+                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):"))
 
         elif status == "cobertura_recusada":
             if "Particular" in msg_recebida:
