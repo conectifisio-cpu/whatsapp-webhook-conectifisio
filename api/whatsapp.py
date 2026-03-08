@@ -172,6 +172,9 @@ def integrar_feegow(phone, info):
         try:
             payload_edit = {
                 "paciente_id": int(feegow_id),
+                "nome_completo": info.get("title", "Paciente"),
+                "cpf": cpf,
+                "celular1": celular,
                 "convenio_id": convenio_id,
                 "plano_id": 0,
                 "matricula": matricula
@@ -179,9 +182,11 @@ def integrar_feegow(phone, info):
             res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
             d_edit = res_edit.json()
             if res_edit.status_code != 200 or d_edit.get("success") == False:
-                msg_erro_convenio = "Falha Edit"
-        except: 
+                msg_erro_convenio = d_edit.get("message", "Falha Edit API")
+                print(f"Erro ao editar convênio no Feegow: {d_edit}")
+        except Exception as e: 
             msg_erro_convenio = "Erro Conexão Edit"
+            print(f"Exceção ao editar Feegow: {e}")
 
     # SALVAR FOTOS DE DOCUMENTOS
     if feegow_id:
