@@ -223,6 +223,7 @@ def chamar_gemini(query):
     if not API_KEY: return None
     query_segura = query[:300]
     
+    # 🩺 IDENTIDADE VERBAL APLICADA AQUI
     system_prompt = (
         "Atue como o Assistente Virtual da clínica Conectifisio. Seu tom de voz deve ser brasileiro (PT-BR), "
         "acolhedor e focado na experiência do paciente. Substitua termos clínicos negativos (como 'dependência') "
@@ -305,9 +306,9 @@ def webhook():
             msg_recebida = "Anexo Recebido"
             media_id = message.get(msg_type, {}).get("id")
 
-        # FIX 1: O recomeçar agora manda para 'escolhendo_unidade' para evitar o envio duplo dos botões de unidade
+        # FIX 1: O comando de Reset NÃO APAGA o CPF, para o paciente nunca perder o status de Veterano
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
-            update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": "", "cpf": ""})
+            update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
             enviar_botoes(phone, "Atendimento reiniciado. 🔄\n\nEm qual unidade deseja ser atendido?", botoes)
             return jsonify({"status": "reset"}), 200
@@ -319,7 +320,7 @@ def webhook():
 
         status = info.get("status", "triagem")
         
-        # FIX 2: Proteção Absoluta contra anexos indesejados (Impede que a foto vire o nome do paciente)
+        # FIX 2: Proteção Absoluta contra anexos indesejados e "lixo"
         estados_anexo_permitido = [
             "foto_carteirinha", 
             "foto_pedido_medico", 
@@ -381,14 +382,21 @@ def webhook():
                  botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
                  enviar_botoes(phone, "Por favor, utilize os botões abaixo para escolher a unidade:", botoes)
             else:
-                update_paciente(phone, {"unit": msg_recebida, "status": "cadastrando_nome"})
-                responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
+                update_paciente(phone, {"unit": msg_recebida})
+                if is_veteran:
+                    # FIX: Veteranos pulam a etapa de pedir o nome, evitando o loop.
+                    nome_salvo = info.get("title", "Paciente")
+                    update_paciente(phone, {"status": "menu_veterano"})
+                    botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
+                    enviar_botoes(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nOlá, {nome_salvo}! ✨ Que bom ter você de volta. Como posso te ajudar hoje?", botoes)
+                else:
+                    update_paciente(phone, {"status": "cadastrando_nome"})
+                    responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
 
         elif status == "cadastrando_nome":
-            if is_veteran:
-                update_paciente(phone, {"title": msg_recebida, "status": "menu_veterano"})
-                botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
-                enviar_botoes(phone, f"Olá, {msg_recebida}! ✨ Que bom ter você de volta. Como posso te ajudar hoje?", botoes)
+            # PROTEÇÃO: Impede envio de números ou textos curtos como "a"
+            if len(msg_limpa) < 2 or msg_recebida.isdigit():
+                responder_texto(phone, "❌ Por favor, digite um nome válido contendo letras.")
             else:
                 update_paciente(phone, {"title": msg_recebida, "status": "escolhendo_especialidade"})
                 secoes = [{"title": "Nossos Serviços", "rows": [
@@ -456,10 +464,12 @@ def webhook():
                 enviar_botoes(phone, "Voltando ao menu principal. Como posso ajudar?", botoes)
             elif msg_recebida in ["Recovery", "Liberação Miofascial"]:
                 update_paciente(phone, {"servico": msg_recebida, "modalidade": "Particular", "status": "cadastrando_queixa"})
-                responder_texto(phone, f"Ótima escolha para performance em {msg_recebida}! 🚀\n\nPara garantirmos que o especialista ideal atenda você, me conte brevemente: o que te trouxe aqui hoje?")
+                responder_texto(phone, f"Ótima escolha para performance em {msg_recebida}! 🚀\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe aqui hoje?")
             elif msg_recebida == "Fisio Neurológica":
                 update_paciente(phone, {"servico": msg_recebida, "status": "triagem_neuro"})
-                botoes = [{"id": "n1", "title": "1️⃣ Integral"}, {"id": "n2", "title": "2️⃣ Parcial"}, {"id": "n3", "title": "3️⃣ Autonomia total"}]
+                botoes = [{"id": "n1", "title": "1️⃣ Auxílio integral"}, {"id": "n2", "title": "2️⃣ Auxílio parcial"}, {"id": "n3", "title": "3️⃣ Autonomia total"}]
+                
+                # 🩺 MANUAL DE IDENTIDADE: NEURO APLICADO
                 texto_neuro = (
                     "Queremos garantir que sua experiência na Conectifisio seja a mais confortável e segura possível. 😊\n\n"
                     "Poderia nos contar em qual dessas opções de suporte você se enquadra hoje?\n\n"
@@ -485,7 +495,7 @@ def webhook():
                     enviar_lista(phone, "Excelente escolha! 🧘‍♀️ O Pilates é fundamental para a correção postural e fortalecimento.\n\nPara passarmos as informações corretas de horários e valores, como você pretende realizar as aulas?", "Ver Opções", secoes)
             else:
                 update_paciente(phone, {"servico": msg_recebida, "status": "cadastrando_queixa"})
-                responder_texto(phone, f"Entendido! {msg_recebida} selecionada. ✅\n\nPara garantirmos que o especialista ideal atenda você, me conte brevemente: o que te trouxe à clínica hoje?")
+                responder_texto(phone, f"Entendido! {msg_recebida} selecionada. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
 
         elif status == "transferencia_pilates":
             if "Sim" in msg_recebida or "mudar" in msg_recebida.lower():
@@ -556,10 +566,12 @@ def webhook():
                     responder_texto(phone, "Para finalizarmos seu cadastro, por favor, digite seu NOME COMPLETO:")
             
             elif status == "pilates_part_nome":
-                update_paciente(phone, {"title": msg_recebida, "status": "pilates_part_cpf"})
-                responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+                if len(msg_limpa) < 2 or msg_recebida.isdigit():
+                    responder_texto(phone, "❌ Por favor, digite um nome válido.")
+                else:
+                    update_paciente(phone, {"title": msg_recebida, "status": "pilates_part_cpf"})
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
             
-            # FIX 3: O Feegow agora é pesquisado OBRIGATORIAMENTE em todas as coletas de CPF
             elif status == "pilates_part_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
                 if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
@@ -570,20 +582,29 @@ def webhook():
                         responder_texto(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna. 👩‍⚕️")
                     else:
                         update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_part_nasc"})
-                        responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+                        responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
             
             elif status == "pilates_part_nasc":
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_part_email"})
-                responder_texto(phone, "Para completarmos, qual seu melhor E-MAIL?")
+                if not re.match(r'^\d{2}/\d{2}/\d{4}$', msg_recebida):
+                    responder_texto(phone, "❌ Formato inválido. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+                else:
+                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_part_email"})
+                    responder_texto(phone, "Para completarmos, qual seu melhor E-MAIL?")
+            
             elif status == "pilates_part_email":
-                update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
-                responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário. Aguarde um instante! 👩‍⚕️")
+                if "@" not in msg_recebida or "." not in msg_recebida:
+                    responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário. Aguarde um instante! 👩‍⚕️")
                 
             elif status == "pilates_app_nome_completo":
-                update_paciente(phone, {"title": msg_recebida, "status": "pilates_app_cpf"})
-                responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+                if len(msg_limpa) < 2 or msg_recebida.isdigit():
+                    responder_texto(phone, "❌ Por favor, digite um nome válido.")
+                else:
+                    update_paciente(phone, {"title": msg_recebida, "status": "pilates_app_cpf"})
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança, digite o seu CPF (apenas os 11 números):")
             
-            # FIX 3: Busca no Feegow no fluxo Pilates App
             elif status == "pilates_app_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
                 if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
@@ -595,15 +616,23 @@ def webhook():
                         enviar_botoes(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨ Qual desses aplicativos você utiliza para o seu plano?", botoes)
                     else:
                         update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_app_nasc"})
-                        responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+                        responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
             
             elif status == "pilates_app_nasc":
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_app_email"})
-                responder_texto(phone, "Para completarmos o registro, qual seu melhor E-MAIL?")
+                if not re.match(r'^\d{2}/\d{2}/\d{4}$', msg_recebida):
+                    responder_texto(phone, "❌ Formato inválido. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+                else:
+                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_app_email"})
+                    responder_texto(phone, "Para completarmos o registro, qual seu melhor E-MAIL?")
+            
             elif status == "pilates_app_email":
-                update_paciente(phone, {"email": msg_recebida, "status": "pilates_app"})
-                botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
-                enviar_botoes(phone, "Cadastro concluído! 🎉 Qual desses aplicativos você utiliza para o seu plano?", botoes)
+                if "@" not in msg_recebida or "." not in msg_recebida:
+                    responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "pilates_app"})
+                    botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
+                    enviar_botoes(phone, "Cadastro concluído! 🎉 Qual desses aplicativos você utiliza para o seu plano?", botoes)
+            
             elif status == "pilates_app":
                 update_paciente(phone, {"convenio": msg_recebida})
                 if msg_recebida == "Wellhub":
@@ -613,10 +642,12 @@ def webhook():
                     update_paciente(phone, {"status": "pilates_app_pref"})
                     botoes = [{"id": "pa_app", "title": "📱 App da Clínica"}, {"id": "pa_parceiro", "title": "🎫 App Parceiro"}]
                     enviar_botoes(phone, "Como prefere agendar as suas aulas? Pelo nosso App Exclusivo ou App do parceiro?", botoes)
+            
             elif status == "pilates_wellhub_id":
                 update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_pref"})
                 botoes = [{"id": "pa_app", "title": "📱 App da Clínica"}, {"id": "pa_parceiro", "title": "🎫 App Parceiro"}]
                 enviar_botoes(phone, "ID recebido! Como prefere agendar as suas aulas? Pelo nosso App Exclusivo ou App do parceiro?", botoes)
+            
             elif status == "pilates_app_pref":
                 if "Clínica" in msg_recebida:
                     update_paciente(phone, {"status": "pilates_app_os"})
@@ -625,16 +656,19 @@ def webhook():
                 else:
                     update_paciente(phone, {"status": "atendimento_humano"})
                     responder_texto(phone, "Perfeito! Você pode agendar as suas aulas diretamente pelo aplicativo parceiro.\n\nNossa equipe vai assumir o atendimento para alinhar detalhes. Aguarde! 👩‍⚕️")
+            
             elif status == "pilates_app_os":
                 update_paciente(phone, {"status": "atendimento_humano"})
                 link = "https://play.google.com/store/apps/details?id=br.com.nextfit.app" if "Android" in msg_recebida else "https://apps.apple.com/app/next-fit/id1451167440"
                 responder_texto(phone, f"Aqui está o seu link: {link}\n\n1️⃣ Baixe e abra o app\n2️⃣ Busque por: Conectifisio - Ictus Fisioterapia SCS\n\nNossa equipe vai liberar o seu acesso inicial em instantes! 👩‍⚕️")
 
             elif status == "pilates_caixa_nome":
-                update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
-                responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
+                if len(msg_limpa) < 2 or msg_recebida.isdigit():
+                    responder_texto(phone, "❌ Por favor, digite um nome válido.")
+                else:
+                    update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
             
-            # FIX 3: Busca no Feegow no fluxo Pilates Caixa
             elif status == "pilates_caixa_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
                 if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
@@ -648,16 +682,25 @@ def webhook():
                         responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
             
             elif status == "pilates_caixa_nasc":
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_caixa_email"})
-                responder_texto(phone, "Ótimo! Qual seu melhor E-MAIL?")
+                if not re.match(r'^\d{2}/\d{2}/\d{4}$', msg_recebida):
+                    responder_texto(phone, "❌ Formato inválido. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+                else:
+                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_caixa_email"})
+                    responder_texto(phone, "Ótimo! Qual seu melhor E-MAIL?")
+            
             elif status == "pilates_caixa_email":
-                update_paciente(phone, {"email": msg_recebida, "status": "pilates_caixa_foto_cart"})
-                responder_texto(phone, "Anotado! ✅ Agora envie uma FOTO NÍTIDA da sua carteirinha Saúde Caixa.")
+                if "@" not in msg_recebida or "." not in msg_recebida:
+                    responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "pilates_caixa_foto_cart"})
+                    responder_texto(phone, "Anotado! ✅ Agora envie uma FOTO NÍTIDA da sua carteirinha Saúde Caixa.")
+            
             elif status == "pilates_caixa_foto_cart":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto da sua carteirinha.")
                 else:
                     update_paciente(phone, {"status": "pilates_caixa_foto_pedido", "tem_foto_carteirinha": True, "carteirinha_media_id": media_id})
                     responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO.")
+            
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
                 else:
@@ -665,13 +708,13 @@ def webhook():
                     responder_texto(phone, "Dados recebidos! Nossa equipe vai assumir o atendimento para dar andamento. Aguarde! 👩‍⚕️")
 
         elif status == "triagem_neuro":
-            if "Integral" in msg_recebida:
+            if "integral" in msg_limpa or "1" in msg_limpa:
                 update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "atendimento_humano"})
                 responder_texto(phone, "Agradeço por compartilhar. ❤️ Devido à necessidade de auxílio integral, nosso fisioterapeuta responsável entrará em contato agora para te dar atenção total e organizar sua vinda. Aguarde um instante!")
             else:
-                mobilidade = "Preciso de auxílio parcial" if "Parcial" in msg_recebida else "Autonomia total"
+                mobilidade = "Preciso de auxílio parcial" if "parcial" in msg_limpa or "2" in msg_limpa else "Autonomia total"
                 update_paciente(phone, {"mobilidade": mobilidade, "status": "cadastrando_queixa"})
-                responder_texto(phone, "Anotado! ✅\n\nPara prepararmos o consultório com a estrutura correta, me conte brevemente: o que te trouxe à clínica hoje?")
+                responder_texto(phone, "Anotado! ✅\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe à clínica hoje?")
 
         elif status == "cadastrando_queixa":
             acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
@@ -745,10 +788,12 @@ def webhook():
                 enviar_lista(phone, "Sem problemas! Qual outro serviço você gostaria de buscar?", "Ver Serviços", secoes)
 
         elif status == "cadastrando_nome_completo":
-            update_paciente(phone, {"title": msg_recebida, "status": "cpf"})
-            responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+            if len(msg_limpa) < 2 or msg_recebida.isdigit():
+                responder_texto(phone, "❌ Por favor, digite um nome válido.")
+            else:
+                update_paciente(phone, {"title": msg_recebida, "status": "cpf"})
+                responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
 
-        # FIX 3: Busca no Feegow no fluxo Clínico Principal
         elif status == "cpf":
             cpf_limpo = re.sub(r'\D', '', msg_recebida)
             if len(cpf_limpo) != 11:
@@ -764,17 +809,23 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
 
         elif status == "data_nascimento":
-            update_paciente(phone, {"birthDate": msg_recebida, "status": "coletando_email"})
-            responder_texto(phone, "Ótimo! Para finalizar seu cadastro, qual seu melhor E-MAIL?")
+            if not re.match(r'^\d{2}/\d{2}/\d{4}$', msg_recebida):
+                responder_texto(phone, "❌ Formato de data inválido. Por favor, digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+            else:
+                update_paciente(phone, {"birthDate": msg_recebida, "status": "coletando_email"})
+                responder_texto(phone, "Ótimo! Para finalizar seu cadastro, qual seu melhor E-MAIL?")
 
         elif status == "coletando_email":
-            if modalidade == "Particular":
-                update_paciente(phone, {"email": msg_recebida, "status": "agendando"})
-                botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
-                enviar_botoes(phone, "Cadastro concluído! 🎉\n\nQual o melhor período para verificarmos a agenda particular?", botoes)
+            if "@" not in msg_recebida or "." not in msg_recebida:
+                responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
             else:
-                update_paciente(phone, {"email": msg_recebida, "status": "num_carteirinha"})
-                responder_texto(phone, "Certo! E qual o NÚMERO DA CARTEIRINHA do seu plano? (apenas números)")
+                if modalidade == "Particular":
+                    update_paciente(phone, {"email": msg_recebida, "status": "agendando"})
+                    botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
+                    enviar_botoes(phone, "Cadastro concluído! 🎉\n\nQual o melhor período para verificarmos a agenda particular?", botoes)
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "num_carteirinha"})
+                    responder_texto(phone, "Certo! E qual o NÚMERO DA CARTEIRINHA do seu plano? (apenas números)")
 
         elif status == "num_carteirinha":
             num_limpo = re.sub(r'\D', '', msg_recebida)
@@ -808,9 +859,10 @@ def webhook():
                 
                 update_paciente(phone, update_data)
                 
+                # 🩺 MANUAL DE IDENTIDADE: MENSAGEM FINAL DE AGENDA
                 texto_final = (
-                    f"Período selecionado com sucesso! ✅\n"
-                    f"Agora, nossa equipe de recepção está verificando as agendas para encontrar o melhor horário para você dentro desse período.\n"
+                    f"Período selecionado com sucesso! ✅\n\n"
+                    f"Agora, nossa equipe de recepção está verificando as agendas para encontrar o melhor horário para você dentro desse período.\n\n"
                     f"Assim que finalizarem a conferência no sistema, voltaremos em instantes com as opções disponíveis para confirmarmos tudo. Fique de olho por aqui! 😊"
                 )
                 responder_texto(phone, texto_final)
