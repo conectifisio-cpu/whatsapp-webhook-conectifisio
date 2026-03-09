@@ -332,7 +332,7 @@ def webhook():
             msg_recebida = "Anexo Recebido"
             media_id = message.get(msg_type, {}).get("id")
 
-        # FIX: O comando de Reset NÃO APAGA o CPF, para o paciente nunca perder o status de Veterano
+        # FIX 1: O comando de Reset NÃO APAGA o CPF, para o paciente nunca perder o status de Veterano
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
@@ -345,8 +345,22 @@ def webhook():
             update_paciente(phone, info)
 
         status = info.get("status", "triagem")
+
+        # ==========================================
+        # 🛑 ESCUDO DE MUTE (PAUSA) E ARQUIVO
+        # ==========================================
+        if status == "pausado":
+            # O robô fica completamente mudo para a recepção poder conversar livremente
+            return jsonify({"status": "bot_silenciado"}), 200
+            
+        if status == "arquivado":
+            # Se o paciente estava no Log (Arquivado) e enviou mensagem hoje, ele é reativado na fila!
+            update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
+            botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
+            enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", botoes)
+            return jsonify({"status": "reativacao_arquivado"}), 200
         
-        # FIX: Proteção Absoluta contra anexos indesejados e "lixo"
+        # FIX 2: Proteção Absoluta contra anexos indesejados e "lixo"
         estados_anexo_permitido = [
             "foto_carteirinha", 
             "foto_pedido_medico", 
@@ -410,6 +424,7 @@ def webhook():
             else:
                 update_paciente(phone, {"unit": msg_recebida})
                 if is_veteran:
+                    # FIX: Veteranos pulam a etapa de pedir o nome, evitando o loop.
                     nome_salvo = info.get("title", "Paciente")
                     update_paciente(phone, {"status": "menu_veterano"})
                     botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
@@ -675,7 +690,7 @@ def webhook():
                     responder_texto(phone, "❌ Por favor, digite um nome válido.")
                 else:
                     update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
-                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
             
             elif status == "pilates_caixa_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
@@ -907,7 +922,7 @@ def verify_or_data():
         except Exception as e:
             return jsonify({"error": str(e), "items": []}), 500
 
-    # NOVO: Rota para o Dashboard arquivar/finalizar atendimentos
+    # NOVO: Rota para o Dashboard arquivar/finalizar atendimentos e mutar
     if request.args.get("action") == "update_status":
         try:
             if not db: return jsonify({"success": False, "error": "Sem DB"}), 200
