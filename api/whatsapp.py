@@ -350,7 +350,12 @@ def webhook():
         # 🛑 ESCUDO DE MUTE (PAUSA) E ARQUIVO
         # ==========================================
         if status == "pausado":
-            # O robô fica completamente mudo para a recepção poder conversar livremente
+            # Se o paciente responder enquanto o robô está pausado, guarda a mensagem para o Painel ler
+            if msg_type == "text":
+                update_paciente(phone, {
+                    "ultima_mensagem_paciente": msg_recebida,
+                    "unread": True # Acende a notificação vermelha no painel
+                })
             return jsonify({"status": "bot_silenciado"}), 200
             
         if status == "arquivado":
@@ -670,19 +675,26 @@ def webhook():
                     botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
                     enviar_botoes(phone, "Cadastro concluído! 🎉 Qual desses aplicativos você utiliza para o seu plano?", botoes)
             
-            # --- FIX: PILATES APP SIMPLIFICADO ---
+            # --- FIX: PILATES APP SIMPLIFICADO COM PERIODO ---
             elif status == "pilates_app":
                 update_paciente(phone, {"convenio": msg_recebida})
                 if msg_recebida == "Wellhub":
                     update_paciente(phone, {"status": "pilates_wellhub_id"})
                     responder_texto(phone, "Por favor, informe o seu Wellhub ID.")
                 else:
-                    update_paciente(phone, {"status": "atendimento_humano"})
-                    responder_texto(phone, "Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula. Aguarde um instante! 👩‍⚕️")
+                    update_paciente(phone, {"status": "pilates_app_periodo"})
+                    botoes = [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}]
+                    enviar_botoes(phone, "Tudo certo com o Totalpass! ✅ Para agilizarmos o agendamento, qual o melhor período para você?", botoes)
             
             elif status == "pilates_wellhub_id":
-                update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "atendimento_humano"})
-                responder_texto(phone, "ID recebido com sucesso! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula. Aguarde um instante! 👩‍⚕️")
+                update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_periodo"})
+                botoes = [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}]
+                enviar_botoes(phone, "ID recebido com sucesso! ✅ Para agilizarmos o agendamento, qual o melhor período para você?", botoes)
+                
+            elif status == "pilates_app_periodo":
+                periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
+                update_paciente(phone, {"periodo": msg_recebida, "status": "atendimento_humano"})
+                responder_texto(phone, f"Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula no período da {periodo_limpo}. Aguarde um instante! 👩‍⚕️")
             # -------------------------------------
 
             elif status == "pilates_caixa_nome":
@@ -690,7 +702,7 @@ def webhook():
                     responder_texto(phone, "❌ Por favor, digite um nome válido.")
                 else:
                     update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
-                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
             
             elif status == "pilates_caixa_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
@@ -725,10 +737,17 @@ def webhook():
                     responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO.")
             
             elif status == "pilates_caixa_foto_pedido":
-                if not tem_anexo: responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
+                if not tem_anexo: 
+                    responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
                 else:
-                    update_paciente(phone, {"status": "atendimento_humano", "tem_foto_pedido": True, "pedido_media_id": media_id})
-                    responder_texto(phone, "Dados recebidos! Nossa equipe vai assumir o atendimento para dar andamento. Aguarde! 👩‍⚕️")
+                    update_paciente(phone, {"status": "pilates_caixa_periodo", "tem_foto_pedido": True, "pedido_media_id": media_id})
+                    botoes = [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}]
+                    enviar_botoes(phone, "Documentação recebida com sucesso! ✅ Para agilizarmos o agendamento, qual o melhor período para você?", botoes)
+            
+            elif status == "pilates_caixa_periodo":
+                periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
+                update_paciente(phone, {"periodo": msg_recebida, "status": "atendimento_humano"})
+                responder_texto(phone, f"Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula no período da {periodo_limpo}. Aguarde um instante! 👩‍⚕️")
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
@@ -957,7 +976,7 @@ def chat_manual():
         
         # 2. Pausa o robô (Mute) para o paciente e salva a interação
         if res and res.status_code == 200:
-            update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message})
+            update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message, "unread": False})
             return jsonify({"success": True}), 200
         else:
             return jsonify({"success": False, "error": "Falha na Meta API"}), 500
