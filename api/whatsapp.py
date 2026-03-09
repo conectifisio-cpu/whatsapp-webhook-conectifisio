@@ -937,5 +937,33 @@ def verify_or_data():
             
     return "Acesso Negado ou Rota Incorreta", 403
 
+# ==========================================
+# NOVA ROTA: CHAT MANUAL DO DASHBOARD
+# ==========================================
+@app.route("/api/chat/send", methods=["POST", "OPTIONS"])
+def chat_manual():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+    try:
+        data = request.get_json()
+        phone = data.get("phone")
+        message = data.get("message")
+        
+        if not phone or not message:
+            return jsonify({"success": False, "error": "Faltam parâmetros"}), 400
+            
+        # 1. Dispara a mensagem via Meta API
+        res = responder_texto(phone, message)
+        
+        # 2. Pausa o robô (Mute) para o paciente e salva a interação
+        if res and res.status_code == 200:
+            update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message})
+            return jsonify({"success": True}), 200
+        else:
+            return jsonify({"success": False, "error": "Falha na Meta API"}), 500
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(port=5000)
