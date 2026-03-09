@@ -175,24 +175,37 @@ def integrar_feegow(phone, info):
     # 2. SE O PACIENTE JÁ EXISTIA, ATUALIZA O CONVÊNIO (EDIT BLINDADO)
     elif feegow_id and convenio_id > 0:
         try:
-            # FIX: Para evitar o bug do Feegow de "CPF já cadastrado",
-            # enviamos APENAS os dados essenciais para atualizar o convênio.
+            # O Pulo do Gato: Buscar os dados exatos do paciente no Feegow primeiro
+            res_pac = requests.get(f"{base_url}/patient/search?paciente_id={feegow_id}&photo=false", headers=headers, timeout=10)
+            
+            pac_nome = info.get("title", "Paciente")
+            pac_nasc = formatar_data_feegow(info.get("birthDate", ""))
+            pac_email = info.get("email", "")
+            
+            if res_pac.status_code == 200 and res_pac.json().get("success") != False:
+                conteudo = res_pac.json().get("content", [])
+                if conteudo:
+                    pac_data = conteudo[0]
+                    pac_nome = pac_data.get("nome_completo", pac_data.get("nome", pac_nome))
+                    if pac_data.get("data_nascimento"): pac_nasc = pac_data.get("data_nascimento")
+                    if pac_data.get("email1"): pac_email = pac_data.get("email1")
+
             payload_edit = {
                 "paciente_id": int(feegow_id),
+                "nome_completo": pac_nome,
+                "data_nascimento": pac_nasc,
+                "celular1": celular,
+                "email1": pac_email,
                 "convenio_id": convenio_id,
                 "plano_id": 0,
-                "matricula": matricula,
-                "celular1": celular
+                "matricula": matricula
             }
-            if info.get("title") and info.get("title") != "Paciente Novo":
-                payload_edit["nome_completo"] = info.get("title")
+            # Removido o envio de CPF propositadamente para evitar o bug da Feegow de "CPF já cadastrado"
 
             res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
             d_edit = res_edit.json()
-            
             if res_edit.status_code != 200 or d_edit.get("success") == False:
                 msg_erro_convenio = d_edit.get("message", "Falha Edit API")
-                print(f"Erro ao editar convênio no Feegow: {d_edit}")
         except Exception as e: 
             msg_erro_convenio = f"Erro Conexão Edit: {e}"
 
@@ -319,6 +332,7 @@ def webhook():
             msg_recebida = "Anexo Recebido"
             media_id = message.get(msg_type, {}).get("id")
 
+        # FIX: O comando de Reset NÃO APAGA o CPF, para o paciente nunca perder o status de Veterano
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
@@ -332,6 +346,7 @@ def webhook():
 
         status = info.get("status", "triagem")
         
+        # FIX: Proteção Absoluta contra anexos indesejados e "lixo"
         estados_anexo_permitido = [
             "foto_carteirinha", 
             "foto_pedido_medico", 
@@ -640,41 +655,27 @@ def webhook():
                     botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
                     enviar_botoes(phone, "Cadastro concluído! 🎉 Qual desses aplicativos você utiliza para o seu plano?", botoes)
             
+            # --- FIX: PILATES APP SIMPLIFICADO ---
             elif status == "pilates_app":
                 update_paciente(phone, {"convenio": msg_recebida})
                 if msg_recebida == "Wellhub":
                     update_paciente(phone, {"status": "pilates_wellhub_id"})
                     responder_texto(phone, "Por favor, informe o seu Wellhub ID.")
                 else:
-                    update_paciente(phone, {"status": "pilates_app_pref"})
-                    botoes = [{"id": "pa_app", "title": "📱 App da Clínica"}, {"id": "pa_parceiro", "title": "🎫 App Parceiro"}]
-                    enviar_botoes(phone, "Como prefere agendar as suas aulas? Pelo nosso App Exclusivo ou App do parceiro?", botoes)
+                    update_paciente(phone, {"status": "atendimento_humano"})
+                    responder_texto(phone, "Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula. Aguarde um instante! 👩‍⚕️")
             
             elif status == "pilates_wellhub_id":
-                update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_pref"})
-                botoes = [{"id": "pa_app", "title": "📱 App da Clínica"}, {"id": "pa_parceiro", "title": "🎫 App Parceiro"}]
-                enviar_botoes(phone, "ID recebido! Como prefere agendar as suas aulas? Pelo nosso App Exclusivo ou App do parceiro?", botoes)
-            
-            elif status == "pilates_app_pref":
-                if "Clínica" in msg_recebida:
-                    update_paciente(phone, {"status": "pilates_app_os"})
-                    botoes = [{"id": "os_android", "title": "🤖 Android"}, {"id": "os_ios", "title": "🍏 iPhone (iOS)"}]
-                    enviar_botoes(phone, "Ótima escolha! Para eu te enviar o link de download correto, qual é o sistema do seu celular?", botoes)
-                else:
-                    update_paciente(phone, {"status": "atendimento_humano"})
-                    responder_texto(phone, "Perfeito! Você pode agendar as suas aulas diretamente pelo aplicativo parceiro.\n\nNossa equipe vai assumir o atendimento para alinhar detalhes. Aguarde! 👩‍⚕️")
-            
-            elif status == "pilates_app_os":
-                update_paciente(phone, {"status": "atendimento_humano"})
-                link = "https://play.google.com/store/apps/details?id=br.com.nextfit.app" if "Android" in msg_recebida else "https://apps.apple.com/app/next-fit/id1451167440"
-                responder_texto(phone, f"Aqui está o seu link: {link}\n\n1️⃣ Baixe e abra o app\n2️⃣ Busque por: Conectifisio - Ictus Fisioterapia SCS\n\nNossa equipe vai liberar o seu acesso inicial em instantes! 👩‍⚕️")
+                update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "atendimento_humano"})
+                responder_texto(phone, "ID recebido com sucesso! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula. Aguarde um instante! 👩‍⚕️")
+            # -------------------------------------
 
             elif status == "pilates_caixa_nome":
                 if len(msg_limpa) < 2 or msg_recebida.isdigit():
                     responder_texto(phone, "❌ Por favor, digite um nome válido.")
                 else:
                     update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
-                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
             
             elif status == "pilates_caixa_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
@@ -905,6 +906,19 @@ def verify_or_data():
             return jsonify({"items": patients}), 200
         except Exception as e:
             return jsonify({"error": str(e), "items": []}), 500
+
+    # NOVO: Rota para o Dashboard arquivar/finalizar atendimentos
+    if request.args.get("action") == "update_status":
+        try:
+            if not db: return jsonify({"success": False, "error": "Sem DB"}), 200
+            phone = request.args.get("phone")
+            new_status = request.args.get("status")
+            if phone and new_status:
+                db.collection("PatientsKanban").document(phone).set({"status": new_status}, merge=True)
+                return jsonify({"success": True}), 200
+            return jsonify({"success": False, "error": "Parâmetros faltando"}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
             
     return "Acesso Negado ou Rota Incorreta", 403
 
