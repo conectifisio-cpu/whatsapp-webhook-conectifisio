@@ -54,7 +54,6 @@ def update_paciente(phone, data):
 # FUNÇÕES DO FEEGOW (CADASTRO E FOTOS)
 # ==========================================
 def formatar_data_feegow(data_br):
-    """Garante o formato YYYY-MM-DD mesmo se o paciente digitar sem barras"""
     data_limpa = re.sub(r'\D', '', str(data_br))
     if len(data_limpa) == 8:
         return f"{data_limpa[4:]}-{data_limpa[2:4]}-{data_limpa[:2]}"
@@ -86,7 +85,6 @@ def verificar_cobertura(convenio, servico):
     return True
 
 def baixar_midia_whatsapp(media_id):
-    """Baixa a foto do WhatsApp da Meta e converte para Base64 para o Feegow"""
     if not media_id or not WHATSAPP_TOKEN: return None
     try:
         url_info = f"https://graph.facebook.com/v18.0/{media_id}"
@@ -94,7 +92,6 @@ def baixar_midia_whatsapp(media_id):
         res_info = requests.get(url_info, headers=headers, timeout=10)
         
         if res_info.status_code != 200: 
-            print(f"Erro ao buscar media info: {res_info.text}")
             return None
         
         media_url = res_info.json().get("url")
@@ -102,13 +99,11 @@ def baixar_midia_whatsapp(media_id):
         
         res_download = requests.get(media_url, headers=headers, timeout=15)
         if res_download.status_code != 200: 
-            print("Erro no download da imagem da Meta")
             return None
         
         b64_data = base64.b64encode(res_download.content).decode('utf-8')
         return f"data:{mime_type};base64,{b64_data}"
     except Exception as e:
-        print(f"Erro ao baixar foto da Meta: {e}")
         return None
 
 def buscar_feegow_por_cpf(cpf):
@@ -148,7 +143,6 @@ def integrar_feegow(phone, info):
     matricula = info.get("numCarteirinha", "")
     msg_erro_convenio = ""
 
-    # 1. Se não existe no Feegow, CRIA O PACIENTE NOVO
     if not feegow_id:
         payload_create = {
             "nome_completo": info.get("title", "Paciente Sem Nome"),
@@ -167,17 +161,11 @@ def integrar_feegow(phone, info):
             dados_c = res_create.json()
             if res_create.status_code == 200 and dados_c.get("success") != False:
                 feegow_id = dados_c.get("content", {}).get("paciente_id") or dados_c.get("paciente_id")
-            else:
-                msg_erro_convenio = f"Erro Criação: {dados_c.get('message', '')}"
-        except Exception as e: 
-            msg_erro_convenio = "Falha de Conexão Feegow"
+        except Exception as e: pass
 
-    # 2. SE O PACIENTE JÁ EXISTIA, ATUALIZA O CONVÊNIO (EDIT BLINDADO)
     elif feegow_id and convenio_id > 0:
         try:
-            # O Pulo do Gato: Buscar os dados exatos do paciente no Feegow primeiro
             res_pac = requests.get(f"{base_url}/patient/search?paciente_id={feegow_id}&photo=false", headers=headers, timeout=10)
-            
             pac_nome = info.get("title", "Paciente")
             pac_nasc = formatar_data_feegow(info.get("birthDate", ""))
             pac_email = info.get("email", "")
@@ -200,16 +188,9 @@ def integrar_feegow(phone, info):
                 "plano_id": 0,
                 "matricula": matricula
             }
-            # Removido o envio de CPF propositadamente para evitar o bug da Feegow de "CPF já cadastrado"
-
             res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=headers, timeout=10)
-            d_edit = res_edit.json()
-            if res_edit.status_code != 200 or d_edit.get("success") == False:
-                msg_erro_convenio = d_edit.get("message", "Falha Edit API")
-        except Exception as e: 
-            msg_erro_convenio = f"Erro Conexão Edit: {e}"
+        except Exception as e: pass
 
-    # 3. SALVAR FOTOS DE DOCUMENTOS NO PRONTUÁRIO FEEGOW
     fotos_enviadas = []
     if feegow_id:
         feegow_id_int = int(feegow_id) 
@@ -235,12 +216,11 @@ def integrar_feegow(phone, info):
             except: pass
 
         status_final = f"ID: {feegow_id_int}"
-        if msg_erro_convenio: status_final += f" | Erro Conv: {msg_erro_convenio}"
         if fotos_enviadas: status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
         
         return {"feegow_id": feegow_id_int, "feegow_status": status_final}
         
-    return {"feegow_status": f"Erro Integração: {msg_erro_convenio}"}
+    return {"feegow_status": "Erro Integração"}
 
 # ==========================================
 # FUNÇÕES DE MENSAGERIA E IA
@@ -249,13 +229,9 @@ def chamar_gemini(query):
     if not API_KEY: return None
     query_segura = query[:300]
     
-    # 🩺 IDENTIDADE VERBAL APLICADA AQUI
     system_prompt = (
         "Atue como o Assistente Virtual da clínica Conectifisio. Seu tom de voz deve ser brasileiro (PT-BR), "
-        "acolhedor e focado na experiência do paciente. Substitua termos clínicos negativos (como 'dependência') "
-        "por termos de suporte (como 'necessidade de auxílio'). Sempre justifique perguntas técnicas como sendo "
-        "para o conforto e segurança do paciente. Use emojis de forma estratégica para organizar menus e transmitir "
-        "empatia. Mantenha as mensagens curtas e bem formatadas para leitura no WhatsApp. "
+        "acolhedor e focado na experiência do paciente. Mantenha as mensagens curtas e empáticas. "
         "O paciente enviará a sua queixa clínica a seguir. Responda com UMA única frase empática se solidarizando com a dor dele."
     )
     
@@ -303,7 +279,7 @@ def enviar_lista(to, texto, titulo_botao, secoes):
     return enviar_whatsapp(to, payload)
 
 # ==========================================
-# WEBHOOK POST
+# WEBHOOK POST (RECEBER MENSAGENS)
 # ==========================================
 @app.route("/api/whatsapp", methods=["POST"])
 def webhook():
@@ -332,7 +308,6 @@ def webhook():
             msg_recebida = "Anexo Recebido"
             media_id = message.get(msg_type, {}).get("id")
 
-        # FIX 1: O comando de Reset NÃO APAGA o CPF, para o paciente nunca perder o status de Veterano
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
@@ -347,42 +322,34 @@ def webhook():
         status = info.get("status", "triagem")
 
         # ==========================================
-        # 🛑 ESCUDO DE MUTE (PAUSA) E ARQUIVO
+        # 🛑 ESCUDO DE MUTE (PAUSA) E RESPOSTA DO PACIENTE
         # ==========================================
         if status == "pausado":
-            # Se o paciente responder enquanto o robô está pausado, guarda a mensagem para o Painel ler
+            # SE O PACIENTE RESPONDER QUANDO O ROBÔ ESTÁ MUDO, GUARDA A MENSAGEM NO PAINEL!
             if msg_type == "text":
                 update_paciente(phone, {
                     "ultima_mensagem_paciente": msg_recebida,
-                    "unread": True # Acende a notificação vermelha no painel
+                    "unread": True # Faz a bolinha vermelha piscar no Dashboard
                 })
             return jsonify({"status": "bot_silenciado"}), 200
             
         if status == "arquivado":
-            # Se o paciente estava no Log (Arquivado) e enviou mensagem hoje, ele é reativado na fila!
             update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
             botoes = [{"id": "u1", "title": "SCS"}, {"id": "u2", "title": "Ipiranga"}]
             enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", botoes)
             return jsonify({"status": "reativacao_arquivado"}), 200
         
-        # FIX 2: Proteção Absoluta contra anexos indesejados e "lixo"
-        estados_anexo_permitido = [
-            "foto_carteirinha", 
-            "foto_pedido_medico", 
-            "pilates_caixa_foto_cart", 
-            "pilates_caixa_foto_pedido"
-        ]
-        
+        estados_anexo_permitido = ["foto_carteirinha", "foto_pedido_medico", "pilates_caixa_foto_cart", "pilates_caixa_foto_pedido"]
         if tem_anexo and status not in estados_anexo_permitido:
             responder_texto(phone, "❌ Por favor, responda com *texto* ou clique nos botões. Ainda não é o momento de enviar fotos ou arquivos.")
             return jsonify({"status": "anexo_bloqueado"}), 200
 
         servico = info.get("servico", "")
         cpf_salvo = info.get("cpf", "")
-        
         is_veteran = True if len(re.sub(r'\D', '', cpf_salvo or "")) >= 11 else False
         modalidade = info.get("modalidade", "")
         convenio = info.get("convenio", "")
+        
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade and servico in ["Recovery", "Liberação Miofascial"]: modalidade = "Particular"
 
@@ -429,7 +396,6 @@ def webhook():
             else:
                 update_paciente(phone, {"unit": msg_recebida})
                 if is_veteran:
-                    # FIX: Veteranos pulam a etapa de pedir o nome, evitando o loop.
                     nome_salvo = info.get("title", "Paciente")
                     update_paciente(phone, {"status": "menu_veterano"})
                     botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
@@ -675,7 +641,7 @@ def webhook():
                     botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
                     enviar_botoes(phone, "Cadastro concluído! 🎉 Qual desses aplicativos você utiliza para o seu plano?", botoes)
             
-            # --- FIX: PILATES APP SIMPLIFICADO COM PERIODO ---
+            # --- FIX: PILATES APP SIMPLIFICADO COM PERÍODO (WELLHUB E TOTALPASS) ---
             elif status == "pilates_app":
                 update_paciente(phone, {"convenio": msg_recebida})
                 if msg_recebida == "Wellhub":
@@ -695,7 +661,7 @@ def webhook():
                 periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
                 update_paciente(phone, {"periodo": msg_recebida, "status": "atendimento_humano"})
                 responder_texto(phone, f"Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula no período da {periodo_limpo}. Aguarde um instante! 👩‍⚕️")
-            # -------------------------------------
+            # -------------------------------------------------------------
 
             elif status == "pilates_caixa_nome":
                 if len(msg_limpa) < 2 or msg_recebida.isdigit():
@@ -736,6 +702,7 @@ def webhook():
                     update_paciente(phone, {"status": "pilates_caixa_foto_pedido", "tem_foto_carteirinha": True, "carteirinha_media_id": media_id})
                     responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO.")
             
+            # --- FIX: PILATES SAÚDE CAIXA COM PERÍODO ---
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: 
                     responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
@@ -748,6 +715,7 @@ def webhook():
                 periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
                 update_paciente(phone, {"periodo": msg_recebida, "status": "atendimento_humano"})
                 responder_texto(phone, f"Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula no período da {periodo_limpo}. Aguarde um instante! 👩‍⚕️")
+            # -------------------------------------------------------------
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
@@ -918,7 +886,7 @@ def webhook():
         return jsonify({"status": "error", "message": str(e)}), 200
 
 # ==========================================
-# WEBHOOK GET
+# WEBHOOK GET (PARA O DASHBOARD LER)
 # ==========================================
 @app.route("/api/whatsapp", methods=["GET"])
 def verify_or_data():
@@ -927,7 +895,8 @@ def verify_or_data():
         
     if request.args.get("action") == "get_patients":
         try:
-            if not db: return jsonify({"items": []}), 200
+            if not db: return jsonify({"error": "Erro Crítico: Banco Firebase não está conectado", "items": []}), 500
+            
             docs = db.collection("PatientsKanban").stream()
             patients = []
             for doc in docs:
@@ -939,9 +908,9 @@ def verify_or_data():
                 patients.append(data)
             return jsonify({"items": patients}), 200
         except Exception as e:
-            return jsonify({"error": str(e), "items": []}), 500
+            return jsonify({"error": f"Erro Interno no Python: {str(e)}", "items": []}), 500
 
-    # NOVO: Rota para o Dashboard arquivar/finalizar atendimentos e mutar
+    # Rota para o Dashboard arquivar/finalizar atendimentos e mutar
     if request.args.get("action") == "update_status":
         try:
             if not db: return jsonify({"success": False, "error": "Sem DB"}), 200
@@ -974,7 +943,7 @@ def chat_manual():
         # 1. Dispara a mensagem via Meta API
         res = responder_texto(phone, message)
         
-        # 2. Pausa o robô (Mute) para o paciente e salva a interação
+        # 2. Pausa o robô (Mute) para o paciente e salva a interação, tirando o aviso de não lido
         if res and res.status_code == 200:
             update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message, "unread": False})
             return jsonify({"success": True}), 200
