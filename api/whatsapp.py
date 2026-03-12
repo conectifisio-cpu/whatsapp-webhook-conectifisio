@@ -4,6 +4,7 @@ import traceback
 import re
 import json
 import base64
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import firebase_admin
@@ -51,7 +52,7 @@ def update_paciente(phone, data):
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 # ==========================================
-# FUNÇÕES DO FEEGOW (CADASTRO E FOTOS)
+# FUNÇÕES DO FEEGOW (CADASTRO, FOTOS E AGENDA)
 # ==========================================
 def formatar_data_feegow(data_br):
     data_limpa = re.sub(r'\D', '', str(data_br))
@@ -109,7 +110,12 @@ def baixar_midia_whatsapp(media_id):
 def buscar_feegow_por_cpf(cpf):
     if not FEEGOW_TOKEN: return None
     cpf_limpo = re.sub(r'\D', '', str(cpf))
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    # 🛑 CRACHÁ VIP INSERIDO AQUI PARA BURLAR WAF/CLOUDFLARE
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "User-Agent": "Integracao-Conectifisio/1.0"
+    }
     url = f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false"
     try:
         res = requests.get(url, headers=headers, timeout=10)
@@ -125,6 +131,44 @@ def buscar_feegow_por_cpf(cpf):
     except: pass
     return None
 
+def consultar_agenda_feegow(paciente_id):
+    """Consulta agendamentos futuros do paciente utilizando o crachá VIP"""
+    if not FEEGOW_TOKEN or not paciente_id: return None
+    hoje = datetime.now()
+    futuro = hoje + timedelta(days=90)
+    str_hoje = hoje.strftime("%Y-%m-%d")
+    str_futuro = futuro.strftime("%Y-%m-%d")
+    
+    # 🛑 CRACHÁ VIP INSERIDO AQUI PARA BURLAR WAF/CLOUDFLARE
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "User-Agent": "Integracao-Conectifisio/1.0"
+    }
+    url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={str_hoje}&data_end={str_futuro}"
+    
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            dados = res.json()
+            if dados.get("success") != False and dados.get("content"):
+                sessoes = []
+                for a in dados["content"]:
+                    status_nome = str(a.get("status_nome", a.get("status", ""))).lower()
+                    if "cancelado" not in status_nome and "falta" not in status_nome:
+                        data_raw = str(a.get("data", "")).split("T")[0]
+                        if data_raw >= str_hoje:
+                            proc = a.get("procedimento_nome") or (a.get("procedimento", {}).get("nome") if isinstance(a.get("procedimento"), dict) else "Sessão")
+                            hora = str(a.get("horario") or a.get("hora", ""))[:5]
+                            parts = data_raw.split('-')
+                            if len(parts) == 3:
+                                data_br = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                                sessoes.append(f"🗓️ *{data_br} às {hora}* - {proc}")
+                return sessoes
+    except Exception as e: 
+        print(f"Erro ao consultar agenda: {e}")
+    return None
+
 def integrar_feegow(phone, info):
     if not FEEGOW_TOKEN: return {"feegow_status": "Token Ausente"}
     cpf = re.sub(r'\D', '', info.get("cpf", ""))
@@ -134,7 +178,12 @@ def integrar_feegow(phone, info):
         busca = buscar_feegow_por_cpf(cpf)
         if busca: feegow_id = busca['id']
 
-    headers = {"Content-Type": "application/json", "x-access-token": FEEGOW_TOKEN}
+    # 🛑 CRACHÁ VIP INSERIDO AQUI PARA BURLAR WAF/CLOUDFLARE
+    headers = {
+        "Content-Type": "application/json", 
+        "x-access-token": FEEGOW_TOKEN,
+        "User-Agent": "Integracao-Conectifisio/1.0"
+    }
     base_url = "https://api.feegow.com/v1/api"
     celular = re.sub(r'\D', '', phone)
     if celular.startswith("55") and len(celular) > 11: celular = celular[2:]
@@ -325,11 +374,10 @@ def webhook():
         # 🛑 ESCUDO DE MUTE (PAUSA) E RESPOSTA DO PACIENTE
         # ==========================================
         if status == "pausado":
-            # SE O PACIENTE RESPONDER QUANDO O ROBÔ ESTÁ MUDO, GUARDA A MENSAGEM NO PAINEL!
             if msg_type == "text":
                 update_paciente(phone, {
                     "ultima_mensagem_paciente": msg_recebida,
-                    "unread": True # Faz a bolinha vermelha piscar no Dashboard
+                    "unread": True 
                 })
             return jsonify({"status": "bot_silenciado"}), 200
             
@@ -398,8 +446,13 @@ def webhook():
                 if is_veteran:
                     nome_salvo = info.get("title", "Paciente")
                     update_paciente(phone, {"status": "menu_veterano"})
-                    botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
-                    enviar_botoes(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nOlá, {nome_salvo}! ✨ Que bom ter você de volta. Como posso te ajudar hoje?", botoes)
+                    secoes = [{"title": "Como posso ajudar?", "rows": [
+                        {"id": "v1", "title": "🗓️ Reagendar Sessão"},
+                        {"id": "v2", "title": "🔄 Nova Guia/Tratamento"},
+                        {"id": "v3", "title": "➕ Novo Serviço"},
+                        {"id": "v4", "title": "📁 Secretaria"}
+                    ]}]
+                    enviar_lista(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nOlá, {nome_salvo}! ✨ Que bom ter você de volta. Como posso te ajudar hoje?", "Ver Opções", secoes)
                 else:
                     update_paciente(phone, {"status": "cadastrando_nome"})
                     responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
@@ -427,7 +480,8 @@ def webhook():
                     {"id": "e7", "title": "Liberação Miofascial"}, {"id": "e8", "title": "⬅️ Voltar ao Menu"}
                 ]}]
                 enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Serviços", secoes)
-            elif "Nova Guia" in msg_recebida or "Retomar" in msg_recebida:
+            
+            elif "Nova Guia" in msg_recebida or "Tratamento" in msg_recebida:
                 conv_salvo = info.get("convenio", "")
                 if conv_salvo and conv_salvo.lower() != "particular":
                     update_paciente(phone, {"status": "confirmando_convenio_salvo"})
@@ -437,10 +491,47 @@ def webhook():
                     update_paciente(phone, {"status": "modalidade"})
                     botoes = [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}]
                     enviar_botoes(phone, "As novas sessões serão pelo seu CONVÊNIO ou de forma PARTICULAR?", botoes)
+            
             elif "Reagendar" in msg_recebida:
+                feegow_id = info.get("feegow_id")
+                cpf_salvo = info.get("cpf", "")
+                if not feegow_id and cpf_salvo:
+                    busca = buscar_feegow_por_cpf(cpf_salvo)
+                    if busca: feegow_id = busca['id']
+                
+                sessoes = consultar_agenda_feegow(feegow_id) if feegow_id else None
                 update_paciente(phone, {"status": "agendando"})
                 botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
-                enviar_botoes(phone, "Certo! Vamos organizar isso. Qual o melhor período para você? ☀️ ⛅", botoes)
+                
+                if sessoes and len(sessoes) > 0:
+                    texto_sessoes = "\n".join(sessoes[:5])
+                    enviar_botoes(phone, f"Localizei suas próximas sessões:\n\n{texto_sessoes}\n\nPara qual período você gostaria de reagendar o seu atendimento? ☀️ ⛅", botoes)
+                else:
+                    enviar_botoes(phone, "Não encontrei agendamentos futuros próximos no sistema. Mas não se preocupe, vamos organizar isso agora! 😊\n\nQual o melhor período para você? ☀️ ⛅", botoes)
+            
+            elif "Secretaria" in msg_recebida:
+                update_paciente(phone, {"status": "menu_secretaria"})
+                secoes = [{"title": "Serviços de Secretaria", "rows": [
+                    {"id": "s1", "title": "Declaração de Horas"},
+                    {"id": "s2", "title": "Relatórios Médicos"},
+                    {"id": "s3", "title": "Atualização Cadastral"},
+                    {"id": "s4", "title": "⬅️ Voltar ao Menu"}
+                ]}]
+                enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
+
+        elif status == "menu_secretaria":
+            if "Voltar" in msg_recebida:
+                update_paciente(phone, {"status": "menu_veterano"})
+                secoes = [{"title": "Como posso ajudar?", "rows": [
+                    {"id": "v1", "title": "🗓️ Reagendar Sessão"},
+                    {"id": "v2", "title": "🔄 Nova Guia/Tratamento"},
+                    {"id": "v3", "title": "➕ Novo Serviço"},
+                    {"id": "v4", "title": "📁 Secretaria"}
+                ]}]
+                enviar_lista(phone, "Voltando ao menu principal. Como posso ajudar?", "Ver Opções", secoes)
+            else:
+                update_paciente(phone, {"status": "atendimento_humano", "queixa": f"[SECRETARIA]: {msg_recebida}"})
+                responder_texto(phone, f"A sua solicitação para '{msg_recebida}' foi registada com sucesso. A nossa equipa de secretaria vai assumir o atendimento para providenciar os detalhes. Aguarde um instante! 👩‍💻")
 
         elif status == "confirmando_convenio_salvo":
             if "manter" in msg_recebida.lower():
@@ -470,8 +561,13 @@ def webhook():
         elif status == "escolhendo_especialidade":
             if "Voltar" in msg_recebida:
                 update_paciente(phone, {"status": "menu_veterano"})
-                botoes = [{"id": "v1", "title": "🗓️ Reagendar"}, {"id": "v2", "title": "🔄 Nova Guia"}, {"id": "v3", "title": "➕ Novo Serviço"}]
-                enviar_botoes(phone, "Voltando ao menu principal. Como posso ajudar?", botoes)
+                secoes = [{"title": "Como posso ajudar?", "rows": [
+                    {"id": "v1", "title": "🗓️ Reagendar Sessão"},
+                    {"id": "v2", "title": "🔄 Nova Guia/Tratamento"},
+                    {"id": "v3", "title": "➕ Novo Serviço"},
+                    {"id": "v4", "title": "📁 Secretaria"}
+                ]}]
+                enviar_lista(phone, "Voltando ao menu principal. Como posso ajudar?", "Ver Opções", secoes)
             elif msg_recebida in ["Recovery", "Liberação Miofascial"]:
                 update_paciente(phone, {"servico": msg_recebida, "modalidade": "Particular", "status": "cadastrando_queixa"})
                 responder_texto(phone, f"Ótima escolha para performance em {msg_recebida}! 🚀\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe aqui hoje?")
@@ -641,7 +737,6 @@ def webhook():
                     botoes = [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}]
                     enviar_botoes(phone, "Cadastro concluído! 🎉 Qual desses aplicativos você utiliza para o seu plano?", botoes)
             
-            # --- FIX: PILATES APP SIMPLIFICADO COM PERÍODO (WELLHUB E TOTALPASS) ---
             elif status == "pilates_app":
                 update_paciente(phone, {"convenio": msg_recebida})
                 if msg_recebida == "Wellhub":
@@ -661,14 +756,13 @@ def webhook():
                 periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
                 update_paciente(phone, {"periodo": msg_recebida, "status": "atendimento_humano"})
                 responder_texto(phone, f"Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula no período da {periodo_limpo}. Aguarde um instante! 👩‍⚕️")
-            # -------------------------------------------------------------
 
             elif status == "pilates_caixa_nome":
                 if len(msg_limpa) < 2 or msg_recebida.isdigit():
                     responder_texto(phone, "❌ Por favor, digite um nome válido.")
                 else:
                     update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
-                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
+                    responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite seu CPF (apenas os 11 números):")
             
             elif status == "pilates_caixa_cpf":
                 cpf_limpo = re.sub(r'\D', '', msg_recebida)
@@ -702,7 +796,6 @@ def webhook():
                     update_paciente(phone, {"status": "pilates_caixa_foto_pedido", "tem_foto_carteirinha": True, "carteirinha_media_id": media_id})
                     responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO ou PDF DO SEU PEDIDO MÉDICO.")
             
-            # --- FIX: PILATES SAÚDE CAIXA COM PERÍODO ---
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: 
                     responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
@@ -715,7 +808,6 @@ def webhook():
                 periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
                 update_paciente(phone, {"periodo": msg_recebida, "status": "atendimento_humano"})
                 responder_texto(phone, f"Tudo pronto! 🎉 Nossa equipe vai assumir o atendimento agora mesmo para alinhar os detalhes da sua aula no período da {periodo_limpo}. Aguarde um instante! 👩‍⚕️")
-            # -------------------------------------------------------------
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
@@ -940,10 +1032,8 @@ def chat_manual():
         if not phone or not message:
             return jsonify({"success": False, "error": "Faltam parâmetros"}), 400
             
-        # 1. Dispara a mensagem via Meta API
         res = responder_texto(phone, message)
         
-        # 2. Pausa o robô (Mute) para o paciente e salva a interação, tirando o aviso de não lido
         if res and res.status_code == 200:
             update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message, "unread": False})
             return jsonify({"success": True}), 200
