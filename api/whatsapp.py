@@ -37,6 +37,52 @@ if firebase_creds_json and not firebase_admin._apps:
         print(f"❌ Erro Crítico ao carregar Firebase: {e}")
 
 db = firestore.client() if firebase_admin._apps else None
+# ==========================================
+# INICIALIZAÇÃO DO FIREBASE
+# ==========================================
+# ... (seu código do firebase que já está aí)
+db = firestore.client() if firebase_admin._apps else None
+
+# ---------------------------------------------------------
+# --- INÍCIO DO CÓDIGO TEMPORÁRIO DE REGISTRO DA META ---
+# ---------------------------------------------------------
+def registrar_numero_oficial():
+    try:
+        # Coloque o seu PIN de 6 dígitos que você acabou de criar aqui:
+        pin = "123456" 
+        
+        if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+            print("❌ Vercel não encontrou as variáveis de ambiente.")
+            return
+
+        url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/register"
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        dados = {
+            "messaging_product": "whatsapp",
+            "pin": pin
+        }
+        
+        print("Enviando comando de registro para a Meta...")
+        # requests já foi importado no topo do seu arquivo
+        resposta = requests.post(url, headers=headers, json=dados)
+        print("RESPOSTA DO REGISTRO DA META:", resposta.json())
+        
+    except Exception as e:
+        print("Erro ao tentar registrar:", e)
+
+# A Vercel vai executar isso sozinha assim que o arquivo carregar
+registrar_numero_oficial()
+# ---------------------------------------------------------
+# --- FIM DO CÓDIGO TEMPORÁRIO DE REGISTRO DA META ---
+# ---------------------------------------------------------
+
+# ==========================================
+# FUNÇÕES DE MEMÓRIA (FIREBASE)
+# ==========================================
+# ... (o resto do seu código continua normal daqui para baixo)
 
 # ==========================================
 # FUNÇÕES DE MEMÓRIA (FIREBASE)
