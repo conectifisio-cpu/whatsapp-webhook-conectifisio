@@ -6,6 +6,13 @@ from firebase_admin import credentials, firestore
 
 app = Flask(__name__)
 
+@app.after_request
+def add_cors_headers(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE
 # ==========================================
@@ -282,11 +289,14 @@ def enviar_lista(to, texto, titulo_botao, secoes):
     })
 
 # ==========================================
-# WEBHOOK PRINCIPAL (GET E POST)
+# WEBHOOK PRINCIPAL
 # ==========================================
-@app.route("/api/whatsapp", methods=["GET", "POST"])
+@app.route("/api/whatsapp", methods=["GET", "POST", "OPTIONS"])
 def webhook():
-    # --- GET: DASHBOARD E VERIFICAÇÃO ---
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+        
+    # --- GET: DASHBOARD ---
     if request.method == "GET":
         if request.args.get("hub.verify_token") == VERIFY_TOKEN: return request.args.get("hub.challenge"), 200
             
