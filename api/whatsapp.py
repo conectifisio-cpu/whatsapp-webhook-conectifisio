@@ -843,7 +843,15 @@ def webhook():
                     if resultado_feegow: update_data.update(resultado_feegow)
                 
                 update_paciente(phone, update_data)
-                responder_texto(phone, f"Período selecionado com sucesso! ✅\n\nAgora, nossa equipe de recepção está verificando as agendas para encontrar o melhor horário para você na {msg_recebida}.\n\nAssim que finalizarem a conferência na Feegow, voltaremos com as opções. Fique de olho por aqui! 😊")
+                
+                if modalidade == "Convênio":
+                    texto_final = (f"Período selecionado com sucesso! ✅ Nossa recepção já recebeu as suas fotos e está realizando a validação de cobertura junto ao seu plano de saúde.\n\n"
+                                   f"Assim que a elegibilidade for confirmada, enviaremos as opções de horários disponíveis. Fique de olho por aqui! 😊")
+                else:
+                    texto_final = (f"Período selecionado com sucesso! ✅ Tudo pronto! A nossa equipe já está verificando a disponibilidade dos nossos especialistas para o período da {msg_recebida}.\n\n"
+                                   f"Em instantes voltaremos com as opções exatas para confirmarmos o seu horário. Fique de olho por aqui! ✨")
+                
+                responder_texto(phone, texto_final)
             else:
                 enviar_botoes(phone, "Por favor, escolha o período:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
 
