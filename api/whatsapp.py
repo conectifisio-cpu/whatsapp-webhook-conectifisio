@@ -39,6 +39,37 @@ if firebase_creds_json:
     except: pass
 
 # ==========================================
+# VALIDAÇÕES DE SEGURANÇA (MATEMÁTICA E CALENDÁRIO)
+# ==========================================
+def validar_cpf(cpf_str):
+    cpf = re.sub(r'\D', '', str(cpf_str))
+    # Verifica tamanho e se não são todos os números iguais (ex: 111.111.111-11)
+    if len(cpf) != 11 or len(set(cpf)) == 1:
+        return False
+    # Cálculo oficial dos dígitos verificadores (Receita Federal)
+    for i in range(9, 11):
+        valor = sum((int(cpf[num]) * ((i + 1) - num) for num in range(0, i)))
+        digito = ((valor * 10) % 11) % 10
+        if digito != int(cpf[i]):
+            return False
+    return True
+
+def validar_data_nascimento(data_str):
+    if not re.match(r'^\d{2}/\d{2}/\d{4}$', data_str):
+        return False
+    try:
+        # Tenta converter para uma data real do calendário
+        data_obj = datetime.strptime(data_str, "%d/%m/%Y")
+        hoje = datetime.now()
+        # Regra: Não pode nascer no futuro e não pode ter mais de 120 anos
+        if data_obj > hoje or data_obj.year < (hoje.year - 120):
+            return False
+        return True
+    except ValueError:
+        # Pega erros como 31 de Fevereiro
+        return False
+
+# ==========================================
 # FUNÇÕES DE MEMÓRIA E HISTÓRICO (FIREBASE)
 # ==========================================
 def get_paciente(phone):
@@ -339,6 +370,18 @@ def webhook():
         phone = message["from"]
         msg_type = message.get("type")
         
+        # ==========================================
+        # 🛡️ ESCUDOS DE PROTEÇÃO (ÁUDIO, CHAMADAS E LIXO)
+        # ==========================================
+        if msg_type in ["audio", "voice"]:
+            responder_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Para que eu possa te ajudar agora, por favor use os botões ou digite sua resposta.")
+            return jsonify({"status": "audio_bloqueado"}), 200
+            
+        if msg_type not in ["text", "interactive", "image", "document"]:
+            # Ignora silenciosamente chamadas perdidas, figurinhas, reações, etc.
+            return jsonify({"status": "tipo_ignorado"}), 200
+        # ==========================================
+        
         msg_recebida = "Anexo Recebido"
         tem_anexo = False
         media_id = None 
@@ -567,8 +610,27 @@ def webhook():
                     responder_texto(phone, "Para agilizarmos seu atendimento de Pilates, por favor, digite seu NOME E SOBRENOME:")
             
             elif status == "pilates_part_nome":
-                update_paciente(phone, {"title": msg_recebida, "status": "atendimento_humano"})
-                responder_texto(phone, "Nome registrado! ✅ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna por aqui. 👩‍⚕️")
+                update_paciente(phone, {"title": msg_recebida, "status": "pilates_part_cpf"})
+                responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança, digite o seu CPF (apenas os 11 números):")
+
+            elif status == "pilates_part_cpf":
+                cpf_limpo = re.sub(r'\D', '', msg_recebida)
+                if not validar_cpf(cpf_limpo): responder_texto(phone, "❌ CPF inválido. Por favor, verifique os números e digite novamente:")
+                else:
+                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_part_nasc"})
+                    responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+
+            elif status == "pilates_part_nasc":
+                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
+                else:
+                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_part_email"})
+                    responder_texto(phone, "Para completarmos, qual seu melhor E-MAIL?")
+
+            elif status == "pilates_part_email":
+                if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário. Aguarde um instante! 👩‍⚕️")
 
             elif status == "pilates_app":
                 update_paciente(phone, {"convenio": msg_recebida})
@@ -594,8 +656,27 @@ def webhook():
                     responder_texto(phone, "Para finalizarmos, digite o seu NOME E SOBRENOME:")
 
             elif status == "pilates_app_nome_completo":
-                update_paciente(phone, {"title": msg_recebida, "status": "atendimento_humano"})
-                responder_texto(phone, "Nome registrado! ✅ Tudo pronto! Nossa equipe vai confirmar o seu horário de Pilates e logo retorna. 👩‍⚕️")
+                update_paciente(phone, {"title": msg_recebida, "status": "pilates_app_cpf"})
+                responder_texto(phone, "Nome registrado! ✅ Agora, digite o seu CPF (apenas os 11 números):")
+
+            elif status == "pilates_app_cpf":
+                cpf_limpo = re.sub(r'\D', '', msg_recebida)
+                if not validar_cpf(cpf_limpo): responder_texto(phone, "❌ CPF inválido. Por favor, verifique os números e digite novamente:")
+                else:
+                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_app_nasc"})
+                    responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+
+            elif status == "pilates_app_nasc":
+                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
+                else:
+                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_app_email"})
+                    responder_texto(phone, "Para completarmos o registro, qual seu melhor E-MAIL?")
+
+            elif status == "pilates_app_email":
+                if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    responder_texto(phone, "Cadastro concluído! 🎉 Nossa equipe vai confirmar o seu horário de Pilates e logo retorna. 👩‍⚕️")
 
             # Fluxo Caixa: Exige Documento
             elif status == "pilates_caixa_foto_pedido":
@@ -614,8 +695,27 @@ def webhook():
                     responder_texto(phone, "Para finalizarmos, por favor digite o seu NOME E SOBRENOME:")
 
             elif status == "pilates_caixa_nome":
-                update_paciente(phone, {"title": msg_recebida, "status": "atendimento_humano"})
-                responder_texto(phone, "Recebido! ✅ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna. 👩‍⚕️")
+                update_paciente(phone, {"title": msg_recebida, "status": "pilates_caixa_cpf"})
+                responder_texto(phone, "Nome registrado! ✅ Agora, digite seu CPF (apenas os 11 números):")
+
+            elif status == "pilates_caixa_cpf":
+                cpf_limpo = re.sub(r'\D', '', msg_recebida)
+                if not validar_cpf(cpf_limpo): responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números.")
+                else:
+                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pilates_caixa_nasc"})
+                    responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
+
+            elif status == "pilates_caixa_nasc":
+                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+                else:
+                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_caixa_email"})
+                    responder_texto(phone, "Ótimo! Qual seu melhor E-MAIL?")
+
+            elif status == "pilates_caixa_email":
+                if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
+                else:
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    responder_texto(phone, "Recebido! ✅ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna. 👩‍⚕️")
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
@@ -688,7 +788,8 @@ def webhook():
 
         elif status == "cpf":
             cpf_limpo = re.sub(r'\D', '', msg_recebida)
-            if len(cpf_limpo) != 11: responder_texto(phone, "❌ CPF inválido. Digite apenas os 11 números, sem pontos ou traços.")
+            if not validar_cpf(cpf_limpo):
+                responder_texto(phone, "❌ CPF inválido. Por favor, verifique os números e digite novamente:")
             else:
                 busca = buscar_feegow_por_cpf(cpf_limpo)
                 if busca:
@@ -699,7 +800,8 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
 
         elif status == "data_nascimento":
-            if not re.match(r'^\d{2}/\d{2}/\d{4}$', msg_recebida): responder_texto(phone, "❌ Formato de data inválido. Por favor, digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+            if not validar_data_nascimento(msg_recebida):
+                responder_texto(phone, "❌ Data de nascimento inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
             else:
                 update_paciente(phone, {"birthDate": msg_recebida, "status": "coletando_email"})
                 responder_texto(phone, "Ótimo! Para finalizar seu cadastro, qual seu melhor E-MAIL?")
