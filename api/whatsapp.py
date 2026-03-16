@@ -37,52 +37,6 @@ if firebase_creds_json and not firebase_admin._apps:
         print(f"❌ Erro Crítico ao carregar Firebase: {e}")
 
 db = firestore.client() if firebase_admin._apps else None
-# ==========================================
-# INICIALIZAÇÃO DO FIREBASE
-# ==========================================
-# ... (seu código do firebase que já está aí)
-db = firestore.client() if firebase_admin._apps else None
-
-# ---------------------------------------------------------
-# --- INÍCIO DO CÓDIGO TEMPORÁRIO DE REGISTRO DA META ---
-# ---------------------------------------------------------
-def registrar_numero_oficial():
-    try:
-        # Coloque o seu PIN de 6 dígitos que você acabou de criar aqui:
-        pin = "123456" 
-        
-        if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
-            print("❌ Vercel não encontrou as variáveis de ambiente.")
-            return
-
-        url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/register"
-        headers = {
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        dados = {
-            "messaging_product": "whatsapp",
-            "pin": pin
-        }
-        
-        print("Enviando comando de registro para a Meta...")
-        # requests já foi importado no topo do seu arquivo
-        resposta = requests.post(url, headers=headers, json=dados)
-        print("RESPOSTA DO REGISTRO DA META:", resposta.json())
-        
-    except Exception as e:
-        print("Erro ao tentar registrar:", e)
-
-# A Vercel vai executar isso sozinha assim que o arquivo carregar
-registrar_numero_oficial()
-# ---------------------------------------------------------
-# --- FIM DO CÓDIGO TEMPORÁRIO DE REGISTRO DA META ---
-# ---------------------------------------------------------
-
-# ==========================================
-# FUNÇÕES DE MEMÓRIA (FIREBASE)
-# ==========================================
-# ... (o resto do seu código continua normal daqui para baixo)
 
 # ==========================================
 # FUNÇÕES DE MEMÓRIA (FIREBASE)
@@ -156,7 +110,6 @@ def baixar_midia_whatsapp(media_id):
 def buscar_feegow_por_cpf(cpf):
     if not FEEGOW_TOKEN: return None
     cpf_limpo = re.sub(r'\D', '', str(cpf))
-    # 🛑 CRACHÁ VIP INSERIDO AQUI PARA BURLAR WAF/CLOUDFLARE
     headers = {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
@@ -178,14 +131,12 @@ def buscar_feegow_por_cpf(cpf):
     return None
 
 def consultar_agenda_feegow(paciente_id):
-    """Consulta agendamentos futuros do paciente utilizando o crachá VIP"""
     if not FEEGOW_TOKEN or not paciente_id: return None
     hoje = datetime.now()
     futuro = hoje + timedelta(days=90)
     str_hoje = hoje.strftime("%Y-%m-%d")
     str_futuro = futuro.strftime("%Y-%m-%d")
     
-    # 🛑 CRACHÁ VIP INSERIDO AQUI PARA BURLAR WAF/CLOUDFLARE
     headers = {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
@@ -224,7 +175,6 @@ def integrar_feegow(phone, info):
         busca = buscar_feegow_por_cpf(cpf)
         if busca: feegow_id = busca['id']
 
-    # 🛑 CRACHÁ VIP INSERIDO AQUI PARA BURLAR WAF/CLOUDFLARE
     headers = {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
@@ -416,9 +366,7 @@ def webhook():
 
         status = info.get("status", "triagem")
 
-        # ==========================================
-        # 🛑 ESCUDO DE MUTE (PAUSA) E RESPOSTA DO PACIENTE
-        # ==========================================
+        # 🛑 ESCUDO DE MUTE E ARQUIVADO
         if status == "pausado":
             if msg_type == "text":
                 update_paciente(phone, {
@@ -1024,13 +972,14 @@ def webhook():
         return jsonify({"status": "error", "message": str(e)}), 200
 
 # ==========================================
-# WEBHOOK GET (PARA O DASHBOARD LER)
+# WEBHOOK GET E ROTA DE REGISTRO (META)
 # ==========================================
 @app.route("/api/whatsapp", methods=["GET"])
 def verify_or_data():
     if request.args.get("hub.verify_token") == "conectifisio_2024_seguro":
         return request.args.get("hub.challenge"), 200
         
+    # Rota para puxar dados no Dashboard
     if request.args.get("action") == "get_patients":
         try:
             if not db: return jsonify({"error": "Erro Crítico: Banco Firebase não está conectado", "items": []}), 500
@@ -1048,7 +997,7 @@ def verify_or_data():
         except Exception as e:
             return jsonify({"error": f"Erro Interno no Python: {str(e)}", "items": []}), 500
 
-    # Rota para o Dashboard arquivar/finalizar atendimentos e mutar
+    # Rota para o Dashboard arquivar/finalizar atendimentos
     if request.args.get("action") == "update_status":
         try:
             if not db: return jsonify({"success": False, "error": "Sem DB"}), 200
@@ -1058,6 +1007,32 @@ def verify_or_data():
                 db.collection("PatientsKanban").document(phone).set({"status": new_status}, merge=True)
                 return jsonify({"success": True}), 200
             return jsonify({"success": False, "error": "Parâmetros faltando"}), 400
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # ==========================================
+    # 🔑 CHAVE MESTRA: REGISTRO DO NÚMERO (META)
+    # ==========================================
+    if request.args.get("registrar") == "sim":
+        if not PHONE_NUMBER_ID or not WHATSAPP_TOKEN:
+            return jsonify({"error": "Faltam chaves de ambiente"}), 500
+            
+        url_reg = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/register"
+        headers_reg = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        payload_reg = {
+            "messaging_product": "whatsapp",
+            "pin": "123456"
+        }
+        try:
+            res_reg = requests.post(url_reg, headers=headers_reg, json=payload_reg)
+            return jsonify({
+                "mensagem": "Comando de Registro Enviado", 
+                "status_code": res_reg.status_code, 
+                "resposta_da_meta": res_reg.json()
+            }), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
             
