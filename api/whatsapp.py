@@ -282,11 +282,11 @@ def enviar_lista(to, texto, titulo_botao, secoes):
     })
 
 # ==========================================
-# WEBHOOK PRINCIPAL
+# WEBHOOK PRINCIPAL (GET E POST)
 # ==========================================
 @app.route("/api/whatsapp", methods=["GET", "POST"])
 def webhook():
-    # --- GET: DASHBOARD ---
+    # --- GET: DASHBOARD E VERIFICAÇÃO ---
     if request.method == "GET":
         if request.args.get("hub.verify_token") == VERIFY_TOKEN: return request.args.get("hub.challenge"), 200
             
@@ -380,7 +380,7 @@ def webhook():
             return jsonify({"status": "anexo_bloqueado"}), 200
 
         servico = info.get("servico", "")
-        # Verificação de Veterano baseada na existência do Feegow ID!
+        # Verificação de Veterano baseada na existência do Feegow ID
         is_veteran = True if info.get("feegow_id") else False
         
         modalidade = info.get("modalidade", "")
