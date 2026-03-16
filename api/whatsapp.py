@@ -1,12 +1,3 @@
-Doutor Issa, peguei o culpado na hora a olhar para este erro 500! A culpa foi minha.
-
-Eu adicionei uma biblioteca chamada `flask_cors` (linha `from flask_cors import CORS`) no código anterior para tentar ajudar na comunicação com o seu Dashboard. O problema é que, como essa biblioteca não está instalada no seu servidor da Vercel (no arquivo `requirements.txt`), a Vercel "bateu na parede" na hora de ler o ficheiro e travou tudo com o erro `could not import "api/whatsapp.py"`.
-
-A solução é muito simples: **removi essa biblioteca do código**, pois não precisamos estritamente dela para o sistema funcionar!
-
-**Copie este código (já limpo e corrigido) e substitua no seu `api/whatsapp.py`:**
-
-```python
 import os, requests, traceback, re, json, base64
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
@@ -806,5 +797,3 @@ def chat_manual():
 
 if __name__ == "__main__":
     app.run(port=5000)
-
-```
