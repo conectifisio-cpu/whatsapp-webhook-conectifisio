@@ -43,10 +43,8 @@ if firebase_creds_json:
 # ==========================================
 def validar_cpf(cpf_str):
     cpf = re.sub(r'\D', '', str(cpf_str))
-    # Verifica tamanho e se não são todos os números iguais (ex: 111.111.111-11)
     if len(cpf) != 11 or len(set(cpf)) == 1:
         return False
-    # Cálculo oficial dos dígitos verificadores (Receita Federal)
     for i in range(9, 11):
         valor = sum((int(cpf[num]) * ((i + 1) - num) for num in range(0, i)))
         digito = ((valor * 10) % 11) % 10
@@ -58,15 +56,12 @@ def validar_data_nascimento(data_str):
     if not re.match(r'^\d{2}/\d{2}/\d{4}$', data_str):
         return False
     try:
-        # Tenta converter para uma data real do calendário
         data_obj = datetime.strptime(data_str, "%d/%m/%Y")
         hoje = datetime.now()
-        # Regra: Não pode nascer no futuro e não pode ter mais de 120 anos
         if data_obj > hoje or data_obj.year < (hoje.year - 120):
             return False
         return True
     except ValueError:
-        # Pega erros como 31 de Fevereiro
         return False
 
 # ==========================================
@@ -327,7 +322,7 @@ def webhook():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"}), 200
         
-    # --- GET: DASHBOARD ---
+    # --- GET: DASHBOARD E VERIFICAÇÃO ---
     if request.method == "GET":
         if request.args.get("hub.verify_token") == VERIFY_TOKEN: return request.args.get("hub.challenge"), 200
             
@@ -370,15 +365,20 @@ def webhook():
         phone = message["from"]
         msg_type = message.get("type")
         
+        info = get_paciente(phone)
+        status_atual = info.get("status", "triagem") if info else "triagem"
+
         # ==========================================
-        # 🛡️ ESCUDOS DE PROTEÇÃO (ÁUDIO, CHAMADAS E LIXO)
+        # 🛡️ ESCUDOS DE PROTEÇÃO (ÁUDIO E LIXO)
         # ==========================================
         if msg_type in ["audio", "voice"]:
-            responder_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Para que eu possa te ajudar agora, por favor use os botões ou digite sua resposta.")
+            if status_atual == "triagem":
+                responder_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Como este é o nosso primeiro contato, por favor, digite um simples 'Olá' para eu te mostrar as opções de atendimento!")
+            else:
+                responder_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Para não interrompermos o seu agendamento, por favor, responda com um texto curto ou clique nos botões acima.")
             return jsonify({"status": "audio_bloqueado"}), 200
             
         if msg_type not in ["text", "interactive", "image", "document"]:
-            # Ignora silenciosamente chamadas perdidas, figurinhas, reações, etc.
             return jsonify({"status": "tipo_ignorado"}), 200
         # ==========================================
         
@@ -397,6 +397,35 @@ def webhook():
         # Salva o que o paciente mandou no histórico do chat
         registrar_historico(phone, "paciente", "texto" if not tem_anexo else "anexo", msg_recebida)
 
+        # ==========================================
+        # 🚨 O BOTÃO DE PÂNICO (TRANSBORDO HUMANO)
+        # ==========================================
+        msg_limpa = msg_recebida.lower()
+        palavras_socorro = ["ajuda", "humano", "atendente", "recepção", "recepcao", "falar com alguém", "pessoa"]
+        if any(palavra in msg_limpa for palavra in palavras_socorro):
+            update_paciente(phone, {"status": "pausado", "ultima_mensagem_paciente": f"[PEDIDO DE AJUDA] {msg_recebida}"})
+            responder_texto(phone, "Entendido! Pausei o meu sistema automático e já avisei a nossa equipa. 🚨 Em instantes um atendente humano vai assumir esta conversa para te ajudar!")
+            return jsonify({"status": "pedido_ajuda"}), 200
+
+        # ==========================================
+        # 🚀 A MÁQUINA DO TEMPO (INTERCEPTAÇÃO DE INTENÇÃO)
+        # ==========================================
+        if msg_recebida in ["Particular", "Convênio"]:
+            update_paciente(phone, {"modalidade": msg_recebida})
+            if msg_recebida == "Particular":
+                status_atual = "agendando" if info.get("feegow_id") else "cadastrando_nome_completo"
+                update_paciente(phone, {"status": status_atual})
+                if info.get("feegow_id"):
+                    enviar_botoes(phone, "Perfeito! Como você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
+                else:
+                    responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
+                return jsonify({"status": "time_travel_particular"}), 200
+            elif msg_recebida == "Convênio":
+                update_paciente(phone, {"status": "nome_convenio"})
+                secoes = [{"title": "Convênios Aceitos", "rows": [{"id": "c1", "title": "Saúde Petrobras"}, {"id": "c2", "title": "Mediservice"}, {"id": "c3", "title": "Cassi"}, {"id": "c4", "title": "Geap Saúde"}, {"id": "c5", "title": "Amil"}, {"id": "c6", "title": "Bradesco Saúde"}, {"id": "c7", "title": "Porto Seguro Saúde"}, {"id": "c8", "title": "Prevent Senior"}, {"id": "c9", "title": "Saúde Caixa"}]}]
+                enviar_lista(phone, "Entendido! Selecione o seu plano de saúde para validarmos a cobertura:", "Ver Convênios", secoes)
+                return jsonify({"status": "time_travel_convenio"}), 200
+
         # 🛑 RESET GERAL
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
@@ -404,7 +433,6 @@ def webhook():
             return jsonify({"status": "reset"}), 200
 
         # --- BUSCA FEEGOW PELO TELEFONE ---
-        info = get_paciente(phone)
         if not info.get("feegow_id"):
             busca_tel = buscar_feegow_por_telefone(phone)
             if busca_tel:
@@ -433,7 +461,6 @@ def webhook():
             return jsonify({"status": "anexo_bloqueado"}), 200
 
         servico = info.get("servico", "")
-        # Verificação de Veterano baseada na existência do Feegow ID
         is_veteran = True if info.get("feegow_id") else False
         
         modalidade = info.get("modalidade", "")
@@ -441,7 +468,6 @@ def webhook():
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade and servico in ["Recovery", "Liberação Miofascial"]: modalidade = "Particular"
 
-        msg_limpa = msg_recebida.lower()
         if len(msg_limpa) <= 25 and (any(msg_limpa.startswith(w) for w in ["obrigad", "obg", "ok", "valeu", "certo", "tá bom", "perfeito", "beleza", "show"]) or any(char in msg_limpa for char in ["👍", "🙏", "❤️", "👏"])):
             if status in ["finalizado", "atendimento_humano"]:
                 responder_texto(phone, "Por nada! 😊 Nossa equipe já recebeu seus dados e confirmará tudo em instantes.")
