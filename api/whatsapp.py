@@ -97,7 +97,7 @@ def get_feegow_headers():
     return {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Integracao-Conectifisio/1.0"
+        "User-Agent": "Conectifisio-Integration/1.0"
     }
 
 def formatar_data_feegow(data_br):
@@ -178,7 +178,7 @@ def consultar_agenda_feegow(paciente_id):
     if not FEEGOW_TOKEN or not paciente_id: return None
     hoje = datetime.now()
     futuro = hoje + timedelta(days=90)
-    url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={hoje.strftime('%Y-%m-%d')}&data_end={futuro.strftime('%Y-%m-%d')}"
+    url = f"https://api.feegow.com.br/v1/appoints/search?paciente_id={paciente_id}&data_start={hoje.strftime('%Y-%m-%d')}&data_end={futuro.strftime('%Y-%m-%d')}"
     try:
         res = requests.get(url, headers=get_feegow_headers(), timeout=10)
         if res.status_code == 200:
@@ -532,7 +532,9 @@ def webhook():
             
             elif "Reagendar" in msg_recebida:
                 sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
-                update_paciente(phone, {"status": "agendando"})
+                # Correção do Limbo: Garante que o paciente não desaparece se não tiver modalidade
+                mod_salva = info.get("modalidade") if info.get("modalidade") else "Particular"
+                update_paciente(phone, {"status": "agendando", "modalidade": mod_salva})
                 botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
                 if sessoes and len(sessoes) > 0:
                     enviar_botoes(phone, f"Localizei suas próximas sessões:\n\n{chr(10).join(sessoes[:5])}\n\nPara qual período você gostaria de reagendar o seu atendimento? ☀️ ⛅", botoes)
