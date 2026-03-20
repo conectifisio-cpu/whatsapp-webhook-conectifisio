@@ -1,9 +1,9 @@
+
 import os, requests, traceback, re, json, base64
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 import firebase_admin
 from firebase_admin import credentials, firestore
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 app = Flask(__name__)
 
@@ -37,8 +37,7 @@ if firebase_creds_json:
             cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
         db = firestore.client()
-    except Exception as e:
-        print(f"Erro ao inicializar Firebase: {e}")
+    except: pass
 
 # ==========================================
 # VALIDAÇÕES DE SEGURANÇA (MATEMÁTICA E CALENDÁRIO)
@@ -69,19 +68,16 @@ def validar_data_nascimento(data_str):
 # ==========================================
 # FUNÇÕES DE MEMÓRIA E HISTÓRICO (FIREBASE)
 # ==========================================
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 def get_paciente(phone):
     if not db: return {}
     doc = db.collection("PatientsKanban").document(phone).get()
     return doc.to_dict() if doc.exists else {}
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 def update_paciente(phone, data):
     if not db: return
     data["lastInteraction"] = firestore.SERVER_TIMESTAMP
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 def registrar_historico(phone, remetente, tipo, conteudo):
     if not db: return
     nova_msg = {
@@ -96,13 +92,13 @@ def registrar_historico(phone, remetente, tipo, conteudo):
     }, merge=True)
 
 # ==========================================
-# INTEGRAÇÃO FEEGOW (COM RESILIÊNCIA - TENACITY)
+# INTEGRAÇÃO FEEGOW (BLINDADA CONTRA ERRO 403)
 # ==========================================
 def get_feegow_headers():
     return {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Conectifisio-Integration/2.0"
+        "User-Agent": "Conectifisio-Integration/1.0"
     }
 
 def formatar_data_feegow(data_br):
@@ -135,68 +131,72 @@ def verificar_cobertura(convenio, servico):
         if "caixa" not in conv: return False
     return True
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type(requests.exceptions.RequestException))
 def baixar_midia_whatsapp(media_id):
     if not media_id or not WHATSAPP_TOKEN: return None
-    url_info = f"https://graph.facebook.com/v19.0/{media_id}"
-    headers_wa = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-    res_info = requests.get(url_info, headers=headers_wa, timeout=10)
-    if res_info.status_code != 200: return None
-    media_url = res_info.json().get("url")
-    mime_type = res_info.json().get("mime_type", "image/jpeg")
-    res_download = requests.get(media_url, headers=headers_wa, timeout=15)
-    if res_download.status_code != 200: return None
-    b64_data = base64.b64encode(res_download.content).decode('utf-8')
-    return f"data:{mime_type};base64,{b64_data}"
+    try:
+        url_info = f"https://graph.facebook.com/v19.0/{media_id}"
+        headers_wa = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        res_info = requests.get(url_info, headers=headers_wa, timeout=10)
+        if res_info.status_code != 200: return None
+        media_url = res_info.json().get("url")
+        mime_type = res_info.json().get("mime_type", "image/jpeg")
+        res_download = requests.get(media_url, headers=headers_wa, timeout=15)
+        if res_download.status_code != 200: return None
+        b64_data = base64.b64encode(res_download.content).decode('utf-8')
+        return f"data:{mime_type};base64,{b64_data}"
+    except: return None
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type(requests.exceptions.RequestException))
 def buscar_feegow_por_telefone(phone):
     if not FEEGOW_TOKEN: return None
     celular = re.sub(r'\D', '', phone)
     if celular.startswith("55") and len(celular) > 11: celular = celular[2:]
     url = f"https://api.feegow.com/v1/api/patient/search?celular1={celular}&photo=false"
-    res = requests.get(url, headers=get_feegow_headers(), timeout=10)
-    if res.status_code == 200:
-        dados = res.json()
-        if dados.get("success") != False and dados.get("content"):
-            p = dados["content"][0] if isinstance(dados["content"], list) else dados["content"]
-            return {"id": p.get("paciente_id") or p.get("id"), "nome": p.get("nome_completo") or p.get("nome"), "cpf": p.get("cpf", "")}
+    try:
+        res = requests.get(url, headers=get_feegow_headers(), timeout=10)
+        if res.status_code == 200:
+            dados = res.json()
+            if dados.get("success") != False and dados.get("content"):
+                p = dados["content"][0] if isinstance(dados["content"], list) else dados["content"]
+                return {"id": p.get("paciente_id") or p.get("id"), "nome": p.get("nome_completo") or p.get("nome"), "cpf": p.get("cpf", "")}
+    except: pass
     return None
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type(requests.exceptions.RequestException))
 def buscar_feegow_por_cpf(cpf):
     if not FEEGOW_TOKEN: return None
     cpf_limpo = re.sub(r'\D', '', str(cpf))
     url = f"https://api.feegow.com/v1/api/patient/search?paciente_cpf={cpf_limpo}&photo=false"
-    res = requests.get(url, headers=get_feegow_headers(), timeout=10)
-    if res.status_code == 200:
-        dados = res.json()
-        if dados.get("success") != False and dados.get("content"):
-            p = dados["content"][0] if isinstance(dados["content"], list) else dados["content"]
-            return {"id": p.get("paciente_id") or p.get("id"), "nome": p.get("nome_completo") or p.get("nome")}
+    try:
+        res = requests.get(url, headers=get_feegow_headers(), timeout=10)
+        if res.status_code == 200:
+            dados = res.json()
+            if dados.get("success") != False and dados.get("content"):
+                p = dados["content"][0] if isinstance(dados["content"], list) else dados["content"]
+                return {"id": p.get("paciente_id") or p.get("id"), "nome": p.get("nome_completo") or p.get("nome")}
+    except: pass
     return None
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type(requests.exceptions.RequestException))
 def consultar_agenda_feegow(paciente_id):
     if not FEEGOW_TOKEN or not paciente_id: return None
     hoje = datetime.now()
     futuro = hoje + timedelta(days=90)
     url = f"https://api.feegow.com.br/v1/appoints/search?paciente_id={paciente_id}&data_start={hoje.strftime('%Y-%m-%d')}&data_end={futuro.strftime('%Y-%m-%d')}"
-    res = requests.get(url, headers=get_feegow_headers(), timeout=10)
-    if res.status_code == 200:
-        dados = res.json()
-        if dados.get("success") != False and dados.get("content"):
-            sessoes = []
-            for a in dados["content"]:
-                status_nome = str(a.get("status_nome", a.get("status", ""))).lower()
-                if "cancelado" not in status_nome and "falta" not in status_nome:
-                    data_raw = str(a.get("data", "")).split("T")[0]
-                    if data_raw >= hoje.strftime('%Y-%m-%d'):
-                        proc = a.get("procedimento_nome") or (a.get("procedimento", {}).get("nome") if isinstance(a.get("procedimento"), dict) else "Sessão")
-                        hora = str(a.get("horario") or a.get("hora", ""))[:5]
-                        parts = data_raw.split('-')
-                        if len(parts) == 3: sessoes.append(f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {proc}")
-            return sessoes
+    try:
+        res = requests.get(url, headers=get_feegow_headers(), timeout=10)
+        if res.status_code == 200:
+            dados = res.json()
+            if dados.get("success") != False and dados.get("content"):
+                sessoes = []
+                for a in dados["content"]:
+                    status_nome = str(a.get("status_nome", a.get("status", ""))).lower()
+                    if "cancelado" not in status_nome and "falta" not in status_nome:
+                        data_raw = str(a.get("data", "")).split("T")[0]
+                        if data_raw >= hoje.strftime('%Y-%m-%d'):
+                            proc = a.get("procedimento_nome") or (a.get("procedimento", {}).get("nome") if isinstance(a.get("procedimento"), dict) else "Sessão")
+                            hora = str(a.get("horario") or a.get("hora", ""))[:5]
+                            parts = data_raw.split('-')
+                            if len(parts) == 3: sessoes.append(f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {proc}")
+                return sessoes
+    except: pass
     return None
 
 def integrar_feegow(phone, info):
@@ -204,10 +204,8 @@ def integrar_feegow(phone, info):
     cpf = re.sub(r'\D', '', info.get("cpf", ""))
     feegow_id = info.get("feegow_id")
     if not feegow_id and cpf:
-        try:
-            busca = buscar_feegow_por_cpf(cpf)
-            if busca: feegow_id = busca['id']
-        except: pass
+        busca = buscar_feegow_por_cpf(cpf)
+        if busca: feegow_id = busca['id']
 
     base_url = "https://api.feegow.com/v1/api"
     celular = re.sub(r'\D', '', phone)
@@ -281,45 +279,41 @@ def integrar_feegow(phone, info):
 # ==========================================
 # MENSAGERIA E IA
 # ==========================================
-@retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=5))
 def chamar_gemini(query):
     if not API_KEY: return None
     system_prompt = "Atue como o Assistente Virtual da clínica Conectifisio. Seu tom de voz deve ser brasileiro (PT-BR), acolhedor e focado na experiência do paciente. O paciente enviará a sua queixa clínica a seguir. Responda com UMA única frase empática se solidarizando com a dor dele."
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
     payload = {"contents": [{"parts": [{"text": query[:300]}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}}
-    res = requests.post(url, json=payload, timeout=10)
-    if res.status_code == 200: return res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+    try:
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200: return res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+    except: pass
     return None
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=5), retry=retry_if_exception_type(requests.exceptions.RequestException))
 def enviar_whatsapp(to, payload_msg):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, **payload_msg}
-    return requests.post(url, json=payload, headers=headers, timeout=10)
+    try: return requests.post(url, json=payload, headers=headers, timeout=10)
+    except: return None
 
 def responder_texto(to, texto, remetente="robo"):
     registrar_historico(to, remetente, "texto", texto)
-    try: return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
-    except: return None
+    return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
 def enviar_botoes(to, texto, botoes):
     registrar_historico(to, "robo", "texto", texto)
-    try:
-        return enviar_whatsapp(to, {
-            "type": "interactive",
-            "interactive": {"type": "button", "body": {"text": texto}, "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}}
-        })
-    except: return None
+    return enviar_whatsapp(to, {
+        "type": "interactive",
+        "interactive": {"type": "button", "body": {"text": texto}, "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}}
+    })
 
 def enviar_lista(to, texto, titulo_botao, secoes):
     registrar_historico(to, "robo", "texto", texto)
-    try:
-        return enviar_whatsapp(to, {
-            "type": "interactive",
-            "interactive": {"type": "list", "body": {"text": texto}, "action": {"button": titulo_botao[:20], "sections": secoes}}
-        })
-    except: return None
+    return enviar_whatsapp(to, {
+        "type": "interactive",
+        "interactive": {"type": "list", "body": {"text": texto}, "action": {"button": titulo_botao[:20], "sections": secoes}}
+    })
 
 # ==========================================
 # WEBHOOK PRINCIPAL
@@ -442,12 +436,10 @@ def webhook():
 
         # --- BUSCA FEEGOW PELO TELEFONE ---
         if not info.get("feegow_id"):
-            try:
-                busca_tel = buscar_feegow_por_telefone(phone)
-                if busca_tel:
-                    info.update({"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
-                    update_paciente(phone, {"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
-            except: pass
+            busca_tel = buscar_feegow_por_telefone(phone)
+            if busca_tel:
+                info.update({"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
+                update_paciente(phone, {"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
                 
         if not info:
             info = {"cellphone": phone, "status": "triagem"}
@@ -540,10 +532,7 @@ def webhook():
                     enviar_botoes(phone, "As novas sessões serão pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
             
             elif "Reagendar" in msg_recebida:
-                try:
-                    sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
-                except:
-                    sessoes = None
+                sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
                 # Correção do Limbo: Garante que o paciente não desaparece se não tiver modalidade
                 mod_salva = info.get("modalidade") if info.get("modalidade") else "Particular"
                 update_paciente(phone, {"status": "agendando", "modalidade": mod_salva})
@@ -708,7 +697,7 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
 
             elif status == "pilates_app_nasc":
-                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
                 else:
                     update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_app_email"})
                     responder_texto(phone, "Para completarmos o registro, qual seu melhor E-MAIL?")
@@ -768,11 +757,7 @@ def webhook():
                 responder_texto(phone, "Anotado! ✅\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe à clínica hoje?")
 
         elif status == "cadastrando_queixa":
-            try:
-                acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
-            except:
-                acolhimento = "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
-                
+            acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
             if servico in ["Recovery", "Liberação Miofascial"]:
                 if is_veteran:
                     update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "agendando"})
@@ -836,11 +821,7 @@ def webhook():
             if not validar_cpf(cpf_limpo):
                 responder_texto(phone, "❌ CPF inválido. Por favor, verifique os números e digite novamente:")
             else:
-                try:
-                    busca = buscar_feegow_por_cpf(cpf_limpo)
-                except:
-                    busca = None
-                    
+                busca = buscar_feegow_por_cpf(cpf_limpo)
                 if busca:
                     update_paciente(phone, {"cpf": cpf_limpo, "title": busca['nome'], "feegow_id": busca['id'], "status": "agendando"})
                     enviar_botoes(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨\n\nPulei as etapas de e-mail e nascimento. Qual o melhor período para você?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
@@ -956,7 +937,7 @@ def chat_manual():
         # 2. Enviar Só Texto
         if message_text and not file_b64:
             res = responder_texto(phone, message_text, remetente="clinica")
-            if res and res.status_code == 200:
+            if res.status_code == 200:
                 update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message_text, "unread": False})
                 return jsonify({"success": True}), 200
             
