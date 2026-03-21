@@ -282,14 +282,40 @@ def integrar_feegow(phone, info):
 # MENSAGERIA E IA
 # ==========================================
 
+# Pool de frases de acolhimento para fallback quando Gemini estiver indisponível
+FRASES_ACOLHIMENTO = [
+    "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma.",
+    "Obrigado por compartilhar isso conosco. Vamos cuidar de você com toda a atenção que merece.",
+    "Entendo a sua situação e já estamos preparando tudo para o seu atendimento.",
+    "Fico feliz que tenha nos procurado. Vamos encontrar a melhor solução para você.",
+    "Sua saúde é nossa prioridade. Vamos cuidar disso juntos.",
+]
+_frase_idx = 0
+
 def chamar_gemini(query):
-    if not API_KEY: return None
+    global _frase_idx
+    if not API_KEY:
+        frase = FRASES_ACOLHIMENTO[_frase_idx % len(FRASES_ACOLHIMENTO)]
+        _frase_idx += 1
+        return frase
     system_prompt = "Atue como o Assistente Virtual da clínica Conectifisio. Seu tom de voz deve ser brasileiro (PT-BR), acolhedor e focado na experiência do paciente. O paciente enviará a sua queixa clínica a seguir. Responda com UMA única frase empática se solidarizando com a dor dele."
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
-    payload = {"contents": [{"parts": [{"text": query[:300]}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}}
-    res = requests.post(url, json=payload, timeout=10)
-    if res.status_code == 200: return res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-    return None
+    # Tenta gemini-2.0-flash primeiro (mais disponível no free tier)
+    for model in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+            payload = {"contents": [{"parts": [{"text": query[:300]}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}}
+            res = requests.post(url, json=payload, timeout=8)
+            if res.status_code == 200:
+                return res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
+            if res.status_code == 429:
+                # Cota excedida - usa fallback imediatamente
+                break
+        except Exception:
+            pass
+    # Fallback: retorna frase pré-definida rotativa
+    frase = FRASES_ACOLHIMENTO[_frase_idx % len(FRASES_ACOLHIMENTO)]
+    _frase_idx += 1
+    return frase
 
 
 def enviar_whatsapp(to, payload_msg):
