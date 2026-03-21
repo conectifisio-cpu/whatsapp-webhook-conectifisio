@@ -590,7 +590,8 @@ def webhook():
                 update_paciente(phone, {
                     "status": "atendimento_humano", 
                     "periodo": periodo,
-                    "queixa": f"[REAGENDAMENTO]: Mover {sessao_alvo} para o período da {periodo}"
+                    "queixa": f"[REAGENDAMENTO]: Mover {sessao_alvo} para o período da {periodo}",
+                    "humanInteractionAt": datetime.now().isoformat()
                 })
                 
                 responder_texto(phone, f"Solicitação registrada com sucesso! ✅\n\nNossa equipe de recepção já recebeu o seu pedido para reagendar a sessão de *{sessao_alvo}* para o período da *{periodo}*.\n\nEm instantes eles enviarão as opções de horários exatos disponíveis. Aguarde um momento! 👩‍💻")
@@ -603,7 +604,7 @@ def webhook():
                 secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, "Voltando ao menu principal. Como posso ajudar?", "Ver Opções", secoes)
             else:
-                update_paciente(phone, {"status": "atendimento_humano", "queixa": f"[SECRETARIA]: {msg_recebida}"})
+                update_paciente(phone, {"status": "atendimento_humano", "queixa": f"[SECRETARIA]: {msg_recebida}", "humanInteractionAt": datetime.now().isoformat()})
                 responder_texto(phone, f"A sua solicitação para '{msg_recebida}' foi registada com sucesso. A nossa equipe de secretaria vai assumir o atendimento para providenciar os detalhes. Aguarde um instante! 👩‍💻")
 
         elif status == "confirmando_convenio_salvo":
@@ -683,7 +684,7 @@ def webhook():
             elif status == "pilates_part_periodo":
                 update_paciente(phone, {"periodo": msg_recebida})
                 if is_veteran:
-                    update_paciente(phone, {"status": "atendimento_humano"})
+                    update_paciente(phone, {"status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                     responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para alinhar seu horário. Aguarde um instante! 👩‍⚕️")
                 else:
                     update_paciente(phone, {"status": "pilates_part_nome"})
@@ -709,7 +710,7 @@ def webhook():
             elif status == "pilates_part_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                     responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário. Aguarde um instante! 👩‍⚕️")
 
             elif status == "pilates_app":
@@ -729,7 +730,7 @@ def webhook():
                 periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "")
                 update_paciente(phone, {"periodo": msg_recebida})
                 if is_veteran:
-                    update_paciente(phone, {"status": "atendimento_humano"})
+                    update_paciente(phone, {"status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                     responder_texto(phone, f"Tudo pronto! Nossa equipe vai confirmar o horário para a {periodo_limpo} em instantes. 👩‍⚕️")
                 else:
                     update_paciente(phone, {"status": "pilates_app_nome_completo"})
@@ -755,7 +756,7 @@ def webhook():
             elif status == "pilates_app_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                     responder_texto(phone, "Cadastro concluído! 🎉 Nossa equipe vai confirmar o seu horário de Pilates e logo retorna. 👩‍⚕️")
 
             # Fluxo Caixa: Exige Documento
@@ -768,7 +769,7 @@ def webhook():
             elif status == "pilates_caixa_periodo":
                 update_paciente(phone, {"periodo": msg_recebida})
                 if is_veteran:
-                    update_paciente(phone, {"status": "atendimento_humano"})
+                    update_paciente(phone, {"status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                     responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para alinhar seu horário. 👩‍⚕️")
                 else:
                     update_paciente(phone, {"status": "pilates_caixa_nome"})
@@ -794,12 +795,12 @@ def webhook():
             elif status == "pilates_caixa_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                     responder_texto(phone, "Recebido! ✅ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna. 👩‍⚕️")
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
-                update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "atendimento_humano"})
+                    update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
                 responder_texto(phone, "Agradeço por compartilhar. ❤️ Nosso fisioterapeuta responsável entrará em contato agora para organizar sua vinda com segurança.")
             else:
                 mobilidade = "Preciso de auxílio parcial" if "parcial" in msg_limpa or "2" in msg_limpa else "Autonomia total"
@@ -924,7 +925,7 @@ def webhook():
         elif status == "agendando":
             if msg_recebida in ["Manhã", "Tarde", "Noite"]:
                 info["periodo"] = msg_recebida
-                update_data = {"periodo": msg_recebida, "status": "finalizado"}
+                update_data = {"periodo": msg_recebida, "status": "finalizado", "humanInteractionAt": datetime.now().isoformat()}
                 
                 if servico and "Pilates" not in servico:
                     resultado_feegow = integrar_feegow(phone, info)

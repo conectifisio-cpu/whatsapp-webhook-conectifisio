@@ -431,7 +431,8 @@
                         const userMsgs = p.historico.filter(m => m.de === 'paciente' || m.de === 'cliente').length;
                         lastMessageCounts[p.id] = userMsgs;
                     }
-                    const waitMins = p.lastInteraction ? Math.floor((new Date() - new Date(p.lastInteraction))/60000) : 0;
+                    const slaTime = p.humanInteractionAt || p.lastInteraction;
+                    const waitMins = slaTime ? Math.floor((new Date() - new Date(slaTime))/60000) : 0;
                     if (waitMins >= 10) alertedSlaIds.add(p.id);
                 });
                 isFirstLoad = false;
@@ -465,7 +466,8 @@
                     }
                 }
 
-                const waitMins = p.lastInteraction ? Math.floor((new Date() - new Date(p.lastInteraction))/60000) : 0;
+                const slaTime2 = p.humanInteractionAt || p.lastInteraction;
+                const waitMins = slaTime2 ? Math.floor((new Date() - new Date(slaTime2))/60000) : 0;
                 if (waitMins >= 10 && !alertedSlaIds.has(p.id)) {
                     alertedSlaIds.add(p.id); hasAlert = true;
                     showToast(`⚠️ Intervenção de Tempo: ${p.title || 'Paciente'}!`, 'danger');
@@ -630,7 +632,8 @@
             }
 
             queueContainer.innerHTML = active.map(p => {
-                const timerClass = getSlaClasses(p.lastInteraction);
+                const timerTime = p.humanInteractionAt || p.lastInteraction;
+                const timerClass = getSlaClasses(timerTime);
                 const alertClass = p.hasNewMessage ? 'has-new-msg' : '';
                 const unreadBadge = p.hasNewMessage ? `<span class="absolute -top-1 -right-1 flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>` : '';
                 
@@ -642,7 +645,7 @@
                     </div>
                     <div class="flex justify-between items-end mt-2">
                         <p class="text-[9px] text-slate-500 truncate max-w-[120px]">${p.servico || 'Interagindo...'}</p>
-                        <span class="text-[9px] live-timer ${timerClass}" data-time="${p.lastInteraction}">--</span>
+                        <span class="text-[9px] live-timer ${timerClass}" data-time="${timerTime}">--</span>
                     </div>
                 </div>`
             }).join('');
@@ -663,7 +666,8 @@
                         <div class="flex-1 space-y-3 overflow-y-auto pr-2 custom-scrollbar pb-20">
                             ${list.length === 0 ? `<p class="text-[10px] text-slate-400 text-center italic mt-4">Vazio</p>` : ''}
                             ${list.map(p => {
-                                const timerAlert = getSlaClasses(p.lastInteraction);
+                                const timerTime2 = p.humanInteractionAt || p.lastInteraction;
+                                const timerAlert = getSlaClasses(timerTime2);
                                 const alertClass = p.hasNewMessage ? 'has-new-msg' : '';
                                 const unreadBadge = p.hasNewMessage ? `<span class="absolute -top-2 -right-2 flex h-4 w-4"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-4 w-4 bg-red-500 border-2 border-white"></span></span>` : '';
 
@@ -676,14 +680,14 @@
                                 const safeTitle = p.title || 'Desconhecido';
                                 const safePhone = p.cellphone || p.id || '';
                                 const displayMsg = ultimaMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                                const displayQueixa = (p.queixa_ia || p.queixa || 'Nenhuma queixa.').replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                                const displayQueixa = (p.queixa || p.queixa_ia || 'Aguardando resposta...').replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
                                 return `
                                 <div onclick="openChat('${p.id}')" class="bg-white p-4 rounded-[1.5rem] shadow-sm border-t-4 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer flex flex-col relative ${alertClass}" style="border-top-color: ${col.color}">
                                     ${unreadBadge}
                                     <div class="flex justify-between items-center mb-2">
                                         <span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[9px] font-black uppercase">${p.unit || 'SCS'}</span>
-                                        <span class="text-[10px] font-bold flex items-center gap-1 live-timer ${timerAlert}" data-time="${p.lastInteraction}">--</span>
+                                        <span class="text-[10px] font-bold flex items-center gap-1 live-timer ${timerAlert}" data-time="${timerTime2}">--</span>
                                     </div>
                                     
                                     <h3 class="font-bold text-sm text-slate-900 mb-1">${safeTitle}</h3>
