@@ -93,7 +93,7 @@
     </div>
 
     <!-- SISTEMA PRINCIPAL (Oculto até login) -->
-    <div id="app-container" class="hidden w-full h-full flex">
+    <div id="app-container" style="display:none;" class="w-full h-full flex">
         <div id="toast-container" class="fixed top-5 right-5 z-[100] flex flex-col gap-3 pointer-events-none"></div>
 
         <div id="floating-chats-container" class="fixed bottom-0 right-6 z-50 flex items-end gap-4 pointer-events-none"></div>
@@ -285,8 +285,8 @@
             if (savedUser) {
                 currentUser = savedUser;
                 document.getElementById('logged-user-display').innerText = currentUser;
-                document.getElementById('login-screen').classList.add('hidden');
-                document.getElementById('app-container').classList.remove('hidden');
+                document.getElementById('login-screen').style.display = 'none';
+                document.getElementById('app-container').style.display = 'flex';
                 fetchData();
                 setInterval(fetchData, 8000); 
                 setInterval(updateLiveTimers, 60000);
