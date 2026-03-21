@@ -800,8 +800,8 @@ def webhook():
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
-                    update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
-                responder_texto(phone, "Agradeço por compartilhar. ❤️ Nosso fisioterapeuta responsável entrará em contato agora para organizar sua vinda com segurança.")
+                update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "atendimento_humano", "humanInteractionAt": datetime.now().isoformat()})
+                responder_texto(phone, "Agraço por compartilhar. ❤️ Nosso fisioterapeuta responsável entrará em contato agora para organizar sua vinda com segurança.")
             else:
                 mobilidade = "Preciso de auxílio parcial" if "parcial" in msg_limpa or "2" in msg_limpa else "Autonomia total"
                 update_paciente(phone, {"mobilidade": mobilidade, "status": "cadastrando_queixa"})
