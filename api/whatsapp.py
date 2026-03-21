@@ -40,6 +40,12 @@ if firebase_creds_json:
     except: pass
 
 # ==========================================
+# CACHE EM MEMÓRIA PARA EVITAR EXCEDER COTA DO FIREBASE
+# ==========================================
+_patients_cache = {"data": None, "ts": 0}
+_CACHE_TTL = 12  # segundos — evita múltiplas leituras simultâneas do Firestore
+
+# ==========================================
 # VALIDAÇÕES DE SEGURANÇA (MATEMÁTICA E CALENDÁRIO)
 # ==========================================
 def validar_cpf(cpf_str):
@@ -329,7 +335,12 @@ def webhook():
             
         if request.args.get("action") == "get_patients":
             try:
+                import time
                 if not db: return jsonify({"error": "Erro DB"}), 500
+                now = time.time()
+                # Usa cache se ainda válido
+                if _patients_cache["data"] is not None and (now - _patients_cache["ts"]) < _CACHE_TTL:
+                    return jsonify({"items": _patients_cache["data"]}), 200
                 docs = db.collection("PatientsKanban").stream()
                 patients = []
                 for doc in docs:
@@ -339,6 +350,8 @@ def webhook():
                         try: data["lastInteraction"] = data["lastInteraction"].isoformat()
                         except: data["lastInteraction"] = str(data["lastInteraction"])
                     patients.append(data)
+                _patients_cache["data"] = patients
+                _patients_cache["ts"] = now
                 return jsonify({"items": patients}), 200
             except Exception as e: return jsonify({"error": str(e)}), 500
 
