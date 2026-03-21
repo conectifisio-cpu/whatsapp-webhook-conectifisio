@@ -539,6 +539,11 @@ def webhook():
                     update_paciente(phone, {"status": "modalidade"})
                     enviar_botoes(phone, "As novas sessões serão pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
             
+            elif "Secretaria" in msg_recebida:
+                update_paciente(phone, {"status": "menu_secretaria"})
+                secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
+                enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
+
             elif "Reagendar" in msg_recebida:
                 try:
                     sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
@@ -591,11 +596,6 @@ def webhook():
                 responder_texto(phone, f"Solicitação registrada com sucesso! ✅\n\nNossa equipe de recepção já recebeu o seu pedido para reagendar a sessão de *{sessao_alvo}* para o período da *{periodo}*.\n\nEm instantes eles enviarão as opções de horários exatos disponíveis. Aguarde um momento! 👩‍💻")
             else:
                 enviar_botoes(phone, "Por favor, escolha o período para o reagendamento:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
-            
-            elif "Secretaria" in msg_recebida:
-                update_paciente(phone, {"status": "menu_secretaria"})
-                secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
-                enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
 
         elif status == "menu_secretaria":
             if "Voltar" in msg_recebida:
