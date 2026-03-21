@@ -365,6 +365,115 @@ def webhook():
                 return jsonify({"success": False}), 400
             except Exception as e: return jsonify({"error": str(e)}), 500
                 
+        # ==========================================
+        # FOLLOW-UP AUTOMÁTICO — 3 TOQUES
+        # Chamado pelo cron-job.org a cada hora
+        # Protegido por token secreto
+        # ==========================================
+        if request.args.get("action") == "run_followup":
+            token_recebido = request.args.get("token", "")
+            token_esperado = os.environ.get("FOLLOWUP_SECRET", "conectifisio_followup_2025")
+            if token_recebido != token_esperado:
+                return jsonify({"error": "Unauthorized"}), 401
+            if not db:
+                return jsonify({"error": "DB indisponivel"}), 500
+            try:
+                import time as _time
+                agora = datetime.utcnow()
+                # Statuses elegíveis para follow-up (paciente parou no meio do fluxo)
+                STATUSES_FOLLOWUP = [
+                    "triagem", "escolhendo_unidade", "cadastrando_nome",
+                    "escolhendo_especialidade", "cadastrando_queixa",
+                    "modalidade", "nome_convenio", "foto_carteirinha",
+                    "foto_pedido_medico", "cadastrando_nome_completo",
+                    "cadastrando_cpf", "cadastrando_nascimento",
+                    "cadastrando_email", "agendando", "finalizado"
+                ]
+                # Limites de tempo para cada toque
+                TOQUE_1_HORAS = 2    # 2 horas sem resposta
+                TOQUE_2_HORAS = 24   # 24 horas (dia seguinte)
+                TOQUE_3_HORAS = 48   # 48 horas
+                ARQUIVAR_HORAS = 72  # Arquiva após 72h sem resposta ao toque 3
+
+                docs = db.collection("PatientsKanban").stream()
+                enviados = []
+                ignorados = []
+
+                for doc in docs:
+                    p = doc.to_dict()
+                    phone_p = doc.id
+                    status_p = p.get("status", "")
+                    nome_p = p.get("title", "Paciente").split()[0]
+                    toque_atual = p.get("followup_toque", 0)
+
+                    # Só processa statuses elegíveis
+                    if status_p not in STATUSES_FOLLOWUP:
+                        ignorados.append(phone_p)
+                        continue
+
+                    # Calcula tempo desde última interação
+                    last = p.get("lastInteraction")
+                    if not last:
+                        ignorados.append(phone_p)
+                        continue
+                    try:
+                        if hasattr(last, 'utc_timestamp_micros'):
+                            last_dt = last.replace(tzinfo=None) if hasattr(last, 'replace') else agora
+                        else:
+                            last_dt = last.replace(tzinfo=None) if hasattr(last, 'replace') else datetime.fromisoformat(str(last))
+                    except:
+                        ignorados.append(phone_p)
+                        continue
+
+                    horas_inativo = (agora - last_dt).total_seconds() / 3600
+
+                    # --- TOQUE 1: Lembrete Suave (2h) ---
+                    if toque_atual == 0 and horas_inativo >= TOQUE_1_HORAS:
+                        msg = (f"Oi {nome_p}! 😊 Vi que não conseguimos finalizar o seu agendamento. "
+                               f"Ficou alguma dúvida sobre os horários ou sobre a cobertura do seu plano? "
+                               f"Estou por aqui para te ajudar!")
+                        responder_texto(phone_p, msg)
+                        db.collection("PatientsKanban").document(phone_p).set(
+                            {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
+                        enviados.append({"phone": phone_p, "toque": 1})
+
+                    # --- TOQUE 2: Gatilho de Escassez (24h) ---
+                    elif toque_atual == 1 and horas_inativo >= TOQUE_2_HORAS:
+                        msg = (f"Bom dia, {nome_p}! Tudo bem? 🌅 Nossas agendas para a próxima semana "
+                               f"estão preenchendo rápido. Seu cadastro já está pré-aprovado aqui conosco. "
+                               f"Quer que eu reserve um horário para você não perder a vaga?")
+                        responder_texto(phone_p, msg)
+                        db.collection("PatientsKanban").document(phone_p).set(
+                            {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
+                        enviados.append({"phone": phone_p, "toque": 2})
+
+                    # --- TOQUE 3: Fechamento (48h) ---
+                    elif toque_atual == 2 and horas_inativo >= TOQUE_3_HORAS:
+                        msg = (f"Olá {nome_p}! Como não tivemos retorno, estou pausando o seu atendimento "
+                               f"por enquanto para liberar a vaga na agenda. Mas não se preocupe! "
+                               f"Quando quiser retomar seu tratamento, é só mandar um 'Oi' aqui. "
+                               f"Estaremos de portas abertas! 💙")
+                        responder_texto(phone_p, msg)
+                        db.collection("PatientsKanban").document(phone_p).set(
+                            {"followup_toque": 3, "status": "followup_3",
+                             "followup_enviado_em": agora.isoformat()}, merge=True)
+                        enviados.append({"phone": phone_p, "toque": 3})
+
+                    # --- ARQUIVAR após 72h sem resposta ao toque 3 ---
+                    elif toque_atual == 3 and horas_inativo >= ARQUIVAR_HORAS:
+                        db.collection("PatientsKanban").document(phone_p).set(
+                            {"status": "perdido"}, merge=True)
+                        enviados.append({"phone": phone_p, "toque": "arquivado"})
+
+                return jsonify({
+                    "ok": True,
+                    "enviados": len(enviados),
+                    "detalhes": enviados,
+                    "ignorados": len(ignorados)
+                }), 200
+            except Exception as e:
+                return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+
         return "Acesso Negado", 403
 
     # --- POST: RECEBER MENSAGENS WHATSAPP ---
@@ -411,6 +520,13 @@ def webhook():
 
         # Salva o histórico do paciente
         registrar_historico(phone, "paciente", "texto" if not tem_anexo else "anexo", msg_recebida)
+
+        # ==========================================
+        # 🔄 RESET DO FOLLOW-UP: Paciente respondeu, zera o contador
+        # ==========================================
+        if info.get("followup_toque", 0) > 0:
+            db.collection("PatientsKanban").document(phone).set(
+                {"followup_toque": 0, "followup_retomado_em": datetime.utcnow().isoformat()}, merge=True)
 
         # ==========================================
         # 🚨 O BOTÃO DE PÂNICO (TRANSBORDO HUMANO)
