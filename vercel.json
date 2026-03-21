@@ -4,12 +4,20 @@
     {
       "src": "api/whatsapp.py",
       "use": "@vercel/python"
+    },
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
       "dest": "api/whatsapp.py"
+    },
+    {
+      "src": "/",
+      "dest": "index.html"
     }
   ]
 }
