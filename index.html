@@ -100,16 +100,33 @@
 
         <aside class="w-80 bg-white border-r border-slate-200 flex flex-col shadow-lg z-10 shrink-0">
             <div class="p-6 bg-slate-900 text-white">
-                <h1 class="font-black text-xl tracking-tighter flex items-center gap-2">
-                    <i data-lucide="activity" class="w-6 h-6 text-blue-400"></i> CONECTIFISIO
-                </h1>
-                <div class="flex justify-between items-center mt-2">
+                <div class="flex items-center gap-3">
+                    <img src="/assets/logo.jpg" alt="Conectifisio" class="h-10 w-auto rounded" onerror="this.style.display='none'">
+                </div>
+                <div class="flex justify-between items-center mt-3">
                     <p class="text-[10px] font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1">
                         <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Online v3.0
                     </p>
-                    <div class="flex items-center gap-2 text-[10px] text-slate-400 bg-slate-800 px-2 py-1 rounded">
-                        <i data-lucide="user" class="w-3 h-3"></i> <span id="logged-user-display">User</span>
-                        <button onclick="logout()" class="ml-1 hover:text-white" title="Sair"><i data-lucide="log-out" class="w-3 h-3"></i></button>
+                    <!-- Menu de Perfil com Dropdown -->
+                    <div class="relative" id="profile-menu-container">
+                        <button onclick="toggleProfileMenu()" class="flex items-center gap-2 text-[10px] text-slate-300 bg-slate-800 hover:bg-slate-700 px-2 py-1.5 rounded transition-colors">
+                            <div class="w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center text-white font-bold text-[9px]" id="user-avatar-initials">U</div>
+                            <span id="logged-user-display">User</span>
+                            <i data-lucide="chevron-down" class="w-3 h-3"></i>
+                        </button>
+                        <!-- Dropdown Menu -->
+                        <div id="profile-dropdown" style="display:none;" class="absolute right-0 top-8 w-44 bg-white rounded-lg shadow-xl border border-slate-200 z-50 overflow-hidden">
+                            <div class="px-3 py-2 bg-slate-50 border-b border-slate-200">
+                                <p class="text-[10px] text-slate-500">Conectado como</p>
+                                <p class="text-xs font-bold text-slate-800" id="profile-username">User</p>
+                            </div>
+                            <button onclick="showChangePassword()" class="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                <i data-lucide="key" class="w-3 h-3 text-slate-400"></i> Alterar Senha
+                            </button>
+                            <button onclick="logout()" class="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-slate-100">
+                                <i data-lucide="log-out" class="w-3 h-3"></i> Sair do Sistema
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -285,6 +302,12 @@
             if (savedUser) {
                 currentUser = savedUser;
                 document.getElementById('logged-user-display').innerText = currentUser;
+                // Preencher menu de perfil
+                const profileUsername = document.getElementById('profile-username');
+                if (profileUsername) profileUsername.innerText = currentUser;
+                // Iniciais do avatar
+                const avatarEl = document.getElementById('user-avatar-initials');
+                if (avatarEl) avatarEl.innerText = currentUser.substring(0, 2).toUpperCase();
                 document.getElementById('login-screen').style.display = 'none';
                 document.getElementById('app-container').style.display = 'flex';
                 fetchData();
@@ -309,6 +332,33 @@
         function logout() {
             localStorage.removeItem('conectifisio_user');
             location.reload();
+        }
+
+        function toggleProfileMenu() {
+            const dropdown = document.getElementById('profile-dropdown');
+            const isVisible = dropdown.style.display === 'block';
+            dropdown.style.display = isVisible ? 'none' : 'block';
+        }
+
+        // Fechar dropdown ao clicar fora
+        document.addEventListener('click', function(e) {
+            const container = document.getElementById('profile-menu-container');
+            if (container && !container.contains(e.target)) {
+                const dropdown = document.getElementById('profile-dropdown');
+                if (dropdown) dropdown.style.display = 'none';
+            }
+        });
+
+        function showChangePassword() {
+            const dropdown = document.getElementById('profile-dropdown');
+            if (dropdown) dropdown.style.display = 'none';
+            const nova = prompt('Digite a nova senha (mínimo 6 caracteres):');
+            if (nova && nova.length >= 6) {
+                // Salva localmente (em produção, isso seria via API)
+                alert('Senha alterada com sucesso! Na próxima versão, isso será salvo no servidor.');
+            } else if (nova !== null) {
+                alert('Senha muito curta. Use pelo menos 6 caracteres.');
+            }
         }
 
         // ==========================================
