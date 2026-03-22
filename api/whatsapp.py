@@ -46,6 +46,22 @@ _patients_cache = {"data": None, "ts": 0}
 _CACHE_TTL = 12  # segundos — evita múltiplas leituras simultâneas do Firestore
 
 # ==========================================
+# UNIDADES — ENDEREÇOS E RECOMENDAÇÕES
+# ==========================================
+UNIDADES = {
+    "Ipiranga": {
+        "endereco": "R. Visc. de Pirajá, 525 - Vila Dom Pedro I, São Paulo - SP, 04277-020",
+        "maps": "https://maps.app.goo.gl/ipiranga-conectifisio",
+        "recomendacao": "Traga o pedido médico original e chegue com 15 minutos de antecedência. Em alguns convênios pode ser necessário o token de validação, que você recebe pelo celular após a solicitação do procedimento no plano de saúde."
+    },
+    "São Caetano": {
+        "endereco": "Av. Goiás, 1100 - Centro, São Caetano do Sul - SP, 09520-000",
+        "maps": "https://maps.app.goo.gl/saocaetano-conectifisio",
+        "recomendacao": "Traga o pedido médico original e chegue com 15 minutos de antecedência. Em alguns convênios pode ser necessário o token de validação, que você recebe pelo celular após a solicitação do procedimento no plano de saúde."
+    }
+}
+
+# ==========================================
 # VALIDAÇÕES DE SEGURANÇA (MATEMÁTICA E CALENDÁRIO)
 # ==========================================
 def validar_cpf(cpf_str):
@@ -387,7 +403,13 @@ def webhook():
                     "modalidade", "nome_convenio", "foto_carteirinha",
                     "foto_pedido_medico", "cadastrando_nome_completo",
                     "cadastrando_cpf", "cadastrando_nascimento",
-                    "cadastrando_email", "agendando", "finalizado"
+                    "cadastrando_email", "agendando", "finalizado",
+                    "pausado"  # inclui pausado: recepção enviou mas paciente não respondeu
+                ]
+                # Statuses que NUNCA recebem follow-up (recepção está ativamente atendendo)
+                STATUSES_PROTEGIDOS = [
+                    "atendimento_humano", "arquivado", "convertido",
+                    "perdido", "followup_1", "followup_2", "followup_3"
                 ]
                 # Limites de tempo para cada toque
                 TOQUE_1_HORAS = 2    # 2 horas sem resposta
@@ -407,25 +429,53 @@ def webhook():
                     toque_atual = p.get("followup_toque", 0)
 
                     # Só processa statuses elegíveis
-                    if status_p not in STATUSES_FOLLOWUP:
+                    if status_p in STATUSES_PROTEGIDOS or status_p not in STATUSES_FOLLOWUP:
                         ignorados.append(phone_p)
                         continue
 
-                    # Calcula tempo desde última interação
-                    last = p.get("lastInteraction")
-                    if not last:
+                    # Calcula tempo desde ÚLTIMA INTERAÇÃO DO PACIENTE
+                    # Usa lastPatientInteraction (só atualizado quando paciente escreve)
+                    # Fallback para lastInteraction se não existir
+                    last_raw = p.get("lastPatientInteraction") or p.get("lastInteraction")
+                    if not last_raw:
                         ignorados.append(phone_p)
                         continue
                     try:
-                        if hasattr(last, 'utc_timestamp_micros'):
-                            last_dt = last.replace(tzinfo=None) if hasattr(last, 'replace') else agora
+                        if hasattr(last_raw, 'utc_timestamp_micros'):
+                            last_dt = last_raw.replace(tzinfo=None) if hasattr(last_raw, 'replace') else agora
+                        elif hasattr(last_raw, 'replace') and callable(last_raw.replace):
+                            last_dt = last_raw.replace(tzinfo=None)
                         else:
-                            last_dt = last.replace(tzinfo=None) if hasattr(last, 'replace') else datetime.fromisoformat(str(last))
+                            last_dt = datetime.fromisoformat(str(last_raw))
                     except:
                         ignorados.append(phone_p)
                         continue
 
                     horas_inativo = (agora - last_dt).total_seconds() / 3600
+                    minutos_inativo = (agora - last_dt).total_seconds() / 60
+
+                    # --- LEMBRETE DE CADASTRO INCOMPLETO (30min) ---
+                    # Dispara apenas 1x para pacientes que pararam no meio do cadastro
+                    STATUSES_CADASTRO = [
+                        "foto_carteirinha", "foto_pedido_medico",
+                        "num_carteirinha", "cadastrando_nome_completo",
+                        "cadastrando_cpf", "cadastrando_nascimento",
+                        "cadastrando_email", "data_nascimento", "coletando_email"
+                    ]
+                    if (status_p in STATUSES_CADASTRO and
+                        toque_atual == 0 and
+                        not p.get("lembrete_cadastro_enviado") and
+                        minutos_inativo >= 30):
+                        msg_lembrete = (
+                            f"Oi {nome_p}! 😊 Percebi que você ficou a um passo de concluir o seu cadastro. "
+                            f"Para garantirmos a sua vaga, preciso apenas que você finalize o envio dos documentos. "
+                            f"Leva menos de 2 minutinhos! Posso continuar?"
+                        )
+                        responder_texto(phone_p, msg_lembrete)
+                        db.collection("PatientsKanban").document(phone_p).set(
+                            {"lembrete_cadastro_enviado": True, "lembrete_cadastro_em": agora.isoformat()}, merge=True)
+                        enviados.append({"phone": phone_p, "toque": "lembrete_cadastro"})
+                        continue  # Não processa follow-up nesta rodada
 
                     # --- TOQUE 1: Lembrete Suave (2h) ---
                     if toque_atual == 0 and horas_inativo >= TOQUE_1_HORAS:
@@ -523,10 +573,13 @@ def webhook():
 
         # ==========================================
         # 🔄 RESET DO FOLLOW-UP: Paciente respondeu, zera o contador
+        # Também atualiza lastPatientInteraction (usado pelo lembrete de cadastro)
         # ==========================================
-        if info.get("followup_toque", 0) > 0:
-            db.collection("PatientsKanban").document(phone).set(
-                {"followup_toque": 0, "followup_retomado_em": datetime.utcnow().isoformat()}, merge=True)
+        agora_iso = datetime.utcnow().isoformat()
+        db.collection("PatientsKanban").document(phone).set(
+            {"lastPatientInteraction": agora_iso,
+             **(({"followup_toque": 0, "followup_retomado_em": agora_iso}) if info.get("followup_toque", 0) > 0 else {})},
+            merge=True)
 
         # ==========================================
         # 🚨 O BOTÃO DE PÂNICO (TRANSBORDO HUMANO)
@@ -1011,6 +1064,12 @@ def webhook():
                                    f"Em instantes voltaremos com as opções exatas para confirmarmos o seu horário. Fique de olho por aqui! ✨")
                 
                 responder_texto(phone, texto_final)
+
+                # Envia recomendação da unidade automaticamente
+                unidade_p = info.get("unidade", "Ipiranga")
+                dados_unidade = UNIDADES.get(unidade_p, UNIDADES["Ipiranga"])
+                recomendacao_msg = f"📌 *Recomendações para sua consulta:*\n\n{dados_unidade['recomendacao']}\n\n📍 *Endereço:* {dados_unidade['endereco']}"
+                responder_texto(phone, recomendacao_msg)
             else:
                 enviar_botoes(phone, "Por favor, escolha o período:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
 

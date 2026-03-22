@@ -162,6 +162,23 @@
                     <button id="audio-toggle" onclick="unlockAudio()" class="flex items-center gap-1.5 bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-colors shadow-sm cursor-pointer pointer-events-auto">
                         <i data-lucide="volume-x" id="audio-icon" class="w-3 h-3"></i> Ligar Alertas
                     </button>
+                    <!-- SINO DE NOTIFICAÇÕES -->
+                    <div class="relative" id="notif-wrapper">
+                        <button onclick="toggleNotifPanel()" class="relative p-2 rounded-xl hover:bg-slate-100 transition-colors">
+                            <i data-lucide="bell" class="w-5 h-5 text-slate-600"></i>
+                            <span id="notif-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">0</span>
+                        </button>
+                        <!-- Painel de notificações -->
+                        <div id="notif-panel" class="hidden absolute right-0 top-12 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden">
+                            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                                <span class="font-black text-slate-800 text-sm">Notificações</span>
+                                <button onclick="clearAllNotifs()" class="text-[10px] text-blue-600 font-bold hover:underline">Marcar tudo como lido</button>
+                            </div>
+                            <div id="notif-list" class="max-h-80 overflow-y-auto divide-y divide-slate-50">
+                                <p class="text-center text-slate-400 text-xs py-6">Nenhuma notificação</p>
+                            </div>
+                        </div>
+                    </div>
                     <select id="unit-filter" onchange="renderUI()" class="bg-slate-100 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="Todas">Todas Unidades</option>
                         <option value="São Caetano">São Caetano</option>
@@ -449,6 +466,7 @@
                 if (!knownPatientIds.has(p.id)) {
                     knownPatientIds.add(p.id); hasNew = true;
                     showToast(`Novo Atendimento: ${p.title || 'Paciente'}`, 'info');
+                    addNotification('novo_atendimento', `👤 Novo atendimento: ${p.title || 'Paciente'}`, p.id);
                 }
 
                 // Verifica nova mensagem de paciente existente
@@ -461,6 +479,10 @@
                         if (!activeChats.includes(p.id)) {
                             showToast(`Nova mensagem de ${p.title || 'Paciente'}`, 'info');
                             hasNew = true;
+                            // Notificação no sino apenas para pacientes em intervenção humana
+                            if (['pausado', 'atendimento_humano'].includes(p.status)) {
+                                addNotification('nova_mensagem', `💬 ${p.title || 'Paciente'} enviou uma mensagem`, p.id);
+                            }
                         }
                         lastMessageCounts[p.id] = currentUserMsgs;
                     }
@@ -471,12 +493,93 @@
                 if (waitMins >= 10 && !alertedSlaIds.has(p.id)) {
                     alertedSlaIds.add(p.id); hasAlert = true;
                     showToast(`⚠️ Intervenção de Tempo: ${p.title || 'Paciente'}!`, 'danger');
+                    addNotification('sla_alerta', `⏰ SLA: ${p.title || 'Paciente'} aguarda há mais de 10min`, p.id);
                 }
                 if (waitMins < 10) alertedSlaIds.delete(p.id);
             });
 
             if (hasAlert) playSound('alert'); else if (hasNew) playSound('new');
         }
+
+        // ==========================================
+        // SISTEMA DE NOTIFICAÇÕES (SINO)
+        // ==========================================
+        let notifications = [];
+
+        function addNotification(type, text, patientId) {
+            const id = Date.now();
+            const hora = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+            notifications.unshift({ id, type, text, patientId, hora, lida: false });
+            if (notifications.length > 50) notifications = notifications.slice(0, 50);
+            renderNotifBadge();
+            renderNotifList();
+        }
+
+        function renderNotifBadge() {
+            const badge = document.getElementById('notif-badge');
+            if (!badge) return;
+            const naoLidas = notifications.filter(n => !n.lida).length;
+            if (naoLidas > 0) {
+                badge.textContent = naoLidas > 99 ? '99+' : naoLidas;
+                badge.classList.remove('hidden');
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        function renderNotifList() {
+            const list = document.getElementById('notif-list');
+            if (!list) return;
+            if (notifications.length === 0) {
+                list.innerHTML = '<p class="text-center text-slate-400 text-xs py-6">Nenhuma notificação</p>';
+                return;
+            }
+            const iconMap = { novo_atendimento: '👤', nova_mensagem: '💬', sla_alerta: '⏰' };
+            list.innerHTML = notifications.map(n => `
+                <div onclick="notifClick('${n.patientId}', ${n.id})" class="px-4 py-3 cursor-pointer hover:bg-slate-50 transition-colors ${n.lida ? 'opacity-50' : ''} flex items-start gap-3">
+                    <span class="text-lg flex-shrink-0">${iconMap[n.type] || '🔔'}</span>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-xs font-bold text-slate-800 leading-tight">${n.text}</p>
+                        <p class="text-[10px] text-slate-400 mt-0.5">${n.hora}</p>
+                    </div>
+                    ${!n.lida ? '<span class="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-1"></span>' : ''}
+                </div>`).join('');
+        }
+
+        function notifClick(patientId, notifId) {
+            // Marca como lida
+            const n = notifications.find(x => x.id === notifId);
+            if (n) n.lida = true;
+            renderNotifBadge();
+            renderNotifList();
+            // Abre o chat do paciente
+            if (patientId && patientId !== 'undefined') {
+                toggleNotifPanel();
+                openChat(patientId);
+            }
+        }
+
+        function clearAllNotifs() {
+            notifications.forEach(n => n.lida = true);
+            renderNotifBadge();
+            renderNotifList();
+        }
+
+        function toggleNotifPanel() {
+            const panel = document.getElementById('notif-panel');
+            if (!panel) return;
+            panel.classList.toggle('hidden');
+            if (!panel.classList.contains('hidden')) renderNotifList();
+        }
+
+        // Fecha o painel ao clicar fora
+        document.addEventListener('click', function(e) {
+            const wrapper = document.getElementById('notif-wrapper');
+            if (wrapper && !wrapper.contains(e.target)) {
+                const panel = document.getElementById('notif-panel');
+                if (panel) panel.classList.add('hidden');
+            }
+        });
 
         // ==========================================
         // 3. REGRAS DO KANBAN E CRM
@@ -690,10 +793,20 @@
                                         <span class="text-[10px] font-bold flex items-center gap-1 live-timer ${timerAlert}" data-time="${timerTime2}">--</span>
                                     </div>
                                     
-                                    <h3 class="font-bold text-sm text-slate-900 mb-1">${safeTitle}</h3>
-                                    <p class="text-[10px] text-slate-400 font-bold mb-2 flex items-center gap-1">
-                                        <i data-lucide="phone" class="w-3 h-3"></i> ${safePhone}
-                                    </p>
+                                    <div class="flex items-center justify-between gap-1 mb-1">
+                                        <h3 class="font-bold text-sm text-slate-900 leading-tight">${safeTitle}</h3>
+                                        <button onclick="event.stopPropagation(); copyToClipboard('${safeTitle}')" title="Copiar nome" class="flex-shrink-0 p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+                                            <i data-lucide="copy" class="w-3 h-3"></i>
+                                        </button>
+                                    </div>
+                                    <div class="flex items-center justify-between gap-1 mb-2">
+                                        <p class="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                                            <i data-lucide="phone" class="w-3 h-3"></i> ${safePhone}
+                                        </p>
+                                        <button onclick="event.stopPropagation(); copyToClipboard('${safePhone}')" title="Copiar celular" class="flex-shrink-0 p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+                                            <i data-lucide="copy" class="w-3 h-3"></i>
+                                        </button>
+                                    </div>
 
                                     <div class="mt-1 mb-2 border-t border-slate-50 pt-2">
                                         <p class="text-[10px] font-black text-slate-800 uppercase mb-1">${p.servico || 'Em Triagem'}</p>
@@ -703,7 +816,8 @@
                                                 <span class="font-black ${p.modalidade === 'Particular' ? 'text-emerald-600' : 'text-amber-600'}">${p.modalidade || '-'}</span>
                                             </div>
                                             ${p.convenio ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">Convênio/App:</span><span class="font-black text-blue-600 uppercase">${p.convenio}</span></div>` : ''}
-                                            ${p.numCarteirinha ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">Facilitador:</span><span class="font-black text-slate-700">${p.numCarteirinha}</span></div>` : ''}
+                                            ${p.numCarteirinha ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">Carteirinha:</span><div class="flex items-center gap-1"><span class="font-black text-slate-700">${p.numCarteirinha}</span><button onclick="event.stopPropagation(); copyToClipboard('${p.numCarteirinha}')" title="Copiar carteirinha" class="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"><i data-lucide="copy" class="w-2.5 h-2.5"></i></button></div></div>` : ''}
+                                            ${p.cpf ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">CPF:</span><div class="flex items-center gap-1"><span class="font-black text-slate-700 font-mono">${p.cpf.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4')}</span><button onclick="event.stopPropagation(); copyToClipboard('${p.cpf}')" title="Copiar CPF" class="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"><i data-lucide="copy" class="w-2.5 h-2.5"></i></button></div></div>` : ''}
                                         </div>
                                     </div>
 
@@ -862,6 +976,27 @@
         }
 
         // ==========================================
+        // ==========================================
+        // COPIAR PARA CLIPBOARD
+        // ==========================================
+        function copyToClipboard(text) {
+            if (!text || text === '-' || text === 'undefined') return;
+            navigator.clipboard.writeText(text).then(() => {
+                // Toast de confirmação
+                const toast = document.createElement('div');
+                toast.textContent = '✓ Copiado!';
+                toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:8px 18px;border-radius:8px;font-size:13px;font-weight:700;z-index:99999;pointer-events:none;opacity:1;transition:opacity 0.4s';
+                document.body.appendChild(toast);
+                setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); }, 1400);
+            }).catch(() => {
+                // Fallback para browsers sem clipboard API
+                const el = document.createElement('textarea');
+                el.value = text; el.style.position = 'fixed'; el.style.opacity = '0';
+                document.body.appendChild(el); el.select();
+                document.execCommand('copy'); document.body.removeChild(el);
+            });
+        }
+
         // 5. AUDITORIA: FECHAR COM DATA E HORA
         // ==========================================
         async function updateLeadStatus(phone, newStatus) {
