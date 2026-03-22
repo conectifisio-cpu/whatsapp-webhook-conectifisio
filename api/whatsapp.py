@@ -106,7 +106,7 @@ def registrar_historico(phone, remetente, tipo, conteudo):
         "de": remetente, # 'paciente', 'clinica' ou 'robo'
         "tipo": tipo,
         "conteudo": conteudo,
-        "data": datetime.now().isoformat()
+        "data": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')  # UTC explícito para conversão correta no frontend
     }
     db.collection("PatientsKanban").document(phone).set({
         "historico": firestore.ArrayUnion([nova_msg]),
@@ -363,7 +363,13 @@ def webhook():
                     data = doc.to_dict()
                     data["id"] = doc.id
                     if "lastInteraction" in data and data["lastInteraction"]:
-                        try: data["lastInteraction"] = data["lastInteraction"].isoformat()
+                        try:
+                            ts = data["lastInteraction"]
+                            # Firestore Timestamp — garante UTC explícito para o frontend
+                            iso = ts.isoformat()
+                            if '+' not in iso and 'Z' not in iso:
+                                iso = iso.split('.')[0] + '+00:00'
+                            data["lastInteraction"] = iso
                         except: data["lastInteraction"] = str(data["lastInteraction"])
                     patients.append(data)
                 _patients_cache["data"] = patients
@@ -585,7 +591,7 @@ def webhook():
         # 🔄 RESET DO FOLLOW-UP: Paciente respondeu, zera o contador
         # Também atualiza lastPatientInteraction (usado pelo lembrete de cadastro)
         # ==========================================
-        agora_iso = datetime.utcnow().isoformat()
+        agora_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')  # UTC explícito
         db.collection("PatientsKanban").document(phone).set(
             {"lastPatientInteraction": agora_iso,
              **(({"followup_toque": 0, "followup_retomado_em": agora_iso}) if info.get("followup_toque", 0) > 0 else {})},
@@ -951,7 +957,7 @@ def webhook():
         elif status == "triagem_neuro_queixa":
             acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
             conv_salvo = info.get("convenio", "")
-            update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "lastPatientInteraction": datetime.utcnow().isoformat(), "status": "modalidade"})
+            update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "lastPatientInteraction": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00'), "status": "modalidade"})
             if is_veteran and conv_salvo and conv_salvo.lower() != "particular":
                 update_paciente(phone, {"status": "confirmando_convenio_salvo"})
                 enviar_botoes(phone, f"{acolhimento}\n\nVi aqui que você já utilizou o convênio *{conv_salvo}*. Vamos seguir com ele para este serviço?", [{"id": "c_manter", "title": "Sim, manter plano"}, {"id": "c_trocar", "title": "Troquei de plano"}, {"id": "c_part", "title": "Mudar p/ Particular"}])
