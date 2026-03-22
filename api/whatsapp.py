@@ -51,12 +51,12 @@ _CACHE_TTL = 12  # segundos — evita múltiplas leituras simultâneas do Firest
 UNIDADES = {
     "Ipiranga": {
         "endereco": "R. Visc. de Pirajá, 525 - Vila Dom Pedro I, São Paulo - SP, 04277-020",
-        "maps": "https://maps.app.goo.gl/ipiranga-conectifisio",
+        "maps": "https://www.google.com/maps/search/Conectifisio/@-23.6029,-46.6125,17z?hl=pt-BR&entry=ttu&g_ep=EgoyMDI2MDMxOC4xIaKXMDSoASAFQAw%3D%3D",
         "recomendacao": "Traga o pedido médico original e chegue com 15 minutos de antecedência. Em alguns convênios pode ser necessário o token de validação, que você recebe pelo celular após a solicitação do procedimento no plano de saúde."
     },
     "São Caetano": {
         "endereco": "Av. Goiás, 1100 - Centro, São Caetano do Sul - SP, 09520-000",
-        "maps": "https://maps.app.goo.gl/saocaetano-conectifisio",
+        "maps": "https://google.com/maps/search/ConectiFisio%20-%20Ictus%20Fisioterapia%20RE%204553-SP/@-23.6229,-46.552,17z?hl=pt-BR",
         "recomendacao": "Traga o pedido médico original e chegue com 15 minutos de antecedência. Em alguns convênios pode ser necessário o token de validação, que você recebe pelo celular após a solicitação do procedimento no plano de saúde."
     }
 }
@@ -395,7 +395,8 @@ def webhook():
                 return jsonify({"error": "DB indisponivel"}), 500
             try:
                 import time as _time
-                agora = datetime.utcnow()
+                from datetime import timezone as _tz
+                agora = datetime.now(_tz.utc)  # timezone-aware para comparar corretamente com Firebase timestamps
                 # Statuses elegíveis para follow-up (paciente parou no meio do fluxo)
                 STATUSES_FOLLOWUP = [
                     "triagem", "escolhendo_unidade", "cadastrando_nome",
@@ -441,13 +442,22 @@ def webhook():
                         ignorados.append(phone_p)
                         continue
                     try:
+                        from datetime import timezone as _tz2
                         if hasattr(last_raw, 'utc_timestamp_micros'):
-                            last_dt = last_raw.replace(tzinfo=None) if hasattr(last_raw, 'replace') else agora
-                        elif hasattr(last_raw, 'replace') and callable(last_raw.replace):
-                            last_dt = last_raw.replace(tzinfo=None)
+                            # Firestore Timestamp object
+                            last_dt = last_raw.replace(tzinfo=_tz2.utc) if hasattr(last_raw, 'replace') else agora
+                        elif isinstance(last_raw, str):
+                            # ISO string — pode ter ou nao timezone
+                            last_dt = datetime.fromisoformat(last_raw.replace('Z', '+00:00'))
+                            if last_dt.tzinfo is None:
+                                last_dt = last_dt.replace(tzinfo=_tz2.utc)
+                        elif hasattr(last_raw, 'tzinfo'):
+                            # datetime object
+                            last_dt = last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
                         else:
-                            last_dt = datetime.fromisoformat(str(last_raw))
-                    except:
+                            last_dt = datetime.fromisoformat(str(last_raw)).replace(tzinfo=_tz2.utc)
+                    except Exception as e_ts:
+                        print(f'[followup] erro timestamp {phone_p}: {e_ts} raw={last_raw}')
                         ignorados.append(phone_p)
                         continue
 
@@ -935,8 +945,18 @@ def webhook():
                 responder_texto(phone, "Agradeço por compartilhar. ❤️ Nosso fisioterapeuta responsável entrará em contato agora para organizar sua vinda com segurança.")
             else:
                 mobilidade = "Preciso de auxílio parcial" if "parcial" in msg_limpa or "2" in msg_limpa else "Autonomia total"
-                update_paciente(phone, {"mobilidade": mobilidade, "status": "cadastrando_queixa"})
+                update_paciente(phone, {"mobilidade": mobilidade, "status": "triagem_neuro_queixa"})
                 responder_texto(phone, "Anotado! ✅\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe à clínica hoje?")
+
+        elif status == "triagem_neuro_queixa":
+            acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
+            conv_salvo = info.get("convenio", "")
+            update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "lastPatientInteraction": datetime.utcnow().isoformat(), "status": "modalidade"})
+            if is_veteran and conv_salvo and conv_salvo.lower() != "particular":
+                update_paciente(phone, {"status": "confirmando_convenio_salvo"})
+                enviar_botoes(phone, f"{acolhimento}\n\nVi aqui que você já utilizou o convênio *{conv_salvo}*. Vamos seguir com ele para este serviço?", [{"id": "c_manter", "title": "Sim, manter plano"}, {"id": "c_trocar", "title": "Troquei de plano"}, {"id": "c_part", "title": "Mudar p/ Particular"}])
+            else:
+                enviar_botoes(phone, f"{acolhimento}\n\nDeseja atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
 
         elif status == "cadastrando_queixa":
             acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
@@ -1064,12 +1084,8 @@ def webhook():
                                    f"Em instantes voltaremos com as opções exatas para confirmarmos o seu horário. Fique de olho por aqui! ✨")
                 
                 responder_texto(phone, texto_final)
-
-                # Envia recomendação da unidade automaticamente
-                unidade_p = info.get("unidade", "Ipiranga")
-                dados_unidade = UNIDADES.get(unidade_p, UNIDADES["Ipiranga"])
-                recomendacao_msg = f"📌 *Recomendações para sua consulta:*\n\n{dados_unidade['recomendacao']}\n\n📍 *Endereço:* {dados_unidade['endereco']}"
-                responder_texto(phone, recomendacao_msg)
+                # Recomendações e endereço são enviados MANUALMENTE pelo colaborador
+                # após confirmar o agendamento (fluxo semiautomaticó)
             else:
                 enviar_botoes(phone, "Por favor, escolha o período:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
 
