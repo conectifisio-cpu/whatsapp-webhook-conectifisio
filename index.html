@@ -1035,9 +1035,10 @@
                     </div>
                     <p class="text-[11px] text-slate-600 mb-4 leading-relaxed">Deseja enviar a mensagem de orientações de preparo + link do Maps antes de arquivar?</p>
                     <div class="mb-4">
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Data e hora do agendamento (opcional)</label>
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Data e hora do agendamento <span class="text-red-500">*</span></label>
                         <input id="input-data-agendamento-${modalId}" type="text" placeholder="Ex: 25/03 às 14:30" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
                     </div>
+                    <p id="erro-data-${modalId}" class="hidden text-[10px] text-red-500 font-semibold mb-2">⚠️ Preencha a data e hora do agendamento antes de enviar.</p>
                     <div class="flex gap-2">
                         <button id="btn-sim-${modalId}" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-sm transition-colors">✅ Sim, enviar</button>
                         <button id="btn-nao-${modalId}" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors">Não, só arquivar</button>
@@ -1049,7 +1050,15 @@
 
             // Aguarda a decisão do colaborador
             const decisao = await new Promise(resolve => {
-                document.getElementById(`btn-sim-${modalId}`).onclick = () => resolve('sim');
+                document.getElementById(`btn-sim-${modalId}`).onclick = () => {
+                    const val = document.getElementById(`input-data-agendamento-${modalId}`)?.value?.trim();
+                    if (!val) {
+                        document.getElementById(`erro-data-${modalId}`).classList.remove('hidden');
+                        document.getElementById(`input-data-agendamento-${modalId}`).focus();
+                        return; // bloqueia sem fechar o modal
+                    }
+                    resolve('sim');
+                };
                 document.getElementById(`btn-nao-${modalId}`).onclick = () => resolve('nao');
                 document.getElementById(`btn-cancel-${modalId}`).onclick = () => resolve('cancelar');
             });

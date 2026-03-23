@@ -51,12 +51,12 @@ _CACHE_TTL = 12  # segundos — evita múltiplas leituras simultâneas do Firest
 UNIDADES = {
     "Ipiranga": {
         "endereco": "R. Visc. de Pirajá, 525 - Vila Dom Pedro I, São Paulo - SP, 04277-020",
-        "maps": "https://www.google.com/maps/search/Conectifisio/@-23.6029,-46.6125,17z?hl=pt-BR&entry=ttu&g_ep=EgoyMDI2MDMxOC4xIaKXMDSoASAFQAw%3D%3D",
+        "maps": "https://maps.app.goo.gl/MCoghy1k9LGfSaGx9",
         "recomendacao": "Traga o pedido médico original e chegue com 15 minutos de antecedência. Em alguns convênios pode ser necessário o token de validação, que você recebe pelo celular após a solicitação do procedimento no plano de saúde."
     },
     "São Caetano": {
         "endereco": "Av. Goiás, 1100 - Centro, São Caetano do Sul - SP, 09520-000",
-        "maps": "https://google.com/maps/search/ConectiFisio%20-%20Ictus%20Fisioterapia%20RE%204553-SP/@-23.6229,-46.552,17z?hl=pt-BR",
+        "maps": "https://maps.app.goo.gl/mhct13HEmChxmfJF8",
         "recomendacao": "Traga o pedido médico original e chegue com 15 minutos de antecedência. Em alguns convênios pode ser necessário o token de validação, que você recebe pelo celular após a solicitação do procedimento no plano de saúde."
     }
 }
