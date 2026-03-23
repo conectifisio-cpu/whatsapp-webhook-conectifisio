@@ -47,6 +47,55 @@
             --background: #ffffff;
         }
         emoji-picker.visible { display: block; }
+
+        /* --- RESPONSIVO MOBILE --- */
+        @media (max-width: 768px) {
+            /* Sidebar oculta por padrão no mobile */
+            aside#sidebar-panel {
+                position: fixed;
+                left: -100%;
+                top: 0;
+                bottom: 0;
+                width: 85% !important;
+                max-width: 320px;
+                z-index: 90;
+                transition: left 0.3s ease;
+            }
+            aside#sidebar-panel.sidebar-open {
+                left: 0;
+            }
+            /* Overlay escuro quando sidebar aberta */
+            #sidebar-overlay {
+                display: none;
+                position: fixed;
+                inset: 0;
+                background: rgba(0,0,0,0.5);
+                z-index: 89;
+            }
+            #sidebar-overlay.active { display: block; }
+            /* Header compacto */
+            .tab-label { display: none; }
+            /* Kanban padding menor */
+            #view-kanban { padding: 12px 8px !important; gap: 12px !important; }
+            .kanban-col { min-width: 280px; max-width: 280px; }
+            /* Chats flutuantes em tela cheia */
+            #floating-chats-container {
+                right: 0 !important;
+                left: 0 !important;
+                bottom: 0 !important;
+                flex-direction: column-reverse !important;
+                gap: 0 !important;
+            }
+            .chat-window {
+                width: 100vw !important;
+                border-radius: 16px 16px 0 0 !important;
+            }
+            .chat-expanded { height: 85vh !important; }
+            /* Notif panel full width */
+            #notif-panel { width: calc(100vw - 24px) !important; right: -60px !important; }
+            /* Ocultar botão de alertas no mobile */
+            #audio-toggle .audio-label { display: none; }
+        }
         
         /* --- NOTIFICAÇÃO PISCANTE --- */
         @keyframes pulse-border {
@@ -98,7 +147,10 @@
 
         <div id="floating-chats-container" class="fixed bottom-0 right-6 z-50 flex items-end gap-4 pointer-events-none"></div>
 
-        <aside class="w-80 bg-white border-r border-slate-200 flex flex-col shadow-lg z-10 shrink-0">
+        <!-- Overlay mobile para fechar sidebar -->
+        <div id="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+        <aside id="sidebar-panel" class="w-80 bg-white border-r border-slate-200 flex flex-col shadow-lg z-10 shrink-0">
             <div class="p-6 bg-slate-900 text-white">
                 <div class="flex items-center gap-3">
                     <img src="/assets/logo.jpg" alt="Conectifisio" class="h-10 w-auto rounded" onerror="this.style.display='none'">
@@ -143,24 +195,28 @@
         </aside>
 
         <main class="flex-1 flex flex-col h-full overflow-hidden relative">
-            <header class="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between shrink-0">
-                <div class="flex gap-2 h-full">
-                    <button onclick="switchTab('kanban')" id="tab-kanban" class="h-full px-4 tab-active flex items-center gap-2 transition-all rounded-t-xl mt-2">
-                        <i data-lucide="layout-dashboard" class="w-4 h-4"></i> Kanban
+            <header class="h-16 bg-white border-b border-slate-200 px-3 md:px-6 flex items-center justify-between shrink-0">
+                <div class="flex gap-1 md:gap-2 h-full items-center">
+                    <!-- Botão hambúrguer (só mobile) -->
+                    <button onclick="toggleSidebar()" class="md:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-600 mr-1" title="Fila SLA">
+                        <i data-lucide="menu" class="w-5 h-5"></i>
                     </button>
-                    <button onclick="switchTab('pilates')" id="tab-pilates" class="h-full px-4 tab-inactive flex items-center gap-2 hover:text-purple-600 transition-all rounded-t-xl mt-2">
-                        <i data-lucide="target" class="w-4 h-4"></i> CRM Pilates
+                    <button onclick="switchTab('kanban')" id="tab-kanban" class="h-full px-3 md:px-4 tab-active flex items-center gap-1.5 md:gap-2 transition-all rounded-t-xl mt-2">
+                        <i data-lucide="layout-dashboard" class="w-4 h-4"></i><span class="tab-label">Kanban</span>
                     </button>
-                    <button onclick="switchTab('particulares')" id="tab-particulares" class="h-full px-4 tab-inactive flex items-center gap-2 hover:text-emerald-600 transition-all rounded-t-xl mt-2">
-                        <i data-lucide="gem" class="w-4 h-4"></i> CRM Particulares
+                    <button onclick="switchTab('pilates')" id="tab-pilates" class="h-full px-3 md:px-4 tab-inactive flex items-center gap-1.5 md:gap-2 hover:text-purple-600 transition-all rounded-t-xl mt-2">
+                        <i data-lucide="target" class="w-4 h-4"></i><span class="tab-label">CRM Pilates</span>
                     </button>
-                    <button onclick="switchTab('log')" id="tab-log" class="h-full px-4 tab-inactive flex items-center gap-2 hover:text-blue-500 transition-all rounded-t-xl mt-2">
-                        <i data-lucide="archive" class="w-4 h-4"></i> Histórico
+                    <button onclick="switchTab('particulares')" id="tab-particulares" class="h-full px-3 md:px-4 tab-inactive flex items-center gap-1.5 md:gap-2 hover:text-emerald-600 transition-all rounded-t-xl mt-2">
+                        <i data-lucide="gem" class="w-4 h-4"></i><span class="tab-label">CRM Particulares</span>
+                    </button>
+                    <button onclick="switchTab('log')" id="tab-log" class="h-full px-3 md:px-4 tab-inactive flex items-center gap-1.5 md:gap-2 hover:text-blue-500 transition-all rounded-t-xl mt-2">
+                        <i data-lucide="archive" class="w-4 h-4"></i><span class="tab-label">Histórico</span>
                     </button>
                 </div>
                 <div class="flex items-center gap-4">
-                    <button id="audio-toggle" onclick="unlockAudio()" class="flex items-center gap-1.5 bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-colors shadow-sm cursor-pointer pointer-events-auto">
-                        <i data-lucide="volume-x" id="audio-icon" class="w-3 h-3"></i> Ligar Alertas
+                    <button id="audio-toggle" onclick="unlockAudio()" class="hidden md:flex items-center gap-1.5 bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-colors shadow-sm cursor-pointer pointer-events-auto">
+                        <i data-lucide="volume-x" id="audio-icon" class="w-3 h-3"></i> <span class="audio-label">Ligar Alertas</span>
                     </button>
                     <!-- SINO DE NOTIFICAÇÕES -->
                     <div class="relative" id="notif-wrapper">
@@ -179,7 +235,7 @@
                             </div>
                         </div>
                     </div>
-                    <select id="unit-filter" onchange="renderUI()" class="bg-slate-100 text-slate-600 font-bold text-xs px-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                    <select id="unit-filter" onchange="renderUI()" class="bg-slate-100 text-slate-600 font-bold text-xs px-2 md:px-4 py-2 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 max-w-[120px] md:max-w-none">
                         <option value="Todas">Todas Unidades</option>
                         <option value="São Caetano">São Caetano</option>
                         <option value="Ipiranga">Ipiranga</option>
@@ -365,6 +421,15 @@
                 if (dropdown) dropdown.style.display = 'none';
             }
         });
+
+        // --- SIDEBAR MOBILE ---
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar-panel');
+            const overlay = document.getElementById('sidebar-overlay');
+            const isOpen = sidebar.classList.contains('sidebar-open');
+            sidebar.classList.toggle('sidebar-open', !isOpen);
+            overlay.classList.toggle('active', !isOpen);
+        }
 
         function showChangePassword() {
             const dropdown = document.getElementById('profile-dropdown');
