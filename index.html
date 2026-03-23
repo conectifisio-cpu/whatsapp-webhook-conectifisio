@@ -836,7 +836,7 @@
                                         <button onclick="event.stopPropagation(); toggleBot('${p.id}', '${p.status}')" class="px-2 py-1.5 rounded font-bold ${p.status === 'pausado' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}">
                                             ${p.status === 'pausado' ? 'Robô OFF' : 'Robô ON'}
                                         </button>
-                                        <button onclick="event.stopPropagation(); arquivarComAuditoria('${p.id}')" class="bg-slate-800 text-white px-3 py-1.5 rounded font-bold shadow-sm">Finalizar</button>
+                                        <button onclick="event.stopPropagation(); arquivarComAuditoria('${p.id}', '${safeTitle}', '${p.unit || 'Ipiranga'}')" class="bg-slate-800 text-white px-3 py-1.5 rounded font-bold shadow-sm">Finalizar</button>
                                     </div>
                                 </div>`;
                             }).join('')}
@@ -1013,22 +1013,79 @@
             fetchData();
         }
 
-        async function arquivarComAuditoria(phone) {
+        async function arquivarComAuditoria(phone, nome, unidade) {
+            nome = nome || 'paciente';
+            unidade = unidade || 'Ipiranga';
+
+            // Cria o modal de recomendações
+            const modalId = 'modal-recomendacao-' + Date.now();
+            const modal = document.createElement('div');
+            modal.id = modalId;
+            modal.className = 'fixed inset-0 z-[9999] flex items-center justify-center bg-black/60';
+            modal.innerHTML = `
+                <div class="bg-white rounded-2xl shadow-2xl p-6 w-[380px] max-w-[95vw]">
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                        <div>
+                            <h3 class="font-bold text-slate-800 text-sm">Enviar orientações ao paciente?</h3>
+                            <p class="text-[11px] text-slate-500">${nome} · Unidade ${unidade}</p>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-slate-600 mb-4 leading-relaxed">Deseja enviar a mensagem de orientações de preparo + link do Maps antes de arquivar?</p>
+                    <div class="mb-4">
+                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Data e hora do agendamento (opcional)</label>
+                        <input id="input-data-agendamento-${modalId}" type="text" placeholder="Ex: 25/03 às 14:30" class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400" />
+                    </div>
+                    <div class="flex gap-2">
+                        <button id="btn-sim-${modalId}" class="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2 rounded-lg text-sm transition-colors">✅ Sim, enviar</button>
+                        <button id="btn-nao-${modalId}" class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-2 rounded-lg text-sm transition-colors">Não, só arquivar</button>
+                    </div>
+                    <button id="btn-cancel-${modalId}" class="w-full mt-2 text-[11px] text-slate-400 hover:text-slate-600 transition-colors">Cancelar</button>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            // Aguarda a decisão do colaborador
+            const decisao = await new Promise(resolve => {
+                document.getElementById(`btn-sim-${modalId}`).onclick = () => resolve('sim');
+                document.getElementById(`btn-nao-${modalId}`).onclick = () => resolve('nao');
+                document.getElementById(`btn-cancel-${modalId}`).onclick = () => resolve('cancelar');
+            });
+
+            const dataAgendamento = document.getElementById(`input-data-agendamento-${modalId}`)?.value?.trim() || '';
+            document.body.removeChild(modal);
+
+            if (decisao === 'cancelar') return;
+
+            // Se Sim: envia recomendações via backend
+            if (decisao === 'sim') {
+                try {
+                    const params = new URLSearchParams({ phone, nome, unidade, data: dataAgendamento });
+                    const res = await fetch(`${BACKEND_URL}/api/whatsapp?action=send_recomendacao&${params}`);
+                    if (!res.ok) {
+                        console.warn('Erro ao enviar recomendações:', await res.text());
+                    }
+                } catch(e) {
+                    console.warn('Erro ao enviar recomendações:', e);
+                }
+            }
+
+            // Arquiva o atendimento
             const dataHora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             const user = currentUser || 'Sistema';
-            if(!confirm(`Tem certeza que deseja finalizar este atendimento?\nData/Hora: ${dataHora}\nSerá movido para o histórico.`)) return;
-            
             try {
                 await fetch(API_CHAT, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ phone: phone, message: `[SISTEMA]: Atendimento finalizado por ${user} em ${dataHora}` })
                 });
-            } catch(e) {} 
+            } catch(e) {}
 
             await fetch(`${API_UPDATE}&phone=${encodeURIComponent(phone)}&status=arquivado`);
-            closeChat(phone); 
-            fetchData(); 
+            closeChat(phone);
+            fetchData();
         }
 
         // ========================================================
@@ -1107,7 +1164,7 @@
                             </div>
                         </div>
                         <div class="flex items-center gap-1.5 shrink-0 ml-2">
-                            <button onclick="event.stopPropagation(); arquivarComAuditoria('${id}')" class="bg-slate-700 hover:bg-emerald-500 p-1.5 rounded transition-colors text-white" title="Finalizar e Arquivar">
+                            <button onclick="event.stopPropagation(); arquivarComAuditoria('${id}', '${(p.title||'').replace(/'/g,'')}', '${p.unit||'Ipiranga'}')" class="bg-slate-700 hover:bg-emerald-500 p-1.5 rounded transition-colors text-white" title="Finalizar e Arquivar">
                                 <i data-lucide="archive-restore" class="w-4 h-4"></i>
                             </button>
                             <button onclick="event.stopPropagation(); closeChat('${id}')" class="bg-slate-700 hover:bg-red-500 p-1.5 rounded transition-colors text-white" title="Fechar Aba (Sem Arquivar)">

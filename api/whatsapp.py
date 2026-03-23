@@ -540,6 +540,55 @@ def webhook():
             except Exception as e:
                 return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
+        # ==========================================
+        # ENVIO SEMIAUTOMÁTICO DE RECOMENDAÇÕES
+        # Chamado pelo dashboard ao Finalizar ou Arquivar
+        # ==========================================
+        if request.args.get("action") == "send_recomendacao":
+            try:
+                phone_p = request.args.get("phone", "")
+                nome_p  = request.args.get("nome", "paciente")
+                data_p  = request.args.get("data", "")   # formato livre, ex: "25/03 às 14:30"
+                unidade_p = request.args.get("unidade", "Ipiranga")
+
+                if not phone_p:
+                    return jsonify({"error": "phone obrigatório"}), 400
+
+                info_unidade = UNIDADES.get(unidade_p, UNIDADES["Ipiranga"])
+                link_maps = info_unidade["maps"]
+
+                # Monta a mensagem personalizada
+                if data_p:
+                    msg_recomendacao = (
+                        f"Tudo certo para o seu atendimento, {nome_p}! ✅\n"
+                        f"Esperamos por você no dia {data_p}.\n\n"
+                        "Para que sua recepção seja tranquila, pedimos a gentileza de chegar "
+                        "15 minutos antes e não esquecer o pedido médico original. "
+                        "Vale lembrar que alguns planos de saúde pedem um token de validação "
+                        "enviado ao seu celular na hora, então fique atento às notificações.\n\n"
+                        "Até breve! Se precisar de algo, é só chamar. 😊"
+                    )
+                else:
+                    msg_recomendacao = (
+                        f"Tudo certo para o seu atendimento, {nome_p}! ✅\n\n"
+                        "Para que sua recepção seja tranquila, pedimos a gentileza de chegar "
+                        "15 minutos antes e não esquecer o pedido médico original. "
+                        "Vale lembrar que alguns planos de saúde pedem um token de validação "
+                        "enviado ao seu celular na hora, então fique atento às notificações.\n\n"
+                        "Até breve! Se precisar de algo, é só chamar. 😊"
+                    )
+
+                # Envia mensagem de recomendação
+                responder_texto(phone_p, msg_recomendacao)
+                import time as _t2
+                _t2.sleep(1)
+                # Envia link do Maps
+                responder_texto(phone_p, f"📍 Como chegar à nossa unidade {unidade_p}:\n{link_maps}")
+
+                return jsonify({"ok": True, "enviado": True}), 200
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         return "Acesso Negado", 403
 
     # --- POST: RECEBER MENSAGENS WHATSAPP ---
