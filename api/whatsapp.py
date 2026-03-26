@@ -400,10 +400,18 @@ def webhook():
             if not db:
                 return jsonify({"error": "DB indisponivel"}), 500
             try:
-                import time as _time
                 from datetime import timezone as _tz
-                agora = datetime.now(_tz.utc)  # timezone-aware para comparar corretamente com Firebase timestamps
-                # Statuses elegíveis para follow-up (paciente parou no meio do fluxo)
+                agora = datetime.now(_tz.utc)
+
+                # ==========================================
+                # JANELAS DE ENGAJAMENTO B2C (horário Brasília = UTC-3)
+                # Só dispara mensagens dentro dessas janelas
+                # ==========================================
+                hora_brasilia = (agora - timedelta(hours=3)).hour
+                JANELAS = [(8, 10), (12, 14), (17, 19)]
+                dentro_da_janela = any(inicio <= hora_brasilia < fim for inicio, fim in JANELAS)
+
+                # Statuses elegíveis para follow-up
                 STATUSES_FOLLOWUP = [
                     "triagem", "escolhendo_unidade", "cadastrando_nome",
                     "escolhendo_especialidade", "cadastrando_queixa",
@@ -411,38 +419,42 @@ def webhook():
                     "foto_pedido_medico", "cadastrando_nome_completo",
                     "cadastrando_cpf", "cadastrando_nascimento",
                     "cadastrando_email", "agendando", "finalizado",
-                    "pausado"  # inclui pausado: recepção enviou mas paciente não respondeu
+                    "num_carteirinha", "data_nascimento", "coletando_email",
+                    "pausado"
                 ]
-                # Statuses que NUNCA recebem follow-up (recepção está ativamente atendendo)
+                # Statuses de Particular/Pilates — só alerta interno, sem mensagem ao paciente
+                STATUSES_ALERTA_HUMANO = [
+                    "agendando", "finalizado"
+                ]
+                # Statuses protegidos — nunca recebem follow-up
                 STATUSES_PROTEGIDOS = [
                     "atendimento_humano", "arquivado", "convertido",
                     "perdido", "followup_1", "followup_2", "followup_3"
                 ]
-                # Limites de tempo para cada toque
-                TOQUE_1_HORAS = 2    # 2 horas sem resposta
-                TOQUE_2_HORAS = 24   # 24 horas (dia seguinte)
-                TOQUE_3_HORAS = 48   # 48 horas
-                ARQUIVAR_HORAS = 72  # Arquiva após 72h sem resposta ao toque 3
+                # Statuses de abandono de cadastro (documentos pendentes)
+                STATUSES_CADASTRO = [
+                    "foto_carteirinha", "foto_pedido_medico",
+                    "num_carteirinha", "cadastrando_nome_completo",
+                    "data_nascimento", "coletando_email"
+                ]
 
                 docs = db.collection("PatientsKanban").stream()
                 enviados = []
                 ignorados = []
+                alertas_humano = []
 
                 for doc in docs:
                     p = doc.to_dict()
                     phone_p = doc.id
                     status_p = p.get("status", "")
                     nome_p = p.get("title", "Paciente").split()[0]
+                    modalidade_p = p.get("modalidade", "")
                     toque_atual = p.get("followup_toque", 0)
 
-                    # Só processa statuses elegíveis
                     if status_p in STATUSES_PROTEGIDOS or status_p not in STATUSES_FOLLOWUP:
                         ignorados.append(phone_p)
                         continue
 
-                    # Calcula tempo desde ÚLTIMA INTERAÇÃO DO PACIENTE
-                    # Usa lastPatientInteraction (só atualizado quando paciente escreve)
-                    # Fallback para lastInteraction se não existir
                     last_raw = p.get("lastPatientInteraction") or p.get("lastInteraction")
                     if not last_raw:
                         ignorados.append(phone_p)
@@ -450,15 +462,12 @@ def webhook():
                     try:
                         from datetime import timezone as _tz2
                         if hasattr(last_raw, 'utc_timestamp_micros'):
-                            # Firestore Timestamp object
                             last_dt = last_raw.replace(tzinfo=_tz2.utc) if hasattr(last_raw, 'replace') else agora
                         elif isinstance(last_raw, str):
-                            # ISO string — pode ter ou nao timezone
                             last_dt = datetime.fromisoformat(last_raw.replace('Z', '+00:00'))
                             if last_dt.tzinfo is None:
                                 last_dt = last_dt.replace(tzinfo=_tz2.utc)
                         elif hasattr(last_raw, 'tzinfo'):
-                            # datetime object
                             last_dt = last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
                         else:
                             last_dt = datetime.fromisoformat(str(last_raw)).replace(tzinfo=_tz2.utc)
@@ -470,70 +479,129 @@ def webhook():
                     horas_inativo = (agora - last_dt).total_seconds() / 3600
                     minutos_inativo = (agora - last_dt).total_seconds() / 60
 
-                    # --- LEMBRETE DE CADASTRO INCOMPLETO (30min) ---
-                    # Dispara apenas 1x para pacientes que pararam no meio do cadastro
-                    STATUSES_CADASTRO = [
-                        "foto_carteirinha", "foto_pedido_medico",
-                        "num_carteirinha", "cadastrando_nome_completo",
-                        "cadastrando_cpf", "cadastrando_nascimento",
-                        "cadastrando_email", "data_nascimento", "coletando_email"
-                    ]
-                    if (status_p in STATUSES_CADASTRO and
-                        toque_atual == 0 and
-                        not p.get("lembrete_cadastro_enviado") and
-                        minutos_inativo >= 30):
-                        msg_lembrete = (
-                            f"Oi {nome_p}! 😊 Percebi que você ficou a um passo de concluir o seu cadastro. "
-                            f"Para garantirmos a sua vaga, preciso apenas que você finalize o envio dos documentos. "
-                            f"Leva menos de 2 minutinhos! Posso continuar?"
-                        )
-                        responder_texto(phone_p, msg_lembrete)
-                        db.collection("PatientsKanban").document(phone_p).set(
-                            {"lembrete_cadastro_enviado": True, "lembrete_cadastro_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": "lembrete_cadastro"})
-                        continue  # Não processa follow-up nesta rodada
+                    # ==========================================
+                    # TIPO 3: Particular ou Pilates — ALERTA INTERNO (sem msg ao paciente)
+                    # ==========================================
+                    eh_particular = modalidade_p in ["Particular"] or "pilates" in status_p.lower()
+                    if eh_particular and not p.get("alerta_resgate_enviado") and horas_inativo >= 1:
+                        # Registra alerta no Firebase para o dashboard exibir
+                        hora_alerta = agora.isoformat()
+                        db.collection("PatientsKanban").document(phone_p).set({
+                            "alerta_resgate": True,
+                            "alerta_resgate_em": hora_alerta,
+                            "alerta_resgate_enviado": True,
+                            "alerta_resgate_texto": f"🚨 ALERTA DE RESGATE: Paciente {nome_p} iniciou cotação para {modalidade_p} e parou. Assuma o atendimento!"
+                        }, merge=True)
+                        alertas_humano.append({"phone": phone_p, "tipo": "alerta_particular"})
+                        continue  # Não manda mensagem ao paciente
 
-                    # --- TOQUE 1: Lembrete Suave (2h) ---
-                    if toque_atual == 0 and horas_inativo >= TOQUE_1_HORAS:
+                    # ==========================================
+                    # TIPO 1: Abandono de Cadastro (documentos pendentes)
+                    # ==========================================
+                    if status_p in STATUSES_CADASTRO:
+                        if toque_atual == 0 and not p.get("lembrete_cadastro_enviado") and minutos_inativo >= 30:
+                            if dentro_da_janela:
+                                msg = (f"🤖 Oi {nome_p}! Vi que paramos no meio do seu cadastro. "
+                                       f"Para eu conseguir liberar sua vaga, consegue me enviar a foto do pedido médico e da carteirinha agora?")
+                                responder_texto(phone_p, msg)
+                                db.collection("PatientsKanban").document(phone_p).set(
+                                    {"lembrete_cadastro_enviado": True, "followup_toque": 1,
+                                     "followup_enviado_em": agora.isoformat()}, merge=True)
+                                enviados.append({"phone": phone_p, "toque": "tipo1_t1"})
+                            continue
+
+                        elif toque_atual == 1 and horas_inativo >= 24:
+                            if dentro_da_janela:
+                                msg = (f"🤖 Olá! Passando para lembrar do seu agendamento. "
+                                       f"Iniciar o tratamento o quanto antes é fundamental. Consegue me dar um retorno hoje?")
+                                responder_texto(phone_p, msg)
+                                db.collection("PatientsKanban").document(phone_p).set(
+                                    {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
+                                enviados.append({"phone": phone_p, "toque": "tipo1_t2"})
+                            continue
+
+                        elif toque_atual == 2 and horas_inativo >= 48:
+                            if dentro_da_janela:
+                                msg = (f"🤖 Oi, {nome_p}! Como não tivemos retorno, estou encerrando seu atendimento "
+                                       f"por aqui e liberando o horário para outros pacientes aguardando vaga. "
+                                       f"Se precisar no futuro, é só mandar um 'Oi'. Melhoras!")
+                                responder_texto(phone_p, msg)
+                                db.collection("PatientsKanban").document(phone_p).set(
+                                    {"followup_toque": 3, "status": "perdido",
+                                     "followup_enviado_em": agora.isoformat()}, merge=True)
+                                enviados.append({"phone": phone_p, "toque": "tipo1_t3_arquivado"})
+                            continue
+
+                    # ==========================================
+                    # TIPO 2: Documentação enviada mas não agendou (Convênio)
+                    # ==========================================
+                    if status_p in ["agendando", "finalizado"] and modalidade_p == "Convênio":
+                        if toque_atual == 0 and horas_inativo >= 2:
+                            if dentro_da_janela:
+                                msg = (f"🤖 Olá, {nome_p}! Sua documentação já está certinha! 🎉 "
+                                       f"Responda essa mensagem para escolhermos o melhor dia e período para a sua sessão.")
+                                responder_texto(phone_p, msg)
+                                db.collection("PatientsKanban").document(phone_p).set(
+                                    {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
+                                enviados.append({"phone": phone_p, "toque": "tipo2_t1"})
+                            continue
+
+                        elif toque_atual == 1 and horas_inativo >= 24:
+                            if dentro_da_janela:
+                                msg = (f"🤖 Olá! Passando para lembrar do seu agendamento. "
+                                       f"Iniciar o tratamento o quanto antes é fundamental. Consegue me dar um retorno hoje?")
+                                responder_texto(phone_p, msg)
+                                db.collection("PatientsKanban").document(phone_p).set(
+                                    {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
+                                enviados.append({"phone": phone_p, "toque": "tipo2_t2"})
+                            continue
+
+                        elif toque_atual == 2 and horas_inativo >= 48:
+                            if dentro_da_janela:
+                                msg = (f"🤖 Oi, {nome_p}! Como não tivemos retorno, estou encerrando seu atendimento "
+                                       f"por aqui e liberando o horário para outros pacientes aguardando vaga. "
+                                       f"Se precisar no futuro, é só mandar um 'Oi'. Melhoras!")
+                                responder_texto(phone_p, msg)
+                                db.collection("PatientsKanban").document(phone_p).set(
+                                    {"followup_toque": 3, "status": "perdido",
+                                     "followup_enviado_em": agora.isoformat()}, merge=True)
+                                enviados.append({"phone": phone_p, "toque": "tipo2_t3_arquivado"})
+                            continue
+
+                    # ==========================================
+                    # FALLBACK: Outros statuses — follow-up genérico nas janelas
+                    # ==========================================
+                    if toque_atual == 0 and horas_inativo >= 2 and dentro_da_janela:
                         msg = (f"Oi {nome_p}! 😊 Vi que não conseguimos finalizar o seu agendamento. "
-                               f"Ficou alguma dúvida sobre os horários ou sobre a cobertura do seu plano? "
-                               f"Estou por aqui para te ajudar!")
+                               f"Ficou alguma dúvida? Estou por aqui para te ajudar!")
                         responder_texto(phone_p, msg)
                         db.collection("PatientsKanban").document(phone_p).set(
                             {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": 1})
+                        enviados.append({"phone": phone_p, "toque": "generico_t1"})
 
-                    # --- TOQUE 2: Gatilho de Escassez (24h) ---
-                    elif toque_atual == 1 and horas_inativo >= TOQUE_2_HORAS:
-                        msg = (f"Bom dia, {nome_p}! Tudo bem? 🌅 Nossas agendas para a próxima semana "
-                               f"estão preenchendo rápido. Seu cadastro já está pré-aprovado aqui conosco. "
-                               f"Quer que eu reserve um horário para você não perder a vaga?")
+                    elif toque_atual == 1 and horas_inativo >= 24 and dentro_da_janela:
+                        msg = (f"Bom dia, {nome_p}! 🌅 Nossas agendas estão preenchendo rápido. "
+                               f"Seu cadastro já está pré-aprovado. Quer garantir sua vaga?")
                         responder_texto(phone_p, msg)
                         db.collection("PatientsKanban").document(phone_p).set(
                             {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": 2})
+                        enviados.append({"phone": phone_p, "toque": "generico_t2"})
 
-                    # --- TOQUE 3: Fechamento (48h) ---
-                    elif toque_atual == 2 and horas_inativo >= TOQUE_3_HORAS:
-                        msg = (f"Olá {nome_p}! Como não tivemos retorno, estou pausando o seu atendimento "
-                               f"por enquanto para liberar a vaga na agenda. Mas não se preocupe! "
-                               f"Quando quiser retomar seu tratamento, é só mandar um 'Oi' aqui. "
-                               f"Estaremos de portas abertas! 💙")
+                    elif toque_atual == 2 and horas_inativo >= 48 and dentro_da_janela:
+                        msg = (f"Olá {nome_p}! Como não tivemos retorno, estou pausando o seu atendimento. "
+                               f"Quando quiser retomar, é só mandar um 'Oi'. Estaremos de portas abertas! 💙")
                         responder_texto(phone_p, msg)
                         db.collection("PatientsKanban").document(phone_p).set(
-                            {"followup_toque": 3, "status": "followup_3",
+                            {"followup_toque": 3, "status": "perdido",
                              "followup_enviado_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": 3})
-
-                    # --- ARQUIVAR após 72h sem resposta ao toque 3 ---
-                    elif toque_atual == 3 and horas_inativo >= ARQUIVAR_HORAS:
-                        db.collection("PatientsKanban").document(phone_p).set(
-                            {"status": "perdido"}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": "arquivado"})
+                        enviados.append({"phone": phone_p, "toque": "generico_t3"})
 
                 return jsonify({
                     "ok": True,
+                    "dentro_da_janela": dentro_da_janela,
+                    "hora_brasilia": hora_brasilia,
                     "enviados": len(enviados),
+                    "alertas_humano": len(alertas_humano),
                     "detalhes": enviados,
                     "ignorados": len(ignorados)
                 }), 200
@@ -759,9 +827,38 @@ def webhook():
             if len(msg_limpa) < 2 or msg_recebida.isdigit():
                 responder_texto(phone, "❌ Por favor, digite um nome válido contendo letras.")
             else:
-                update_paciente(phone, {"title": msg_recebida, "status": "escolhendo_especialidade"})
+                # ==========================================
+                # DETECÇÃO DE TERCEIRO AGENDANDO PARA OUTRO
+                # Ex: "Meu nome é Bianca, mas estou agendando para o meu marido Luís"
+                # ==========================================
+                frases_terceiro = [
+                    "estou agendando para", "estou marcando para", "estou ligando para",
+                    "sou a mãe de", "sou o pai de", "sou a esposa de", "sou o marido de",
+                    "sou a filha de", "sou o filho de", "agendando para meu", "agendando para minha",
+                    "marcando para meu", "marcando para minha", "para o meu marido", "para a minha esposa",
+                    "para o meu pai", "para a minha mãe", "para meu filho", "para minha filha",
+                    "para meu irmão", "para minha irmã", "mas estou vendo atendimento para"
+                ]
+                eh_terceiro = any(frase in msg_limpa for frase in frases_terceiro)
+
+                if eh_terceiro:
+                    # Salva o nome de quem está contatando e sinaliza que é terceiro
+                    update_paciente(phone, {"title": msg_recebida, "agendado_por_terceiro": True, "status": "confirmando_paciente_real"})
+                    responder_texto(phone, f"Entendido! 😊 Fico feliz em ajudar.\n\nPara garantirmos que o cadastro fique correto no sistema, por favor me informe o *NOME COMPLETO do paciente* que será atendido (conforme documento):")
+                else:
+                    update_paciente(phone, {"title": msg_recebida, "status": "escolhendo_especialidade"})
+                    secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
+                    enviar_lista(phone, f"Prazer, {msg_recebida}! 😊\n\nPara direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", secoes)
+
+        elif status == "confirmando_paciente_real":
+            # Terceiro informou o nome do paciente real
+            if len(msg_limpa) < 2 or msg_recebida.isdigit():
+                responder_texto(phone, "❌ Por favor, digite o nome completo do paciente.")
+            else:
+                nome_responsavel = info.get("title", "")
+                update_paciente(phone, {"title": msg_recebida, "nome_responsavel": nome_responsavel, "status": "escolhendo_especialidade"})
                 secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
-                enviar_lista(phone, f"Prazer, {msg_recebida}! 😊\n\nPara direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", secoes)
+                enviar_lista(phone, f"Perfeito! Cadastro em nome de *{msg_recebida}*. ✅\n\nQual serviço o paciente procura hoje?", "Ver Serviços", secoes)
 
         elif status == "menu_veterano":
             if "Novo Serviço" in msg_recebida:
@@ -1080,8 +1177,15 @@ def webhook():
             else:
                 busca = buscar_feegow_por_cpf(cpf_limpo)
                 if busca:
-                    update_paciente(phone, {"cpf": cpf_limpo, "title": busca['nome'], "feegow_id": busca['id'], "status": "agendando"})
-                    enviar_botoes(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨\n\nPulei as etapas de e-mail e nascimento. Qual o melhor período para você?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
+                    # Veterano reconhecido: pula dados pessoais MAS exige documentos do novo agendamento
+                    if modalidade == "Particular":
+                        # Particular veterano: vai direto para agenda (sem documentos)
+                        update_paciente(phone, {"cpf": cpf_limpo, "title": busca['nome'], "feegow_id": busca['id'], "status": "agendando"})
+                        enviar_botoes(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨\n\nPulei as etapas de e-mail e nascimento. Qual o melhor período para você?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
+                    else:
+                        # Convênio veterano: pula dados pessoais mas EXIGE carteirinha e pedido médico
+                        update_paciente(phone, {"cpf": cpf_limpo, "title": busca['nome'], "feegow_id": busca['id'], "status": "num_carteirinha"})
+                        responder_texto(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨\n\nPulei as etapas de e-mail e nascimento. Para atualizarmos o seu cadastro, qual o NÚMERO DA SUA CARTEIRINHA? (Apenas números)")
                 else:
                     update_paciente(phone, {"cpf": cpf_limpo, "status": "data_nascimento"})
                     responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
