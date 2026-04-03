@@ -1,4 +1,3 @@
-
 import os, requests, traceback, re, json, base64
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
@@ -219,6 +218,35 @@ def consultar_agenda_feegow(paciente_id):
                             if len(parts) == 3: sessoes.append(f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {proc}")
                 return sessoes
     except: pass
+    return None
+
+def buscar_horarios_disponiveis(paciente_id, especialidade_id=None):
+    """
+    Busca horários disponíveis para agendamento.
+    Usa User-Agent customizado para contornar bloqueio Cloudflare.
+    """
+    if not FEEGOW_TOKEN or not paciente_id: 
+        return None
+    
+    hoje = datetime.now()
+    futuro = hoje + timedelta(days=30)
+    
+    url = f"https://agenda-api.feegow.com.br/v1/appoints/available-schedule"
+    params = {
+        "patient_id": paciente_id,
+        "start_date": hoje.strftime('%Y-%m-%d'),
+        "end_date": futuro.strftime('%Y-%m-%d')
+    }
+    
+    try:
+        res = requests.get(url, params=params, headers=get_feegow_headers(), timeout=10)
+        if res.status_code == 200:
+            dados = res.json()
+            if dados.get("data"):
+                return dados["data"]
+    except Exception as e:
+        print(f"❌ Erro ao buscar horários: {e}")
+    
     return None
 
 def integrar_feegow(phone, info):
@@ -1228,6 +1256,17 @@ def webhook():
             if msg_recebida in ["Manhã", "Tarde", "Noite"]:
                 info["periodo"] = msg_recebida
                 update_data = {"periodo": msg_recebida, "status": "finalizado"}
+                
+                # ✅ NOVO: Tentar buscar horários (valida a conexão Feegow)
+                if info.get("feegow_id"):
+                    try:
+                        horarios = buscar_horarios_disponiveis(info.get("feegow_id"))
+                        if horarios:
+                            print(f"✅ Horários encontrados para {phone}: {len(horarios)} slots")
+                        else:
+                            print(f"⚠️ Nenhum horário disponível para {phone}")
+                    except Exception as e:
+                        print(f"⚠️ Erro ao buscar horários Feegow: {e}")
                 
                 if servico and "Pilates" not in servico:
                     resultado_feegow = integrar_feegow(phone, info)
