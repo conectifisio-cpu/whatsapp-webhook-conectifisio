@@ -119,8 +119,8 @@ def registrar_historico(phone, remetente, tipo, conteudo):
 def get_feegow_headers():
     return {
         "Content-Type": "application/json", 
-        "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Conectifisio-Integration/1.0"
+        "Authorization": f"Bearer {FEEGOW_TOKEN}",
+        "User-Agent": "Integracao-Conectifisio/1.0"
     }
 
 def formatar_data_feegow(data_br):
