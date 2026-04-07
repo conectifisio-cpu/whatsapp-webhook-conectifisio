@@ -1,6 +1,6 @@
 import os, requests, traceback, re, json, base64
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -12,6 +12,11 @@ def add_cors_headers(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     return response
+
+@app.route("/")
+def serve_dashboard():
+    # Serve o index.html que está na raiz do projeto
+    return send_from_directory('../', 'index.html')
 
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE E UNIDADES
