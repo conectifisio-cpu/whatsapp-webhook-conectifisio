@@ -14,11 +14,25 @@ def add_cors_headers(response):
     return response
 
 # ==========================================
-# CONFIGURAÇÕES DE AMBIENTE
+# CONFIGURAÇÕES DE AMBIENTE E UNIDADES
 # ==========================================
+UNIDADES = {
+    "São Caetano": {
+        "endereco": "Rua Manoel Coelho, 600 - Sala 1011 - Centro, São Caetano do Sul - SP",
+        "maps": "https://maps.app.goo.gl/SaoCaetanoLink",
+        "recomendacao": "📍 Estamos localizados no Edifício Comercial Mercure, em frente à estação de trem."
+    },
+    "Ipiranga": {
+        "endereco": "Rua Bom Pastor, 2100 - Sala 505 - Ipiranga, São Paulo - SP",
+        "maps": "https://maps.app.goo.gl/IpirangaLink",
+        "recomendacao": "📍 Estamos a 5 minutos a pé do Metrô Sacomã. O prédio possui estacionamento no local."
+    }
+}
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini:conectifisio-v1") # Modelo customizado
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "conectifisio_webhook_2026")
 
@@ -82,6 +96,12 @@ def validar_data_nascimento(data_str):
         hoje = datetime.now()
         if data_obj > hoje or data_obj.year < (hoje.year - 120):
             return False
+        
+        # Funcionalidade 1: Menor de 12 anos (Encaminhar para Humano)
+        idade = hoje.year - data_obj.year - ((hoje.month, hoje.day) < (data_obj.month, data_obj.day))
+        if idade < 12:
+            return "menor_12"
+            
         return True
     except ValueError:
         return False
@@ -116,21 +136,30 @@ def consultar_faq(mensagem):
 
 def update_paciente(phone, data):
     if not db: return
+    # lastInteraction é o timer GERAL (usado pelo Kanban)
     data["lastInteraction"] = firestore.SERVER_TIMESTAMP
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
 def registrar_historico(phone, remetente, tipo, conteudo):
     if not db: return
+    now_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
     nova_msg = {
         "de": remetente, # 'paciente', 'clinica' ou 'robo'
         "tipo": tipo,
         "conteudo": conteudo,
-        "data": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')  # UTC explícito para conversão correta no frontend
+        "data": now_iso
     }
-    db.collection("PatientsKanban").document(phone).set({
+    
+    update_data = {
         "historico": firestore.ArrayUnion([nova_msg]),
         "lastInteraction": firestore.SERVER_TIMESTAMP
-    }, merge=True)
+    }
+    
+    # Bug 3: lastPatientInteraction é o timer de FOLLOW-UP (só reseta quando o PACIENTE fala)
+    if remetente == "paciente":
+        update_data["lastPatientInteraction"] = firestore.SERVER_TIMESTAMP
+        
+    db.collection("PatientsKanban").document(phone).set(update_data, merge=True)
 
 # ==========================================
 # INTEGRAÇÃO FEEGOW (BLINDADA CONTRA ERRO 403)
@@ -320,6 +349,36 @@ def integrar_feegow(phone, info):
 # ==========================================
 # MENSAGERIA E IA
 # ==========================================
+def chamar_ia_custom(query):
+    """
+    Chama o modelo customizado da OpenAI (conectifisio-v1) para acolhimento e triagem.
+    """
+    if not OPENAI_API_KEY: 
+        # Fallback para Gemini se OpenAI não estiver configurada
+        return chamar_gemini(query)
+        
+    system_prompt = "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural."
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query[:500]}
+        ],
+        "max_tokens": 150,
+        "temperature": 0.7
+    }
+    try:
+        res = requests.post(url, json=payload, headers=headers, timeout=15)
+        if res.status_code == 200:
+            return res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+    except: pass
+    return chamar_gemini(query)
+
 def chamar_gemini(query):
     if not API_KEY: return None
     system_prompt = "Atue como o Assistente Virtual da clínica Conectifisio. Seu tom de voz deve ser brasileiro (PT-BR), acolhedor e focado na experiência do paciente. O paciente enviará a sua queixa clínica a seguir. Responda com UMA única frase empática se solidarizando com a dor dele."
@@ -339,6 +398,9 @@ def enviar_whatsapp(to, payload_msg):
     except: return None
 
 def responder_texto(to, texto, remetente="robo"):
+    import time
+    # Funcionalidade 4: Humanização com delay de 2 segundos
+    if remetente == "robo": time.sleep(2)
     registrar_historico(to, remetente, "texto", texto)
     return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
@@ -824,7 +886,9 @@ def webhook():
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade and servico in ["Recovery", "Liberação Miofascial"]: modalidade = "Particular"
 
-        if len(msg_limpa) <= 25 and (any(msg_limpa.startswith(w) for w in ["obrigad", "obg", "ok", "valeu", "certo", "tá bom", "perfeito", "beleza", "show"]) or any(char in msg_limpa for char in ["👍", "🙏", "❤️", "👏"])):
+        # Bug 5: Detecção de Cortesia (Ignorar se o robô já terminou ou está em humano)
+        cortesias = ["obrigad", "obg", "ok", "valeu", "certo", "tá bom", "perfeito", "beleza", "show", "combinado", "agradeço"]
+        if len(msg_limpa) <= 25 and (any(msg_limpa.startswith(w) for w in cortesias) or any(char in msg_limpa for char in ["👍", "🙏", "❤️", "👏"])):
             if status in ["finalizado", "atendimento_humano"]:
                 responder_texto(phone, "Por nada! 😊 Nossa equipe já recebeu seus dados e confirmará tudo em instantes.")
                 return jsonify({"status": "courtesy_ignored"}), 200
@@ -855,7 +919,13 @@ def webhook():
             if msg_recebida not in ["São Caetano", "Ipiranga"]:
                  enviar_botoes(phone, "Por favor, utilize os botões abaixo para escolher a unidade:", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             else:
-                update_paciente(phone, {"unit": msg_recebida})
+                unidade_info = UNIDADES.get(msg_recebida, {})
+                update_paciente(phone, {
+                    "unit": msg_recebida,
+                    "address": unidade_info.get("endereco"),
+                    "maps_link": unidade_info.get("maps"),
+                    "recommendation": unidade_info.get("recomendacao")
+                })
                 if is_veteran:
                     nome_salvo = info.get("title", "Paciente").split()[0]
                     update_paciente(phone, {"status": "menu_veterano"})
@@ -869,8 +939,9 @@ def webhook():
                     responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
 
         elif status == "cadastrando_nome":
-            if len(msg_limpa) < 2 or msg_recebida.isdigit():
-                responder_texto(phone, "❌ Por favor, digite um nome válido contendo letras.")
+            # Bug 6: Nome Curto (Exigir pelo menos Nome e Sobrenome)
+            if len(msg_limpa.split()) < 2 or msg_recebida.isdigit():
+                responder_texto(phone, "❌ Por favor, digite seu NOME E SOBRENOME para o cadastro:")
             else:
                 # ==========================================
                 # DETECÇÃO DE TERCEIRO AGENDANDO PARA OUTRO
@@ -933,7 +1004,8 @@ def webhook():
             
             elif "Secretaria" in msg_recebida:
                 update_paciente(phone, {"status": "menu_secretaria"})
-                secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
+                # Funcionalidade 2: Botão Enviar Exames/Resultados
+                secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s5", "title": "📁 Enviar Exames/Resultados"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
 
         elif status == "menu_secretaria":
@@ -941,9 +1013,19 @@ def webhook():
                 update_paciente(phone, {"status": "menu_veterano"})
                 secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, "Voltando ao menu principal. Como posso ajudar?", "Ver Opções", secoes)
+            elif "Exames" in msg_recebida:
+                update_paciente(phone, {"status": "enviando_exames"})
+                responder_texto(phone, "Perfeito! ✅ Pode enviar os arquivos (PDF ou Foto) agora mesmo. Eu vou anexá-los diretamente ao seu prontuário para o fisioterapeuta analisar.")
             else:
                 update_paciente(phone, {"status": "atendimento_humano", "queixa": f"[SECRETARIA]: {msg_recebida}"})
                 responder_texto(phone, f"A sua solicitação para '{msg_recebida}' foi registada com sucesso. A nossa equipe de secretaria vai assumir o atendimento para providenciar os detalhes. Aguarde um instante! 👩‍💻")
+
+        elif status == "enviando_exames":
+            if tem_anexo:
+                update_paciente(phone, {"status": "atendimento_humano", "queixa": "[EXAME ENVIADO]: Paciente enviou exames via robô."})
+                responder_texto(phone, "Recebido com sucesso! 📁 Já anexei ao seu prontuário. Nossa equipe vai analisar e te dar um retorno em breve.")
+            else:
+                responder_texto(phone, "❌ Não recebi o arquivo. Por favor, envie o seu exame ou resultado (Foto ou PDF).")
 
         elif status == "confirmando_convenio_salvo":
             if "manter" in msg_recebida.lower():
@@ -1138,15 +1220,15 @@ def webhook():
 
         elif status == "triagem_neuro":
             if "integral" in msg_limpa or "1" in msg_limpa:
-                update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "atendimento_humano"})
-                responder_texto(phone, "Agradeço por compartilhar. ❤️ Nosso fisioterapeuta responsável entrará em contato agora para organizar sua vinda com segurança.")
+                update_paciente(phone, {"mobilidade": "Necessidade de auxílio integral", "status": "triagem_neuro_queixa"})
+                responder_texto(phone, "Agradeço por compartilhar. ❤️ Para prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe à clínica hoje?")
             else:
                 mobilidade = "Preciso de auxílio parcial" if "parcial" in msg_limpa or "2" in msg_limpa else "Autonomia total"
                 update_paciente(phone, {"mobilidade": mobilidade, "status": "triagem_neuro_queixa"})
                 responder_texto(phone, "Anotado! ✅\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe à clínica hoje?")
 
         elif status == "triagem_neuro_queixa":
-            acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
+            acolhimento = chamar_ia_custom(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
             conv_salvo = info.get("convenio", "")
             update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "lastPatientInteraction": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00'), "status": "modalidade"})
             if is_veteran and conv_salvo and conv_salvo.lower() != "particular":
@@ -1156,7 +1238,7 @@ def webhook():
                 enviar_botoes(phone, f"{acolhimento}\n\nDeseja atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
 
         elif status == "cadastrando_queixa":
-            acolhimento = chamar_gemini(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
+            acolhimento = chamar_ia_custom(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
             if servico in ["Recovery", "Liberação Miofascial"]:
                 if is_veteran:
                     update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "agendando"})
@@ -1236,7 +1318,11 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
 
         elif status == "data_nascimento":
-            if not validar_data_nascimento(msg_recebida):
+            validacao = validar_data_nascimento(msg_recebida)
+            if validacao == "menor_12":
+                update_paciente(phone, {"birthDate": msg_recebida, "status": "atendimento_humano"})
+                responder_texto(phone, "Entendido! 😊 Como o paciente é menor de 12 anos, nossa equipe de fisioterapia pediátrica entrará em contato agora mesmo para orientar o agendamento com segurança. Aguarde um instante! 👩‍⚕️")
+            elif not validacao:
                 responder_texto(phone, "❌ Data de nascimento inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
             else:
                 update_paciente(phone, {"birthDate": msg_recebida, "status": "coletando_email"})
@@ -1272,6 +1358,7 @@ def webhook():
         elif status == "agendando":
             if msg_recebida in ["Manhã", "Tarde", "Noite"]:
                 info["periodo"] = msg_recebida
+                # Funcionalidade 5: Período no Kanban
                 update_data = {"periodo": msg_recebida, "status": "finalizado"}
                 
                 if servico and "Pilates" not in servico:
