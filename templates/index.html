@@ -97,6 +97,57 @@
             #audio-toggle .audio-label { display: none; }
         }
         
+        /* --- LIGHTBOX DE IMAGENS --- */
+        #lightbox-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.92);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        #lightbox-overlay.active { display: flex; }
+        #lightbox-img { max-width: 90vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+        
+        /* --- CARD DESTACADO --- */
+        .card-flagged {
+            border-top-color: #ef4444 !important;
+            box-shadow: 0 0 0 3px rgba(239,68,68,0.4), 0 4px 12px rgba(239,68,68,0.2) !important;
+            animation: flag-pulse 2s infinite;
+        }
+        @keyframes flag-pulse {
+            0%, 100% { box-shadow: 0 0 0 3px rgba(239,68,68,0.4), 0 4px 12px rgba(239,68,68,0.2); }
+            50% { box-shadow: 0 0 0 6px rgba(239,68,68,0.2), 0 4px 20px rgba(239,68,68,0.3); }
+        }
+        
+        /* --- PAINEL RESPOSTAS RÁPIDAS --- */
+        .quick-replies-panel {
+            position: absolute;
+            bottom: 56px;
+            left: 0;
+            right: 0;
+            background: white;
+            border-top: 1px solid #e2e8f0;
+            border-radius: 8px 8px 0 0;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 50;
+            display: none;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+        }
+        .quick-replies-panel.visible { display: block; }
+        .quick-reply-item {
+            padding: 8px 14px;
+            font-size: 11px;
+            cursor: pointer;
+            border-bottom: 1px solid #f1f5f9;
+            color: #334155;
+            transition: background 0.15s;
+        }
+        .quick-reply-item:hover { background: #f0f9ff; color: #1d4ed8; font-weight: 600; }
+        
         /* --- NOTIFICAÇÃO PISCANTE --- */
         @keyframes pulse-border {
             0% { border-color: #3b82f6; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
@@ -139,6 +190,16 @@
             </form>
             <p id="login-error" class="text-xs text-red-500 text-center mt-4 hidden font-bold">Usuário ou senha incorretos.</p>
         </div>
+    </div>
+
+    <!-- LIGHTBOX DE IMAGENS -->
+    <div id="lightbox-overlay" onclick="closeLightbox()">
+        <div class="flex gap-3 mb-4">
+            <span id="lightbox-title" class="text-white text-sm font-bold"></span>
+            <button onclick="event.stopPropagation(); closeLightbox()" class="ml-auto bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">✕ Fechar</button>
+        </div>
+        <img id="lightbox-img" src="" alt="Visualização" onclick="event.stopPropagation()">
+        <div class="flex gap-3 mt-4" id="lightbox-nav"></div>
     </div>
 
     <!-- SISTEMA PRINCIPAL (Oculto até login) -->
@@ -215,9 +276,7 @@
                     </button>
                 </div>
                 <div class="flex items-center gap-4">
-                    <button id="audio-toggle" onclick="unlockAudio()" class="hidden md:flex items-center gap-1.5 bg-red-50 text-red-600 border border-red-200 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-red-100 transition-colors shadow-sm cursor-pointer pointer-events-auto">
-                        <i data-lucide="volume-x" id="audio-icon" class="w-3 h-3"></i> <span class="audio-label">Ligar Alertas</span>
-                    </button>
+                    <!-- Botão de som removido (não funcionava de forma confiável nos browsers) -->
                     <!-- SINO DE NOTIFICAÇÕES -->
                     <div class="relative" id="notif-wrapper">
                         <button onclick="toggleNotifPanel()" class="relative p-2 rounded-xl hover:bg-slate-100 transition-colors">
@@ -362,6 +421,47 @@
         let isFetching = false;
         let currentUser = null;
         let lastMessageCounts = {}; // Para rastrear novas mensagens
+        let flaggedCards = new Set(); // Cards destacados pela recepcionista
+        
+        // ==========================================
+        // LIGHTBOX DE IMAGENS
+        // ==========================================
+        function openLightbox(mediaId, titulo) {
+            const overlay = document.getElementById('lightbox-overlay');
+            const img = document.getElementById('lightbox-img');
+            const titleEl = document.getElementById('lightbox-title');
+            if (!overlay || !img) return;
+            titleEl.textContent = titulo || 'Imagem';
+            img.src = `${BACKEND_URL}/api/media?id=${mediaId}`;
+            img.alt = titulo || 'Imagem';
+            overlay.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+        
+        function closeLightbox() {
+            const overlay = document.getElementById('lightbox-overlay');
+            const img = document.getElementById('lightbox-img');
+            if (overlay) overlay.classList.remove('active');
+            if (img) img.src = '';
+            document.body.style.overflow = '';
+        }
+        
+        // Fechar lightbox com ESC
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+        
+        // ==========================================
+        // DESTAQUE DE CARD
+        // ==========================================
+        function toggleCardFlag(patientId) {
+            if (flaggedCards.has(patientId)) {
+                flaggedCards.delete(patientId);
+                showToast('Destaque removido', 'info');
+            } else {
+                flaggedCards.add(patientId);
+                showToast('🚩 Card destacado! Verifique a conversa.', 'warning');
+            }
+            renderUI();
+        }
 
         // Sistema de Login Simples (Para MVP, depois migramos para Firebase Auth)
         const USERS = {
@@ -444,44 +544,14 @@
         }
 
         // ==========================================
-        // 2. ALERTAS SONOROS E NOTIFICAÇÕES
+        // 2. NOTIFICAÇÕES (som removido - não confiável nos browsers modernos)
         // ==========================================
-        let audioUnlocked = false;
         let isFirstLoad = true;
         let knownPatientIds = new Set();
         let alertedSlaIds = new Set();
-        
-        let audioNew = null;
-        let audioAlert = null;
-
-        function unlockAudio() {
-            if (!audioUnlocked) {
-                try {
-                    audioNew = new Audio('https://actions.google.com/sounds/v1/ui/pop_up_on.ogg');
-                    audioAlert = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
-                    audioNew.play().then(() => {
-                        audioNew.pause(); audioNew.currentTime = 0; 
-                        audioUnlocked = true;
-                        const btn = document.getElementById('audio-toggle');
-                        if(btn) {
-                            btn.classList.replace('bg-red-50', 'bg-emerald-50');
-                            btn.classList.replace('text-red-600', 'text-emerald-600');
-                            btn.classList.replace('border-red-200', 'border-emerald-200');
-                            btn.innerHTML = `<i data-lucide="volume-2" class="w-3 h-3"></i> Som Ativo`;
-                        }
-                        if(window.lucide) window.lucide.createIcons();
-                        showToast("Alertas ativados!", "info");
-                    }).catch(e => console.log("Áudio pendente."));
-                } catch(e) {}
-            }
-        }
 
         function playSound(type) {
-            if (!audioUnlocked) return;
-            try {
-                if(type === 'new' && audioNew) { audioNew.currentTime = 0; audioNew.play(); }
-                if(type === 'alert' && audioAlert) { audioAlert.currentTime = 0; audioAlert.play(); }
-            } catch(e) {}
+            // Função mantida para compatibilidade, mas sem efeito
         }
 
         function showToast(message, type = 'info') {
@@ -650,6 +720,11 @@
         // 3. REGRAS DO KANBAN E CRM
         // ==========================================
         const CRM_STATUSES = ['followup_1', 'followup_2', 'followup_3', 'convertido', 'perdido'];
+        // Status que ficam visíveis no Kanban (não são CRM nem arquivados)
+        const KANBAN_ACTIVE_STATUSES = ['triagem', 'escolhendo_unidade', 'escolhendo_especialidade', 'cadastrando_queixa',
+            'modalidade', 'nome_convenio', 'num_carteirinha', 'foto_carteirinha', 'foto_pedido_medico',
+            'agendando', 'pendente_feegow', 'finalizado', 'atendimento_humano', 'pausado',
+            'confirmando_convenio_salvo', 'menu_veterano', 'menu_secretaria', 'enviando_exames'];
 
         function isCRMOrArquivado(status) {
             return status === 'arquivado' || CRM_STATUSES.includes(status);
@@ -669,7 +744,13 @@
             },
             { id: 'pilates', title: '🧘‍♀️ Lead Pilates', color: '#8b5cf6', filter: p => p.servico === 'Pilates Studio' && !['pausado', 'atendimento_humano'].includes(p.status) && !isCRMOrArquivado(p.status) },
             { id: 'particular', title: '💎 Lead Particular', color: '#10b981', filter: p => p.modalidade === 'Particular' && p.servico !== 'Pilates Studio' && !['pausado', 'atendimento_humano'].includes(p.status) && !isCRMOrArquivado(p.status) },
-            { id: 'convenio', title: '🏦 Pendente Feegow', color: '#f59e0b', filter: p => p.modalidade === 'Convênio' && p.servico !== 'Pilates Studio' && !['pausado', 'atendimento_humano'].includes(p.status) && !isCRMOrArquivado(p.status) },
+            { id: 'convenio', title: '🏦 Pendente Feegow', color: '#f59e0b', filter: p => {
+                if (isCRMOrArquivado(p.status)) return false;
+                if (['pausado', 'atendimento_humano'].includes(p.status)) return false;
+                if (p.servico === 'Pilates Studio') return false;
+                // Aparece na coluna Feegow se: modalidade Convênio OU status pendente_feegow
+                return p.modalidade === 'Convênio' || p.status === 'pendente_feegow';
+            }},
             { id: 'pausado', title: '🚨 Intervenção', color: '#ef4444', filter: p => ['pausado', 'atendimento_humano'].includes(p.status) && !isCRMOrArquivado(p.status) }
         ];
 
@@ -850,8 +931,9 @@
                                 const displayMsg = ultimaMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;");
                                 const displayQueixa = (p.queixa || p.queixa_ia || 'Aguardando resposta...').replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+                                const isFlagged = flaggedCards.has(p.id);
                                 return `
-                                <div onclick="openChat('${p.id}')" class="bg-white p-4 rounded-[1.5rem] shadow-sm border-t-4 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer flex flex-col relative ${alertClass}" style="border-top-color: ${col.color}">
+                                <div onclick="openChat('${p.id}')" class="bg-white p-4 rounded-[1.5rem] shadow-sm border-t-4 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer flex flex-col relative ${alertClass} ${isFlagged ? 'card-flagged' : ''}" style="border-top-color: ${isFlagged ? '#ef4444' : col.color}">
                                     ${unreadBadge}
                                     <div class="flex justify-between items-center mb-2">
                                         <span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[9px] font-black uppercase">${p.unit || 'SCS'}</span>
@@ -883,6 +965,7 @@
                                             ${p.convenio ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">Convênio/App:</span><span class="font-black text-blue-600 uppercase">${p.convenio}</span></div>` : ''}
                                             ${p.numCarteirinha ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">Carteirinha:</span><div class="flex items-center gap-1"><span class="font-black text-slate-700">${p.numCarteirinha}</span><button onclick="event.stopPropagation(); copyToClipboard('${p.numCarteirinha}')" title="Copiar carteirinha" class="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"><i data-lucide="copy" class="w-2.5 h-2.5"></i></button></div></div>` : ''}
                                             ${p.cpf ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">CPF:</span><div class="flex items-center gap-1"><span class="font-black text-slate-700 font-mono">${p.cpf.replace(/^(\d{3})(\d{3})(\d{3})(\d{2})$/, '$1.$2.$3-$4')}</span><button onclick="event.stopPropagation(); copyToClipboard('${p.cpf}')" title="Copiar CPF" class="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600"><i data-lucide="copy" class="w-2.5 h-2.5"></i></button></div></div>` : ''}
+                                            ${p.periodo ? `<div class="flex justify-between items-center"><span class="text-slate-500 font-bold">Período:</span><span class="font-black text-indigo-600">⏰ ${p.periodo}</span></div>` : ''}
                                         </div>
                                     </div>
 
@@ -897,9 +980,17 @@
                                         </div>
                                     </div>
                                     
+                                    ${(p.carteirinha_media_id || p.pedido_media_id) ? `
+                                    <div class="flex gap-1.5 mt-2">
+                                        ${p.carteirinha_media_id ? `<button onclick="event.stopPropagation(); openLightbox('${p.carteirinha_media_id}', 'Carteirinha')" class="flex-1 flex items-center justify-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-black py-1.5 rounded-lg border border-blue-200 transition-colors"><i data-lucide="id-card" class="w-3 h-3"></i> Carteirinha</button>` : ''}
+                                        ${p.pedido_media_id ? `<button onclick="event.stopPropagation(); openLightbox('${p.pedido_media_id}', 'Pedido Médico')" class="flex-1 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[9px] font-black py-1.5 rounded-lg border border-emerald-200 transition-colors"><i data-lucide="file-text" class="w-3 h-3"></i> Pedido</button>` : ''}
+                                    </div>` : ''}
                                     <div class="flex justify-between items-center text-[10px] mt-3 pt-3 border-t border-slate-100">
                                         <button onclick="event.stopPropagation(); toggleBot('${p.id}', '${p.status}')" class="px-2 py-1.5 rounded font-bold ${p.status === 'pausado' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}">
                                             ${p.status === 'pausado' ? 'Robô OFF' : 'Robô ON'}
+                                        </button>
+                                        <button onclick="event.stopPropagation(); toggleCardFlag('${p.id}')" class="px-2 py-1.5 rounded font-bold ${flaggedCards.has('${p.id}') ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'} transition-colors" title="Destacar card">
+                                            ${flaggedCards.has('${p.id}') ? '🚩 Destacado' : '🚩'}
                                         </button>
                                         <button onclick="event.stopPropagation(); arquivarComAuditoria('${p.id}', '${safeTitle}', '${p.unit || 'Ipiranga'}')" class="bg-slate-800 text-white px-3 py-1.5 rounded font-bold shadow-sm">Finalizar</button>
                                     </div>
@@ -1237,7 +1328,11 @@
                                 <p class="text-[9px] text-slate-300 truncate leading-none">${p.servico || 'Triagem'}</p>
                             </div>
                         </div>
-                        <div class="flex items-center gap-1.5 shrink-0 ml-2">
+                        <div class="flex items-center gap-1 shrink-0 ml-2">
+                            ${(p.carteirinha_media_id || p.pedido_media_id) ? `
+                            <button onclick="event.stopPropagation(); openLightbox('${p.carteirinha_media_id || p.pedido_media_id}', '${p.carteirinha_media_id ? 'Carteirinha' : 'Pedido Médico'}')" class="bg-slate-700 hover:bg-blue-500 p-1.5 rounded transition-colors text-white" title="Ver Fotos do Paciente">
+                                <i data-lucide="image" class="w-4 h-4"></i>
+                            </button>` : ''}
                             <button onclick="event.stopPropagation(); arquivarComAuditoria('${id}', '${(p.title||'').replace(/'/g,'')}', '${p.unit||'Ipiranga'}')" class="bg-slate-700 hover:bg-emerald-500 p-1.5 rounded transition-colors text-white" title="Finalizar e Arquivar">
                                 <i data-lucide="archive-restore" class="w-4 h-4"></i>
                             </button>
@@ -1256,15 +1351,29 @@
 
                     <emoji-picker id="emoji-picker-${id}" class="shadow-xl border border-slate-200 rounded-lg"></emoji-picker>
 
-                    <div class="p-2 bg-[#f0f2f5] border-t border-slate-200 shrink-0 flex gap-2 items-center relative ${isMinimized ? 'hidden' : ''}">
-                        <button onclick="toggleEmojiPicker('${id}')" class="p-2 text-slate-500 hover:text-slate-700 transition-colors" title="Emojis">
+                    <!-- Painel de Respostas Rápidas -->
+                    <div id="quick-replies-${id}" class="quick-replies-panel">
+                        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">⚡ Respostas Rápidas</span>
+                            <button onclick="toggleQuickReplies('${id}')" class="text-slate-400 hover:text-slate-600 text-xs">×</button>
+                        </div>
+                        ${QUICK_REPLIES.map(r => `<div class="quick-reply-item" onclick="useQuickReply('${id}', '${r.replace(/'/g, "\\'")}')">&#x26A1; ${r}</div>`).join('')}
+                    </div>
+                    <div class="p-2 bg-[#f0f2f5] border-t border-slate-200 shrink-0 flex gap-1 items-center relative ${isMinimized ? 'hidden' : ''}">
+                        <button onclick="toggleEmojiPicker('${id}')" class="p-1.5 text-slate-500 hover:text-slate-700 transition-colors" title="Emojis">
                             <i data-lucide="smile" class="w-4 h-4"></i>
                         </button>
+                        <button onclick="toggleQuickReplies('${id}')" class="p-1.5 text-slate-500 hover:text-amber-500 transition-colors" title="Respostas Rápidas">
+                            <i data-lucide="zap" class="w-4 h-4"></i>
+                        </button>
                         <input type="file" id="file-upload-${id}" class="hidden" accept="image/*,application/pdf" onchange="selecionarArquivoChat(event, '${id}')">
-                        <button onclick="document.getElementById('file-upload-${id}').click()" class="p-2 text-slate-500 hover:text-slate-700 transition-colors" title="Anexar Arquivo">
+                        <button onclick="document.getElementById('file-upload-${id}').click()" class="p-1.5 text-slate-500 hover:text-slate-700 transition-colors" title="Anexar Arquivo">
                             <i data-lucide="paperclip" class="w-4 h-4"></i>
                         </button>
-                        <input type="text" id="chat-input-${id}" placeholder="Mensagem..." spellcheck="true" lang="pt-BR" class="flex-1 bg-white border-none rounded-lg p-2.5 text-xs focus:outline-none shadow-sm" onkeypress="if(event.key === 'Enter') enviarMsgChat('${id}')">
+                        <button onclick="event.stopPropagation(); toggleCardFlag('${id}')" class="p-1.5 transition-colors ${flaggedCards.has(id) ? 'text-red-500' : 'text-slate-400 hover:text-red-400'}" title="Destacar card">
+                            <i data-lucide="flag" class="w-4 h-4"></i>
+                        </button>
+                        <input type="text" id="chat-input-${id}" placeholder="Mensagem..." spellcheck="true" lang="pt-BR" autocorrect="on" autocapitalize="sentences" class="flex-1 bg-white border-none rounded-lg p-2.5 text-xs focus:outline-none shadow-sm" onkeypress="if(event.key === 'Enter') enviarMsgChat('${id}')">
                         <button onclick="enviarMsgChat('${id}')" id="btn-send-${id}" class="p-2 text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors flex items-center justify-center">
                             <i data-lucide="send" class="w-4 h-4"></i>
                         </button>
@@ -1296,9 +1405,21 @@
                 p.historico.forEach(msg => {
                     let time = formatTimezone(msg.data);
                     const msgFormatada = String(msg.conteudo).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    const isAnexo = msg.tipo === 'anexo';
                     
                     if (msg.de === 'paciente' || msg.de === 'cliente') {
-                        html += `<div class="msg-bubble msg-in">${msgFormatada}<span class="msg-time">${time}</span></div>`;
+                        if (isAnexo) {
+                            // Tenta exibir miniatura se tiver media_id no conteúdo
+                            html += `<div class="msg-bubble msg-in">
+                                <div class="flex items-center gap-2 text-slate-500">
+                                    <i data-lucide="image" class="w-4 h-4 text-blue-400"></i>
+                                    <span class="text-[10px] italic">${msgFormatada}</span>
+                                </div>
+                                <span class="msg-time">${time}</span>
+                            </div>`;
+                        } else {
+                            html += `<div class="msg-bubble msg-in">${msgFormatada}<span class="msg-time">${time}</span></div>`;
+                        }
                     } else if (msg.de === 'robo') {
                         html += `<div class="msg-bubble msg-robo">🤖 ${msgFormatada}<span class="msg-time">${time}</span></div>`;
                     } else {
@@ -1310,7 +1431,17 @@
                             checkIcon = '<i data-lucide="check-check" class="w-3 h-3 inline text-slate-400"></i>'; // Entregue
                         }
                         
-                        html += `<div class="msg-bubble msg-out">${msgFormatada}<span class="msg-time">${time} ${checkIcon}</span></div>`;
+                        if (isAnexo || msg.conteudo.includes('[📎')) {
+                            html += `<div class="msg-bubble msg-out">
+                                <div class="flex items-center gap-2">
+                                    <i data-lucide="paperclip" class="w-3 h-3 text-emerald-600"></i>
+                                    <span>${msgFormatada}</span>
+                                </div>
+                                <span class="msg-time">${time} ${checkIcon}</span>
+                            </div>`;
+                        } else {
+                            html += `<div class="msg-bubble msg-out">${msgFormatada}<span class="msg-time">${time} ${checkIcon}</span></div>`;
+                        }
                     }
                 });
             } else {
@@ -1364,10 +1495,47 @@
             finally { if(btn) { btn.innerHTML = `<i data-lucide="send" class="w-4 h-4 text-white"></i>`; if(window.lucide) window.lucide.createIcons(); } }
         }
 
-        // Fecha o emoji picker se clicar fora
+        // ==========================================
+        // RESPOSTAS RÁPIDAS
+        // ==========================================
+        const QUICK_REPLIES = [
+            'Aguarde um momento, vou verificar para você! 😊',
+            'Perfeito! Vou confirmar o agendamento e te retorno em instantes.',
+            'Olá! Tudo bem? Como posso te ajudar hoje?',
+            'Seu atendimento foi confirmado! ✅ Aguardamos você.',
+            'Preciso verificar a disponibilidade de horário, pode aguardar?',
+            'Seu convênio está sendo validado junto ao plano. Retorno em breve!',
+            'Para reagendar, qual o melhor horário para você? ☀️ ⛅',
+            'Obrigado pelo contato! Qualquer dúvida, estamos aqui. 💙',
+            'Vou transferir para nossa equipe especializada. Um momento!',
+            'Seu pedido médico foi recebido com sucesso! 📎',
+            'Lembre-se de trazer o pedido médico original no dia da consulta.',
+            'Nossa unidade fica aberta de segunda a sábado, das 7h às 20h.',
+        ];
+        
+        function toggleQuickReplies(id) {
+            const panel = document.getElementById(`quick-replies-${id}`);
+            if (!panel) return;
+            panel.classList.toggle('visible');
+        }
+        
+        function useQuickReply(id, text) {
+            const input = document.getElementById(`chat-input-${id}`);
+            if (input) {
+                input.value = text;
+                input.focus();
+            }
+            const panel = document.getElementById(`quick-replies-${id}`);
+            if (panel) panel.classList.remove('visible');
+        }
+        
+        // Fecha o emoji picker e quick replies se clicar fora
         document.addEventListener('click', function(event) {
             if (!event.target.closest('emoji-picker') && !event.target.closest('button[title="Emojis"]')) {
                 document.querySelectorAll('emoji-picker').forEach(p => p.classList.remove('visible'));
+            }
+            if (!event.target.closest('.quick-replies-panel') && !event.target.closest('button[title="Respostas Rápidas"]')) {
+                document.querySelectorAll('.quick-replies-panel').forEach(p => p.classList.remove('visible'));
             }
         });
 

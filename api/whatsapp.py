@@ -425,6 +425,36 @@ def enviar_lista(to, texto, titulo_botao, secoes):
     })
 
 # ==========================================
+# PROXY DE MÍDIA — Visualização de imagens do WhatsApp no Dashboard
+# ==========================================
+@app.route("/api/media", methods=["GET", "OPTIONS"])
+def media_proxy():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+    media_id = request.args.get("id")
+    if not media_id:
+        return jsonify({"error": "media_id obrigatório"}), 400
+    try:
+        url_info = f"https://graph.facebook.com/v19.0/{media_id}"
+        headers_wa = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        res_info = requests.get(url_info, headers=headers_wa, timeout=10)
+        if res_info.status_code != 200:
+            return jsonify({"error": "Mídia não encontrada"}), 404
+        media_url = res_info.json().get("url")
+        mime_type = res_info.json().get("mime_type", "image/jpeg")
+        res_download = requests.get(media_url, headers=headers_wa, timeout=15)
+        if res_download.status_code != 200:
+            return jsonify({"error": "Falha ao baixar mídia"}), 502
+        from flask import Response
+        return Response(
+            res_download.content,
+            mimetype=mime_type,
+            headers={"Cache-Control": "private, max-age=3600"}
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ==========================================
 # WEBHOOK PRINCIPAL
 # ==========================================
 @app.route("/api/whatsapp", methods=["GET", "POST", "OPTIONS"])
@@ -1364,8 +1394,10 @@ def webhook():
         elif status == "agendando":
             if msg_recebida in ["Manhã", "Tarde", "Noite"]:
                 info["periodo"] = msg_recebida
-                # Funcionalidade 5: Período no Kanban
-                update_data = {"periodo": msg_recebida, "status": "finalizado"}
+                # Bug Fix: Convenêio vai para 'pendente_feegow' para aparecer na coluna correta do Kanban
+                # Particular vai para 'finalizado' (sem necessidade de validação)
+                novo_status = "pendente_feegow" if modalidade == "Convênio" else "finalizado"
+                update_data = {"periodo": msg_recebida, "status": novo_status}
                 
                 if servico and "Pilates" not in servico:
                     resultado_feegow = integrar_feegow(phone, info)
