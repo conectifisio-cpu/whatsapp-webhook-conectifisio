@@ -15,8 +15,12 @@ def add_cors_headers(response):
 
 @app.route("/")
 def serve_dashboard():
-    # Serve o index.html que está na raiz do projeto
-    return send_from_directory('../', 'index.html')
+    # Busca o index.html na raiz do projeto (um nível acima da pasta api/)
+    # ou na própria pasta atual, para garantir compatibilidade com o Cloud Run
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    if os.path.exists(os.path.join(root_dir, 'index.html')):
+        return send_from_directory(root_dir, 'index.html')
+    return send_from_directory(os.path.dirname(__file__), 'index.html')
 
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE E UNIDADES
