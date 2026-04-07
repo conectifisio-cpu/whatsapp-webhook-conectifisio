@@ -62,7 +62,8 @@ if firebase_creds_json:
 # CACHE EM MEMÓRIA PARA EVITAR EXCEDER COTA DO FIREBASE
 # ==========================================
 _patients_cache = {"data": None, "ts": 0}
-_CACHE_TTL = 12  # segundos — evita múltiplas leituras simultâneas do Firestore
+_CACHE_TTL = 25  # segundos — Dashboard atualiza a cada 20s, cache de 25s evita leituras duplas
+# Nota: Firestore Free Tier = 50.000 leituras/dia. Com TTL=25s: máx ~3.456 leituras/dia (seguro)
 
 # ==========================================
 # UNIDADES — ENDEREÇOS E RECOMENDAÇÕES
@@ -473,25 +474,31 @@ def webhook():
                 now = time.time()
                 # Usa cache se ainda válido
                 if _patients_cache["data"] is not None and (now - _patients_cache["ts"]) < _CACHE_TTL:
-                    return jsonify({"items": _patients_cache["data"]}), 200
-                docs = db.collection("PatientsKanban").stream()
-                patients = []
-                for doc in docs:
-                    data = doc.to_dict()
-                    data["id"] = doc.id
-                    if "lastInteraction" in data and data["lastInteraction"]:
-                        try:
-                            ts = data["lastInteraction"]
-                            # Firestore Timestamp — garante UTC explícito para o frontend
-                            iso = ts.isoformat()
-                            if '+' not in iso and 'Z' not in iso:
-                                iso = iso.split('.')[0] + '+00:00'
-                            data["lastInteraction"] = iso
-                        except: data["lastInteraction"] = str(data["lastInteraction"])
-                    patients.append(data)
-                _patients_cache["data"] = patients
-                _patients_cache["ts"] = now
-                return jsonify({"items": patients}), 200
+                    return jsonify({"items": _patients_cache["data"], "cached": True}), 200
+                try:
+                    docs = db.collection("PatientsKanban").stream()
+                    patients = []
+                    for doc in docs:
+                        data = doc.to_dict()
+                        data["id"] = doc.id
+                        if "lastInteraction" in data and data["lastInteraction"]:
+                            try:
+                                ts = data["lastInteraction"]
+                                iso = ts.isoformat()
+                                if '+' not in iso and 'Z' not in iso:
+                                    iso = iso.split('.')[0] + '+00:00'
+                                data["lastInteraction"] = iso
+                            except: data["lastInteraction"] = str(data["lastInteraction"])
+                        patients.append(data)
+                    _patients_cache["data"] = patients
+                    _patients_cache["ts"] = now
+                    return jsonify({"items": patients}), 200
+                except Exception as e_firestore:
+                    err_str = str(e_firestore)
+                    # Se cota excedida (429) E temos cache antigo, retorna o cache com aviso
+                    if ("429" in err_str or "Quota" in err_str or "RESOURCE_EXHAUSTED" in err_str) and _patients_cache["data"] is not None:
+                        return jsonify({"items": _patients_cache["data"], "cached": True, "quota_warning": True}), 200
+                    return jsonify({"error": err_str}), 500
             except Exception as e: return jsonify({"error": str(e)}), 500
 
         if request.args.get("action") == "update_status":

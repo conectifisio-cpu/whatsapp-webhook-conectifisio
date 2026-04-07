@@ -772,6 +772,8 @@
         // ==========================================
         // FETCH DATA
         // ==========================================
+        let _quotaWarningShown = false;
+        
         async function fetchData() {
             if (isFetching) return;
             isFetching = true;
@@ -783,6 +785,13 @@
                 const res = await fetch(API_GET);
                 if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
                 const data = await res.json();
+                
+                // Aviso de cota excedida (usa cache antigo)
+                if (data.quota_warning && !_quotaWarningShown) {
+                    _quotaWarningShown = true;
+                    showToast('⚠️ Cota do banco de dados excedida. Exibindo dados em cache. Reset à meia-noite UTC (21h BRT).', 'warning');
+                }
+                if (!data.quota_warning) _quotaWarningShown = false;
                 
                 // Preserva a flag hasNewMessage antes de sobrescrever
                 const oldPatients = [...allPatients];
@@ -797,7 +806,9 @@
                 renderUI();
                 activeChats.forEach(id => updateChatMessagesHTML(id));
             } catch (e) { 
-                console.log("Erro de conexão com o Backend:", e); 
+                console.log("Erro de conexão com o Backend:", e);
+                // Se já temos dados em memória, continua exibindo sem apagar
+                if (allPatients.length > 0) renderUI();
             } finally {
                 isFetching = false;
                 if (icon) setTimeout(() => icon.classList.remove('animate-spin'), 500);
