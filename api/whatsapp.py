@@ -1,10 +1,12 @@
 import os, requests, traceback, re, json, base64
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, render_template
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-app = Flask(__name__)
+# Configura o Flask para encontrar templates e static a partir da raiz do projeto
+_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+app = Flask(__name__, template_folder=os.path.join(_ROOT_DIR, 'templates'), static_folder=os.path.join(_ROOT_DIR, 'static'))
 
 @app.after_request
 def add_cors_headers(response):
@@ -15,12 +17,7 @@ def add_cors_headers(response):
 
 @app.route("/")
 def serve_dashboard():
-    # Busca o index.html na raiz do projeto (um nível acima da pasta api/)
-    # ou na própria pasta atual, para garantir compatibilidade com o Cloud Run
-    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    if os.path.exists(os.path.join(root_dir, 'index.html')):
-        return send_from_directory(root_dir, 'index.html')
-    return send_from_directory(os.path.dirname(__file__), 'index.html')
+    return render_template('index.html')
 
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE E UNIDADES
