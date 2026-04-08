@@ -147,7 +147,7 @@ def update_paciente(phone, data):
     data["lastInteraction"] = firestore.SERVER_TIMESTAMP
     db.collection("PatientsKanban").document(phone).set(data, merge=True)
 
-def registrar_historico(phone, remetente, tipo, conteudo):
+def registrar_historico(phone, remetente, tipo, conteudo, media_id=None):
     if not db: return
     now_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
     nova_msg = {
@@ -156,6 +156,8 @@ def registrar_historico(phone, remetente, tipo, conteudo):
         "conteudo": conteudo,
         "data": now_iso
     }
+    if media_id:
+        nova_msg["media_id"] = media_id  # Salva para exibir miniatura no Dashboard
     
     update_data = {
         "historico": firestore.ArrayUnion([nova_msg]),
@@ -825,8 +827,11 @@ def webhook():
             tem_anexo = True
             media_id = message.get(msg_type, {}).get("id")
 
-        # Salva o histórico do paciente
-        registrar_historico(phone, "paciente", "texto" if not tem_anexo else "anexo", msg_recebida)
+        # Salva o histórico do paciente (com media_id para exibir miniatura no Dashboard)
+        if tem_anexo and media_id:
+            registrar_historico(phone, "paciente", "anexo", msg_recebida, media_id=media_id)
+        else:
+            registrar_historico(phone, "paciente", "texto" if not tem_anexo else "anexo", msg_recebida)
 
         # ==========================================
         # 🔄 RESET DO FOLLOW-UP: Paciente respondeu, zera o contador
@@ -842,6 +847,15 @@ def webhook():
         # 🚨 O BOTÃO DE PÂNICO (TRANSBORDO HUMANO)
         # ==========================================
         msg_limpa = msg_recebida.lower()
+
+        # Detecção antecipada de cortesia (usada abaixo no FAQ e na lógica de estados)
+        _cortesias_early = ["obrigad", "obg", "ok", "valeu", "certo", "tá bom", "perfeito", "beleza", "show", "combinado", "agradeço", "ótimo", "otimo", "maravilh", "excelente", "muito bom", "legal", "entendi", "entendido", "claro"]
+        _emojis_early = ["👍", "🙏", "❤️", "👏", "😊", "🥰", "💙", "💚", "🤝", "✅"]
+        is_cortesia = len(msg_limpa) <= 35 and (
+            any(msg_limpa.startswith(w) for w in _cortesias_early) or
+            any(char in msg_limpa for char in _emojis_early)
+        )
+
         palavras_socorro = ["ajuda", "humano", "atendente", "recepção", "recepcao", "falar com alguém", "pessoa"]
         if any(palavra in msg_limpa for palavra in palavras_socorro):
             update_paciente(phone, {"status": "pausado", "ultima_mensagem_paciente": f"[PEDIDO DE AJUDA] {msg_recebida}"})
@@ -850,8 +864,9 @@ def webhook():
 
         # ==========================================
         # 🧠 CONSULTA AO FAQ (INTELIGÊNCIA DE DADOS REAIS)
+        # NÃO consulta FAQ para mensagens de cortesia (evita reiniciar fluxo)
         # ==========================================
-        if msg_type == "text" and len(msg_limpa) > 5:
+        if msg_type == "text" and len(msg_limpa) > 5 and not is_cortesia:
             resposta_faq = consultar_faq(msg_recebida)
             if resposta_faq:
                 responder_texto(phone, resposta_faq)
@@ -929,12 +944,10 @@ def webhook():
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade and servico in ["Recovery", "Liberação Miofascial"]: modalidade = "Particular"
 
-        # Bug 5: Detecção de Cortesia (Ignorar se o robô já terminou ou está em humano)
-        cortesias = ["obrigad", "obg", "ok", "valeu", "certo", "tá bom", "perfeito", "beleza", "show", "combinado", "agradeço"]
-        if len(msg_limpa) <= 25 and (any(msg_limpa.startswith(w) for w in cortesias) or any(char in msg_limpa for char in ["👍", "🙏", "❤️", "👏"])):
-            if status in ["finalizado", "atendimento_humano"]:
-                responder_texto(phone, "Por nada! 😊 Nossa equipe já recebeu seus dados e confirmará tudo em instantes.")
-                return jsonify({"status": "courtesy_ignored"}), 200
+        # Cortesia: responde e encerra (is_cortesia já definido acima)
+        if is_cortesia and status in ["finalizado", "atendimento_humano", "pendente_feegow", "agendando"]:
+            responder_texto(phone, "Por nada! 😊 Nossa equipe já recebeu seus dados e confirmará tudo em instantes. Qualquer dúvida, é só chamar!")
+            return jsonify({"status": "courtesy_ignored"}), 200
 
         if status in ["finalizado", "atendimento_humano"]:
             enviar_botoes(phone, "Olá! Nossa equipe precisa de mais um tempinho para a resolução da sua solicitação, mas já avisei que você entrou em contato novamente! 😊\n\nSe quiser reiniciar o atendimento, clique abaixo:", [{"id": "menu_ini", "title": "Menu Inicial"}])
