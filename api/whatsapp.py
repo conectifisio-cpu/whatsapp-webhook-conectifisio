@@ -1,4 +1,9 @@
-import os, requests, traceback, re, json, base64
+import os
+import json
+import re
+import traceback
+import requests
+import base64
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_from_directory, render_template
 import firebase_admin
@@ -407,9 +412,7 @@ def enviar_whatsapp(to, payload_msg):
     except: return None
 
 def responder_texto(to, texto, remetente="robo"):
-    import time
-    # Funcionalidade 4: Humanização com delay de 2 segundos
-    if remetente == "robo": time.sleep(2)
+    # Registrar no histórico e enviar via WhatsApp API
     registrar_historico(to, remetente, "texto", texto)
     return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
 
@@ -587,16 +590,23 @@ def webhook():
                         continue
                     try:
                         from datetime import timezone as _tz2
-                        if hasattr(last_raw, 'utc_timestamp_micros'):
-                            last_dt = last_raw.replace(tzinfo=_tz2.utc) if hasattr(last_raw, 'replace') else agora
+                        # Se for um objeto datetime do Python (ou do SDK do Firebase)
+                        if isinstance(last_raw, datetime):
+                            last_dt = last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
+                        # Se for uma string ISO
                         elif isinstance(last_raw, str):
-                            last_dt = datetime.fromisoformat(last_raw.replace('Z', '+00:00'))
+                            # Trata formatos comuns e garante offset
+                            s = last_raw.replace('Z', '+00:00')
+                            if ' ' in s and '+' not in s: s = s.replace(' ', 'T')
+                            last_dt = datetime.fromisoformat(s)
                             if last_dt.tzinfo is None:
                                 last_dt = last_dt.replace(tzinfo=_tz2.utc)
+                        # Fallback para outros objetos que tenham tzinfo ou possam ser convertidos
                         elif hasattr(last_raw, 'tzinfo'):
                             last_dt = last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
                         else:
-                            last_dt = datetime.fromisoformat(str(last_raw)).replace(tzinfo=_tz2.utc)
+                            # Tenta converter a representação em string
+                            last_dt = datetime.fromisoformat(str(last_raw).replace('Z', '+00:00')).replace(tzinfo=_tz2.utc)
                     except Exception as e_ts:
                         print(f'[followup] erro timestamp {phone_p}: {e_ts} raw={last_raw}')
                         ignorados.append(phone_p)

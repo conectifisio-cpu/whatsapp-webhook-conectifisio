@@ -135,8 +135,8 @@
             width: 0;
             min-height: 460px;
             max-height: 560px;
-            background: white;
-            border-radius: 12px 0 0 12px;
+            background: #f8fafc;
+            border-radius: 1.5rem 0 0 1.5rem;
             box-shadow: -4px 0 20px rgba(0,0,0,0.12);
             display: flex;
             flex-direction: column;
@@ -146,33 +146,45 @@
             border-right: none;
             flex-shrink: 0;
         }
-        .patient-side-panel.open { width: 240px; }
+        .patient-side-panel.open { width: 280px; }
         .patient-side-panel-header {
             background: #1e293b;
             color: white;
-            padding: 10px 12px;
+            padding: 12px 16px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            font-size: 11px;
-            font-weight: 800;
+            font-size: 12px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             flex-shrink: 0;
         }
         .patient-side-panel-body {
             flex: 1;
             overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .psp-card-section {
+            background: white;
             padding: 12px;
-            font-size: 11px;
+            border-radius: 1rem;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
         .psp-row {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
             padding: 6px 0;
             border-bottom: 1px solid #f1f5f9;
         }
-        .psp-label { color: #94a3b8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
-        .psp-value { color: #1e293b; font-weight: 600; font-size: 11px; text-align: right; max-width: 60%; word-break: break-word; }
+        .psp-row:last-child { border-bottom: none; }
+        .psp-label { color: #64748b; font-size: 10px; font-weight: 700; }
+        .psp-value { color: #1e293b; font-weight: 800; font-size: 11px; text-align: right; }
 
         /* --- PAINEL RESPOSTAS RÁPIDAS (ATALHO /) --- */
         .quick-replies-panel {
@@ -339,7 +351,9 @@
             <button onclick="event.stopPropagation(); closeLightbox()" class="bg-white/20 hover:bg-red-500/80 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">✕ Fechar</button>
         </div>
         <!-- Visualizador: imagem ou PDF -->
-        <img id="lightbox-img" src="" alt="Visualização" onclick="event.stopPropagation()" style="max-width:90vw;max-height:75vh;object-fit:contain;border-radius:8px;box-shadow:0 0 40px rgba(0,0,0,0.5);transition:transform 0.2s;">
+        <div id="lightbox-container" class="custom-scrollbar" onclick="event.stopPropagation()" style="max-width:90vw;max-height:75vh;overflow:auto;display:flex;align-items:center;justify-content:center;border-radius:8px;background:rgba(0,0,0,0.2);">
+            <img id="lightbox-img" src="" alt="Visualização" style="max-width:100%;max-height:100%;object-fit:contain;transition:transform 0.2s;transform-origin:center;">
+        </div>
         <iframe id="lightbox-pdf" src="" onclick="event.stopPropagation()" style="display:none;width:80vw;height:75vh;border:none;border-radius:8px;background:white;"></iframe>
         <div class="flex gap-3 mt-4" id="lightbox-nav"></div>
     </div>
@@ -602,6 +616,7 @@
 
         async function openLightbox(mediaId, titulo) {
             const overlay = document.getElementById('lightbox-overlay');
+            const container = document.getElementById('lightbox-container');
             const img = document.getElementById('lightbox-img');
             const pdf = document.getElementById('lightbox-pdf');
             const titleEl = document.getElementById('lightbox-title');
@@ -623,7 +638,7 @@
             } catch(e) { isPdf = false; }
 
             if (isPdf) {
-                img.style.display = 'none';
+                container.style.display = 'none';
                 img.src = '';
                 pdf.style.display = 'block';
                 pdf.src = mediaUrl;
@@ -632,7 +647,7 @@
             } else {
                 pdf.style.display = 'none';
                 pdf.src = '';
-                img.style.display = 'block';
+                container.style.display = 'flex';
                 img.src = mediaUrl;
                 img.alt = titulo || 'Imagem';
                 img.style.transform = 'scale(1)';
@@ -652,9 +667,18 @@
 
         function lightboxZoom(delta) {
             const img = document.getElementById('lightbox-img');
-            if (!img || img.style.display === 'none') return;
+            if (!img || img.src === '') return;
             lightboxZoomLevel = Math.min(Math.max(lightboxZoomLevel + delta, 0.3), 4.0);
             img.style.transform = `scale(${lightboxZoomLevel})`;
+            
+            // Se o zoom for maior que 1, ajusta o tamanho do container para permitir scroll
+            if (lightboxZoomLevel > 1) {
+                img.style.maxWidth = 'none';
+                img.style.maxHeight = 'none';
+            } else {
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+            }
         }
         
         function closeLightbox() {
@@ -662,7 +686,12 @@
             const img = document.getElementById('lightbox-img');
             const pdf = document.getElementById('lightbox-pdf');
             if (overlay) overlay.classList.remove('active');
-            if (img) { img.src = ''; img.style.transform = 'scale(1)'; }
+            if (img) { 
+                img.src = ''; 
+                img.style.transform = 'scale(1)';
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+            }
             if (pdf) { pdf.src = ''; pdf.style.display = 'none'; }
             document.body.style.overflow = '';
         }
@@ -1545,21 +1574,25 @@
 
                 // Montar dados do painel lateral
                 const pspRows = [
-                    p.convenio ? `<div class="psp-row"><span class="psp-label">Convênio</span><span class="psp-value text-blue-700 font-black">${p.convenio}</span></div>` : '',
-                    p.carteirinha ? `<div class="psp-row"><span class="psp-label">Carteirinha</span><span class="psp-value">${p.carteirinha}</span></div>` : '',
+                    p.servico ? `<div class="psp-row"><span class="psp-label">Serviço</span><span class="psp-value uppercase text-slate-900">${p.servico}</span></div>` : '',
+                    p.modalidade ? `<div class="psp-row"><span class="psp-label">Modalidade</span><span class="psp-value ${p.modalidade === 'Particular' ? 'text-emerald-600' : 'text-amber-600'}">${p.modalidade}</span></div>` : '',
+                    p.convenio ? `<div class="psp-row"><span class="psp-label">Convênio/App</span><span class="psp-value text-blue-700 uppercase">${p.convenio}</span></div>` : '',
+                    p.numCarteirinha ? `<div class="psp-row"><span class="psp-label">Nº Carteirinha</span><span class="psp-value">${p.numCarteirinha}</span></div>` : '',
                     p.cpf ? `<div class="psp-row"><span class="psp-label">CPF</span><span class="psp-value">${p.cpf}</span></div>` : '',
-                    p.periodo ? `<div class="psp-row"><span class="psp-label">Período</span><span class="psp-value">${p.periodo}</span></div>` : '',
-                    p.modalidade ? `<div class="psp-row"><span class="psp-label">Modalidade</span><span class="psp-value">${p.modalidade}</span></div>` : '',
-                    p.servico ? `<div class="psp-row"><span class="psp-label">Serviço</span><span class="psp-value">${p.servico}</span></div>` : '',
+                    p.periodo ? `<div class="psp-row"><span class="psp-label">Período</span><span class="psp-value text-indigo-600">⏰ ${p.periodo}</span></div>` : '',
                     p.unit ? `<div class="psp-row"><span class="psp-label">Unidade</span><span class="psp-value">${p.unit}</span></div>` : '',
-                    p.queixa ? `<div class="psp-row"><span class="psp-label">Queixa</span><span class="psp-value text-blue-800 italic">${p.queixa}</span></div>` : '',
-                    p.email ? `<div class="psp-row"><span class="psp-label">E-mail</span><span class="psp-value">${p.email}</span></div>` : '',
                     p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span></div>` : '',
                 ].filter(Boolean).join('');
 
+                const pspQueixa = (p.queixa || p.queixa_ia) ? `
+                    <div class="psp-card-section bg-blue-50/50 border-blue-100">
+                        <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">O que te trouxe aqui?</p>
+                        <p class="text-[10px] text-blue-800 italic">"🤖 ${p.queixa || p.queixa_ia}"</p>
+                    </div>` : '';
+
                 const pspImages = (p.carteirinha_media_id || p.pedido_media_id) ? `
-                    <div class="mt-3">
-                        <p class="psp-label mb-2">Anexos</p>
+                    <div class="psp-card-section">
+                        <p class="text-[8px] text-slate-500 font-black uppercase tracking-widest mb-2">Anexos</p>
                         <div class="flex gap-2">
                             ${p.carteirinha_media_id ? `<button onclick="openLightbox('${p.carteirinha_media_id}','Carteirinha')" class="flex-1 flex items-center justify-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-black py-2 rounded-lg border border-blue-200 transition-colors"><i data-lucide="id-card" class="w-3 h-3"></i> Carteirinha</button>` : ''}
                             ${p.pedido_media_id ? `<button onclick="openLightbox('${p.pedido_media_id}','Pedido Médico')" class="flex-1 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[9px] font-black py-2 rounded-lg border border-emerald-200 transition-colors"><i data-lucide="file-text" class="w-3 h-3"></i> Pedido</button>` : ''}
@@ -1579,10 +1612,14 @@
                         <span>📋 Dados do Paciente</span>
                         <button onclick="togglePatientPanel('${id}')" class="text-slate-300 hover:text-white text-lg leading-none">&times;</button>
                     </div>
-                    <div class="patient-side-panel-body">
-                        ${pspRows || '<p class="text-slate-400 text-xs text-center mt-4">Sem dados cadastrados ainda.</p>'}
-                        ${pspImages}
-                    </div>
+                        <div class="patient-side-panel-body custom-scrollbar">
+                            <div class="psp-card-section">
+                                <p class="text-[8px] text-slate-500 font-black uppercase tracking-widest mb-2">Informações Gerais</p>
+                                ${pspRows || '<p class="text-slate-400 text-[10px] text-center">Sem dados cadastrados.</p>'}
+                            </div>
+                            ${pspQueixa}
+                            ${pspImages}
+                        </div>
                 `;
                 wrapperDiv.appendChild(panelDiv);
 
