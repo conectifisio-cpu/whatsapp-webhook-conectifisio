@@ -122,32 +122,158 @@
             50% { box-shadow: 0 0 0 6px rgba(239,68,68,0.2), 0 4px 20px rgba(239,68,68,0.3); }
         }
         
-        /* --- PAINEL RESPOSTAS RÁPIDAS --- */
+        /* --- PAINEL LATERAL DO PACIENTE NO CHAT --- */
+        .patient-side-panel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background: white;
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(-100%);
+            transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+            border-radius: 0 0 0 0;
+            overflow: hidden;
+        }
+        .patient-side-panel.open { transform: translateX(0); }
+        .patient-side-panel-header {
+            background: #1e293b;
+            color: white;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+        .patient-side-panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            font-size: 11px;
+        }
+        .psp-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 6px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .psp-label { color: #94a3b8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
+        .psp-value { color: #1e293b; font-weight: 600; font-size: 11px; text-align: right; max-width: 60%; word-break: break-word; }
+
+        /* --- PAINEL RESPOSTAS RÁPIDAS (ATALHO /) --- */
         .quick-replies-panel {
             position: absolute;
-            bottom: 56px;
+            bottom: 52px;
             left: 0;
             right: 0;
             background: white;
-            border-top: 1px solid #e2e8f0;
+            border-top: 2px solid #3b82f6;
             border-radius: 8px 8px 0 0;
-            max-height: 200px;
+            max-height: 220px;
             overflow-y: auto;
             z-index: 50;
             display: none;
-            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 -6px 24px rgba(0,0,0,0.12);
         }
         .quick-replies-panel.visible { display: block; }
         .quick-reply-item {
             padding: 8px 14px;
-            font-size: 11px;
             cursor: pointer;
             border-bottom: 1px solid #f1f5f9;
-            color: #334155;
+            transition: background 0.12s;
+        }
+        .quick-reply-item:hover, .quick-reply-item.focused { background: #f1f5f9; }
+        .quick-reply-item .qr-title { font-size: 11px; font-weight: 800; color: #1e293b; margin-bottom: 1px; }
+        .quick-reply-item .qr-preview { font-size: 10px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        
+        /* --- MINIATURA DE IMAGEM NO CHAT --- */
+        .msg-thumbnail {
+            width: 140px;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 8px;
+            cursor: pointer;
+            display: block;
+            border: 2px solid rgba(255,255,255,0.3);
+            transition: opacity 0.15s;
+        }
+        .msg-thumbnail:hover { opacity: 0.85; }
+        .msg-thumbnail-wrap {
+            position: relative;
+            display: inline-block;
+        }
+        .msg-thumbnail-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.35);
+            border-radius: 8px;
+            opacity: 0;
+            transition: opacity 0.15s;
+            cursor: pointer;
+        }
+        .msg-thumbnail-wrap:hover .msg-thumbnail-overlay { opacity: 1; }
+
+        /* --- NOVA BARRA DE DIGITAÇÃO --- */
+        .chat-input-bar {
+            display: flex;
+            align-items: center;
+            background: #f0f2f5;
+            border-top: 1px solid #e2e8f0;
+            padding: 6px 8px;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .chat-input-bar input[type=text] {
+            flex: 1;
+            background: white;
+            border: none;
+            border-radius: 20px;
+            padding: 8px 14px;
+            font-size: 12px;
+            outline: none;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            min-width: 0;
+        }
+        .chat-input-bar .btn-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            color: #64748b;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            flex-shrink: 0;
+            background: transparent;
+            border: none;
+        }
+        .chat-input-bar .btn-icon:hover { background: #e2e8f0; color: #1e293b; }
+        .chat-input-bar .btn-send {
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: #22c55e;
+            color: white;
+            cursor: pointer;
+            border: none;
+            flex-shrink: 0;
             transition: background 0.15s;
         }
-        .quick-reply-item:hover { background: #f0f9ff; color: #1d4ed8; font-weight: 600; }
-        
+        .chat-input-bar .btn-send:hover { background: #16a34a; }
+
         /* --- NOTIFICAÇÃO PISCANTE --- */
         @keyframes pulse-border {
             0% { border-color: #3b82f6; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
@@ -202,6 +328,33 @@
         <div class="flex gap-3 mt-4" id="lightbox-nav"></div>
     </div>
 
+    <!-- MODAL DE GESTÃO DE MENSAGENS RÁPIDAS -->
+    <div id="modal-quick-replies" style="display:none;" class="fixed inset-0 bg-black/60 z-[300] flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between p-5 border-b border-slate-200">
+                <div>
+                    <h2 class="font-black text-slate-800 text-base">Mensagens Rápidas</h2>
+                    <p class="text-xs text-slate-500 mt-0.5">Gerencie as respostas rápidas disponíveis no chat (atalho: /)</p>
+                </div>
+                <button onclick="closeManageQuickReplies()" class="p-2 rounded-lg hover:bg-slate-100 text-slate-400">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4">
+                <div id="qr-list-edit" class="space-y-2"></div>
+                <button onclick="addQuickReply()" class="mt-3 w-full border-2 border-dashed border-slate-300 hover:border-blue-400 text-slate-500 hover:text-blue-600 text-xs font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+                    <i data-lucide="plus" class="w-4 h-4"></i> Adicionar Nova Resposta
+                </button>
+            </div>
+            <div class="p-4 border-t border-slate-200 flex justify-end gap-2">
+                <button onclick="closeManageQuickReplies()" class="px-4 py-2 text-xs text-slate-600 hover:bg-slate-100 rounded-lg font-bold transition-colors">Cancelar</button>
+                <button onclick="saveQuickRepliesFromModal()" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-2">
+                    <i data-lucide="save" class="w-3.5 h-3.5"></i> Salvar
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- SISTEMA PRINCIPAL (Oculto até login) -->
     <div id="app-container" style="display:none;" class="w-full h-full flex">
         <div id="toast-container" class="fixed top-5 right-5 z-[100] flex flex-col gap-3 pointer-events-none"></div>
@@ -235,6 +388,9 @@
                             </div>
                             <button onclick="showChangePassword()" class="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2">
                                 <i data-lucide="key" class="w-3 h-3 text-slate-400"></i> Alterar Senha
+                            </button>
+                            <button onclick="showManageQuickReplies()" class="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                <i data-lucide="zap" class="w-3 h-3 text-amber-400"></i> Mensagens Rápidas
                             </button>
                             <button onclick="logout()" class="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-slate-100">
                                 <i data-lucide="log-out" class="w-3 h-3"></i> Sair do Sistema
@@ -1000,9 +1156,6 @@
                                         <button onclick="event.stopPropagation(); toggleBot('${p.id}', '${p.status}')" class="px-2 py-1.5 rounded font-bold ${p.status === 'pausado' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}">
                                             ${p.status === 'pausado' ? 'Robô OFF' : 'Robô ON'}
                                         </button>
-                                        <button onclick="event.stopPropagation(); toggleCardFlag('${p.id}')" class="px-2 py-1.5 rounded font-bold ${flaggedCards.has('${p.id}') ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-500'} transition-colors" title="Destacar card">
-                                            ${flaggedCards.has('${p.id}') ? '🚩 Destacado' : '🚩'}
-                                        </button>
                                         <button onclick="event.stopPropagation(); arquivarComAuditoria('${p.id}', '${safeTitle}', '${p.unit || 'Ipiranga'}')" class="bg-slate-800 text-white px-3 py-1.5 rounded font-bold shadow-sm">Finalizar</button>
                                     </div>
                                 </div>`;
@@ -1328,7 +1481,42 @@
                 const chatDiv = document.createElement('div');
                 chatDiv.className = `w-[320px] bg-white rounded-t-xl shadow-[0_0_30px_rgba(0,0,0,0.15)] border border-slate-300 flex flex-col chat-window relative ${isMinimized ? 'chat-minimized' : 'chat-expanded'}`;
                 
+                // Montar HTML do painel lateral de dados do paciente
+                const pspRows = [
+                    p.convenio ? `<div class="psp-row"><span class="psp-label">Convênio</span><span class="psp-value text-blue-700 font-black">${p.convenio}</span></div>` : '',
+                    p.carteirinha ? `<div class="psp-row"><span class="psp-label">Carteirinha</span><span class="psp-value">${p.carteirinha}</span></div>` : '',
+                    p.cpf ? `<div class="psp-row"><span class="psp-label">CPF</span><span class="psp-value">${p.cpf}</span></div>` : '',
+                    p.periodo ? `<div class="psp-row"><span class="psp-label">Período</span><span class="psp-value">${p.periodo}</span></div>` : '',
+                    p.modalidade ? `<div class="psp-row"><span class="psp-label">Modalidade</span><span class="psp-value">${p.modalidade}</span></div>` : '',
+                    p.servico ? `<div class="psp-row"><span class="psp-label">Serviço</span><span class="psp-value">${p.servico}</span></div>` : '',
+                    p.unit ? `<div class="psp-row"><span class="psp-label">Unidade</span><span class="psp-value">${p.unit}</span></div>` : '',
+                    p.queixa ? `<div class="psp-row"><span class="psp-label">Queixa</span><span class="psp-value text-blue-800 italic">${p.queixa}</span></div>` : '',
+                    p.email ? `<div class="psp-row"><span class="psp-label">E-mail</span><span class="psp-value">${p.email}</span></div>` : '',
+                    p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span></div>` : '',
+                ].filter(Boolean).join('');
+
+                const pspImages = (p.carteirinha_media_id || p.pedido_media_id) ? `
+                    <div class="mt-3">
+                        <p class="psp-label mb-2">Anexos</p>
+                        <div class="flex gap-2">
+                            ${p.carteirinha_media_id ? `<button onclick="openLightbox('${p.carteirinha_media_id}','Carteirinha')" class="flex-1 flex items-center justify-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-black py-2 rounded-lg border border-blue-200 transition-colors"><i data-lucide="id-card" class="w-3 h-3"></i> Carteirinha</button>` : ''}
+                            ${p.pedido_media_id ? `<button onclick="openLightbox('${p.pedido_media_id}','Pedido Médico')" class="flex-1 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[9px] font-black py-2 rounded-lg border border-emerald-200 transition-colors"><i data-lucide="file-text" class="w-3 h-3"></i> Pedido</button>` : ''}
+                        </div>
+                    </div>` : '';
+
                 chatDiv.innerHTML = `
+                    <!-- Painel lateral de dados do paciente (desliza da esquerda) -->
+                    <div id="patient-panel-${id}" class="patient-side-panel">
+                        <div class="patient-side-panel-header">
+                            <span>📋 Dados do Paciente</span>
+                            <button onclick="togglePatientPanel('${id}')" class="text-slate-300 hover:text-white text-lg leading-none">&times;</button>
+                        </div>
+                        <div class="patient-side-panel-body">
+                            ${pspRows || '<p class="text-slate-400 text-xs text-center mt-4">Sem dados cadastrados ainda.</p>'}
+                            ${pspImages}
+                        </div>
+                    </div>
+
                     <div onclick="toggleMinimizeChat('${id}')" class="bg-slate-800 hover:bg-slate-900 transition-colors text-white p-2.5 rounded-t-xl flex justify-between items-center cursor-pointer shrink-0">
                         <div class="flex items-center gap-2 overflow-hidden">
                             <div class="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold shrink-0">
@@ -1340,10 +1528,9 @@
                             </div>
                         </div>
                         <div class="flex items-center gap-1 shrink-0 ml-2">
-                            ${(p.carteirinha_media_id || p.pedido_media_id) ? `
-                            <button onclick="event.stopPropagation(); openLightbox('${p.carteirinha_media_id || p.pedido_media_id}', '${p.carteirinha_media_id ? 'Carteirinha' : 'Pedido Médico'}')" class="bg-slate-700 hover:bg-blue-500 p-1.5 rounded transition-colors text-white" title="Ver Fotos do Paciente">
-                                <i data-lucide="image" class="w-4 h-4"></i>
-                            </button>` : ''}
+                            <button onclick="event.stopPropagation(); togglePatientPanel('${id}')" class="bg-slate-700 hover:bg-blue-500 p-1.5 rounded transition-colors text-white" title="Ver dados do paciente">
+                                <i data-lucide="user" class="w-4 h-4"></i>
+                            </button>
                             <button onclick="event.stopPropagation(); arquivarComAuditoria('${id}', '${(p.title||'').replace(/'/g,'')}', '${p.unit||'Ipiranga'}')" class="bg-slate-700 hover:bg-emerald-500 p-1.5 rounded transition-colors text-white" title="Finalizar e Arquivar">
                                 <i data-lucide="archive-restore" class="w-4 h-4"></i>
                             </button>
@@ -1362,30 +1549,29 @@
 
                     <emoji-picker id="emoji-picker-${id}" class="shadow-xl border border-slate-200 rounded-lg"></emoji-picker>
 
-                    <!-- Painel de Respostas Rápidas -->
+                    <!-- Painel de Respostas Rápidas (atalho /) -->
                     <div id="quick-replies-${id}" class="quick-replies-panel">
-                        <div class="px-3 py-2 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
-                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">⚡ Respostas Rápidas</span>
-                            <button onclick="toggleQuickReplies('${id}')" class="text-slate-400 hover:text-slate-600 text-xs">×</button>
+                        <div class="px-3 py-1.5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                            <span class="text-[9px] font-black text-blue-600 uppercase tracking-widest">/ Respostas Rápidas</span>
+                            <button onclick="toggleQuickReplies('${id}')" class="text-slate-400 hover:text-slate-600 text-sm leading-none">&times;</button>
                         </div>
-                        ${QUICK_REPLIES.map(r => `<div class="quick-reply-item" onclick="useQuickReply('${id}', '${r.replace(/'/g, "\\'")}')">&#x26A1; ${r}</div>`).join('')}
+                        ${QUICK_REPLIES.map((r,i) => `<div class="quick-reply-item" data-index="${i}" onclick="useQuickReply('${id}', '${r.text.replace(/'/g, "\\'")}')"><div class="qr-title">${r.title}</div><div class="qr-preview">${r.text}</div></div>`).join('')}
                     </div>
-                    <div class="p-2 bg-[#f0f2f5] border-t border-slate-200 shrink-0 flex gap-1 items-center relative ${isMinimized ? 'hidden' : ''}">
-                        <button onclick="toggleEmojiPicker('${id}')" class="p-1.5 text-slate-500 hover:text-slate-700 transition-colors" title="Emojis">
+
+                    <!-- Nova barra de digitação limpa -->
+                    <div class="chat-input-bar relative ${isMinimized ? 'hidden' : ''}">
+                        <button onclick="toggleEmojiPicker('${id}')" class="btn-icon" title="Emojis">
                             <i data-lucide="smile" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="toggleQuickReplies('${id}')" class="p-1.5 text-slate-500 hover:text-amber-500 transition-colors" title="Respostas Rápidas">
-                            <i data-lucide="zap" class="w-4 h-4"></i>
-                        </button>
                         <input type="file" id="file-upload-${id}" class="hidden" accept="image/*,application/pdf" onchange="selecionarArquivoChat(event, '${id}')">
-                        <button onclick="document.getElementById('file-upload-${id}').click()" class="p-1.5 text-slate-500 hover:text-slate-700 transition-colors" title="Anexar Arquivo">
+                        <button onclick="document.getElementById('file-upload-${id}').click()" class="btn-icon" title="Anexar Arquivo">
                             <i data-lucide="paperclip" class="w-4 h-4"></i>
                         </button>
-                        <button onclick="event.stopPropagation(); toggleCardFlag('${id}')" class="p-1.5 transition-colors ${flaggedCards.has(id) ? 'text-red-500' : 'text-slate-400 hover:text-red-400'}" title="Destacar card">
-                            <i data-lucide="flag" class="w-4 h-4"></i>
-                        </button>
-                        <input type="text" id="chat-input-${id}" placeholder="Mensagem..." spellcheck="true" lang="pt-BR" autocorrect="on" autocapitalize="sentences" class="flex-1 bg-white border-none rounded-lg p-2.5 text-xs focus:outline-none shadow-sm" onkeypress="if(event.key === 'Enter') enviarMsgChat('${id}')">
-                        <button onclick="enviarMsgChat('${id}')" id="btn-send-${id}" class="p-2 text-white bg-emerald-500 rounded-lg hover:bg-emerald-600 transition-colors flex items-center justify-center">
+                        <input type="text" id="chat-input-${id}" placeholder="Mensagem..." spellcheck="true" lang="pt-BR" autocorrect="on" autocapitalize="sentences"
+                            oninput="handleChatInput(event, '${id}')"
+                            onkeydown="handleChatKeydown(event, '${id}')"
+                            onkeypress="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); enviarMsgChat('${id}'); }">
+                        <button onclick="enviarMsgChat('${id}')" id="btn-send-${id}" class="btn-send">
                             <i data-lucide="send" class="w-4 h-4"></i>
                         </button>
                     </div>
@@ -1420,14 +1606,26 @@
                     
                     if (msg.de === 'paciente' || msg.de === 'cliente') {
                         if (isAnexo) {
-                            // Tenta exibir miniatura se tiver media_id no conteúdo
-                            html += `<div class="msg-bubble msg-in">
-                                <div class="flex items-center gap-2 text-slate-500">
-                                    <i data-lucide="image" class="w-4 h-4 text-blue-400"></i>
-                                    <span class="text-[10px] italic">${msgFormatada}</span>
-                                </div>
-                                <span class="msg-time">${time}</span>
-                            </div>`;
+                            // Exibe miniatura clicável se tiver media_id
+                            const mediaId = msg.media_id || msg.mediaId || null;
+                            if (mediaId) {
+                                const imgUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
+                                html += `<div class="msg-bubble msg-in" style="padding:6px;">
+                                    <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'Imagem do paciente')">
+                                        <img src="${imgUrl}" class="msg-thumbnail" alt="Imagem" onerror="this.parentElement.innerHTML='<div style=\'padding:8px;font-size:10px;color:#64748b;\'>\ud83d\udcce Imagem n\u00e3o dispon\u00edvel</div>'">
+                                        <div class="msg-thumbnail-overlay"><i data-lucide="zoom-in" class="w-5 h-5 text-white"></i></div>
+                                    </div>
+                                    <span class="msg-time">${time}</span>
+                                </div>`;
+                            } else {
+                                html += `<div class="msg-bubble msg-in">
+                                    <div class="flex items-center gap-2 text-slate-500">
+                                        <i data-lucide="image" class="w-4 h-4 text-blue-400"></i>
+                                        <span class="text-[10px] italic">${msgFormatada}</span>
+                                    </div>
+                                    <span class="msg-time">${time}</span>
+                                </div>`;
+                            }
                         } else {
                             html += `<div class="msg-bubble msg-in">${msgFormatada}<span class="msg-time">${time}</span></div>`;
                         }
@@ -1507,27 +1705,65 @@
         }
 
         // ==========================================
-        // RESPOSTAS RÁPIDAS
+        // RESPOSTAS RÁPIDAS (com título e texto)
         // ==========================================
-        const QUICK_REPLIES = [
-            'Aguarde um momento, vou verificar para você! 😊',
-            'Perfeito! Vou confirmar o agendamento e te retorno em instantes.',
-            'Olá! Tudo bem? Como posso te ajudar hoje?',
-            'Seu atendimento foi confirmado! ✅ Aguardamos você.',
-            'Preciso verificar a disponibilidade de horário, pode aguardar?',
-            'Seu convênio está sendo validado junto ao plano. Retorno em breve!',
-            'Para reagendar, qual o melhor horário para você? ☀️ ⛅',
-            'Obrigado pelo contato! Qualquer dúvida, estamos aqui. 💙',
-            'Vou transferir para nossa equipe especializada. Um momento!',
-            'Seu pedido médico foi recebido com sucesso! 📎',
-            'Lembre-se de trazer o pedido médico original no dia da consulta.',
-            'Nossa unidade fica aberta de segunda a sábado, das 7h às 20h.',
+        let QUICK_REPLIES = [
+            { title: 'Aguardar', text: 'Aguarde um momento, vou verificar para você! 😊' },
+            { title: 'Confirmar agendamento', text: 'Perfeito! Vou confirmar o agendamento e te retorno em instantes.' },
+            { title: 'Saudacao', text: 'Olá! Tudo bem? Como posso te ajudar hoje?' },
+            { title: 'Atendimento confirmado', text: 'Seu atendimento foi confirmado! ✅ Aguardamos você.' },
+            { title: 'Verificar horário', text: 'Preciso verificar a disponibilidade de horário, pode aguardar?' },
+            { title: 'Validar convênio', text: 'Seu convênio está sendo validado junto ao plano. Retorno em breve!' },
+            { title: 'Reagendar', text: 'Para reagendar, qual o melhor horário para você? ☀️ ⛅' },
+            { title: 'Encerrar contato', text: 'Obrigado pelo contato! Qualquer dúvida, estamos aqui. 💙' },
+            { title: 'Transferir', text: 'Vou transferir para nossa equipe especializada. Um momento!' },
+            { title: 'Pedido recebido', text: 'Seu pedido médico foi recebido com sucesso! 📎' },
+            { title: 'Lembrete pedido', text: 'Lembre-se de trazer o pedido médico original no dia da consulta.' },
+            { title: 'Horário de funcionamento', text: 'Nossa unidade fica aberta de segunda a sábado, das 7h às 20h.' },
         ];
+
+        // Carrega respostas rápidas customizadas do localStorage
+        function loadCustomQuickReplies() {
+            const saved = localStorage.getItem('conectifisio_quick_replies');
+            if (saved) { try { QUICK_REPLIES = JSON.parse(saved); } catch(e) {} }
+        }
+        function saveCustomQuickReplies() {
+            localStorage.setItem('conectifisio_quick_replies', JSON.stringify(QUICK_REPLIES));
+        }
+        loadCustomQuickReplies();
+
+        // Gera o HTML do painel de respostas rápidas filtrado
+        function renderQuickRepliesPanel(id, filter) {
+            const panel = document.getElementById(`quick-replies-${id}`);
+            if (!panel) return;
+            const filtered = filter
+                ? QUICK_REPLIES.filter(r => r.title.toLowerCase().includes(filter.toLowerCase()) || r.text.toLowerCase().includes(filter.toLowerCase()))
+                : QUICK_REPLIES;
+            const itemsHtml = filtered.length
+                ? filtered.map((r,i) => `<div class="quick-reply-item" data-index="${i}" onclick="useQuickReply('${id}', '${r.text.replace(/'/g, "\\'")}')"><div class="qr-title">${r.title}</div><div class="qr-preview">${r.text}</div></div>`).join('')
+                : '<div class="px-4 py-3 text-xs text-slate-400">Nenhuma resposta encontrada.</div>';
+            // Mantém o header e substitui os itens
+            const header = panel.querySelector('.qr-header');
+            if (header) {
+                panel.innerHTML = header.outerHTML + itemsHtml;
+            } else {
+                panel.innerHTML = `<div class="qr-header px-3 py-1.5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                    <span class="text-[9px] font-black text-blue-600 uppercase tracking-widest">/ Respostas Rápidas</span>
+                    <button onclick="toggleQuickReplies('${id}')" class="text-slate-400 hover:text-slate-600 text-sm leading-none">&times;</button>
+                </div>` + itemsHtml;
+            }
+        }
         
         function toggleQuickReplies(id) {
             const panel = document.getElementById(`quick-replies-${id}`);
             if (!panel) return;
-            panel.classList.toggle('visible');
+            const isVisible = panel.classList.contains('visible');
+            if (!isVisible) {
+                renderQuickRepliesPanel(id, '');
+                panel.classList.add('visible');
+            } else {
+                panel.classList.remove('visible');
+            }
         }
         
         function useQuickReply(id, text) {
@@ -1539,13 +1775,133 @@
             const panel = document.getElementById(`quick-replies-${id}`);
             if (panel) panel.classList.remove('visible');
         }
+
+        // Atalho "/" no input do chat
+        function handleChatInput(event, id) {
+            const val = event.target.value;
+            const panel = document.getElementById(`quick-replies-${id}`);
+            if (!panel) return;
+            if (val.startsWith('/')) {
+                const filter = val.slice(1);
+                renderQuickRepliesPanel(id, filter);
+                panel.classList.add('visible');
+            } else {
+                panel.classList.remove('visible');
+            }
+        }
+
+        // Navegação por teclado nas respostas rápidas
+        function handleChatKeydown(event, id) {
+            const panel = document.getElementById(`quick-replies-${id}`);
+            if (!panel || !panel.classList.contains('visible')) return;
+            const items = panel.querySelectorAll('.quick-reply-item');
+            const focused = panel.querySelector('.quick-reply-item.focused');
+            let idx = focused ? parseInt(focused.dataset.index) : -1;
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                if (focused) focused.classList.remove('focused');
+                idx = Math.min(idx + 1, items.length - 1);
+                items[idx] && items[idx].classList.add('focused');
+                items[idx] && items[idx].scrollIntoView({ block: 'nearest' });
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (focused) focused.classList.remove('focused');
+                idx = Math.max(idx - 1, 0);
+                items[idx] && items[idx].classList.add('focused');
+                items[idx] && items[idx].scrollIntoView({ block: 'nearest' });
+            } else if (event.key === 'Enter') {
+                if (focused) {
+                    event.preventDefault();
+                    focused.click();
+                }
+            } else if (event.key === 'Escape') {
+                panel.classList.remove('visible');
+            }
+        }
+
+        // ==========================================
+        // PAINEL LATERAL DO PACIENTE
+        // ==========================================
+        function togglePatientPanel(id) {
+            const panel = document.getElementById(`patient-panel-${id}`);
+            if (!panel) return;
+            panel.classList.toggle('open');
+        }
         
+        // ==========================================
+        // GESTÃO DE MENSAGENS RÁPIDAS (Modal Admin)
+        // ==========================================
+        function showManageQuickReplies() {
+            const modal = document.getElementById('modal-quick-replies');
+            const list = document.getElementById('qr-list-edit');
+            if (!modal || !list) return;
+            // Fecha o dropdown de perfil
+            const dd = document.getElementById('profile-dropdown');
+            if (dd) dd.style.display = 'none';
+            // Renderiza a lista editável
+            renderQREditList();
+            modal.style.display = 'flex';
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function renderQREditList() {
+            const list = document.getElementById('qr-list-edit');
+            if (!list) return;
+            list.innerHTML = QUICK_REPLIES.map((r, i) => `
+                <div class="flex gap-2 items-start bg-slate-50 rounded-xl p-3 border border-slate-200" id="qr-item-${i}">
+                    <div class="flex-1 space-y-1.5">
+                        <input type="text" value="${r.title.replace(/"/g,'&quot;')}" placeholder="Título (ex: Saudacao)" class="w-full text-xs font-bold bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-blue-400" id="qr-title-${i}">
+                        <textarea rows="2" placeholder="Texto da mensagem..." class="w-full text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5 outline-none focus:border-blue-400 resize-none" id="qr-text-${i}">${r.text.replace(/</g,'&lt;')}</textarea>
+                    </div>
+                    <button onclick="removeQuickReply(${i})" class="p-1.5 text-red-400 hover:bg-red-50 rounded-lg mt-0.5 flex-shrink-0" title="Remover">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    </button>
+                </div>
+            `).join('');
+            if (window.lucide) window.lucide.createIcons();
+        }
+
+        function addQuickReply() {
+            QUICK_REPLIES.push({ title: 'Nova resposta', text: '' });
+            renderQREditList();
+            // Foca no novo item
+            const last = QUICK_REPLIES.length - 1;
+            setTimeout(() => { const el = document.getElementById(`qr-title-${last}`); if(el) el.focus(); }, 100);
+        }
+
+        function removeQuickReply(idx) {
+            QUICK_REPLIES.splice(idx, 1);
+            renderQREditList();
+        }
+
+        function saveQuickRepliesFromModal() {
+            const newReplies = [];
+            QUICK_REPLIES.forEach((_, i) => {
+                const titleEl = document.getElementById(`qr-title-${i}`);
+                const textEl = document.getElementById(`qr-text-${i}`);
+                if (titleEl && textEl) {
+                    const title = titleEl.value.trim();
+                    const text = textEl.value.trim();
+                    if (title || text) newReplies.push({ title: title || 'Sem título', text });
+                }
+            });
+            QUICK_REPLIES = newReplies;
+            saveCustomQuickReplies();
+            closeManageQuickReplies();
+            showToast('✅ Mensagens rápidas salvas!', 'success');
+        }
+
+        function closeManageQuickReplies() {
+            const modal = document.getElementById('modal-quick-replies');
+            if (modal) modal.style.display = 'none';
+        }
+
         // Fecha o emoji picker e quick replies se clicar fora
         document.addEventListener('click', function(event) {
             if (!event.target.closest('emoji-picker') && !event.target.closest('button[title="Emojis"]')) {
                 document.querySelectorAll('emoji-picker').forEach(p => p.classList.remove('visible'));
             }
-            if (!event.target.closest('.quick-replies-panel') && !event.target.closest('button[title="Respostas Rápidas"]')) {
+            if (!event.target.closest('.quick-replies-panel') && !event.target.closest('button[title="Respostas Rápidas"]') && !event.target.closest('.chat-input-bar input')) {
                 document.querySelectorAll('.quick-replies-panel').forEach(p => p.classList.remove('visible'));
             }
         });
