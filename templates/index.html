@@ -107,9 +107,11 @@
             align-items: center;
             justify-content: center;
             flex-direction: column;
+            padding: 24px;
+            box-sizing: border-box;
         }
         #lightbox-overlay.active { display: flex; }
-        #lightbox-img { max-width: 90vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+        /* #lightbox-img styles moved to inline for zoom support */
         
         /* --- CARD DESTACADO --- */
         .card-flagged {
@@ -123,22 +125,28 @@
         }
         
         /* --- PAINEL LATERAL DO PACIENTE NO CHAT --- */
+        .chat-with-panel-wrapper {
+            display: flex;
+            flex-direction: row;
+            align-items: flex-end;
+            gap: 0;
+        }
         .patient-side-panel {
-            position: absolute;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 100%;
+            width: 0;
+            min-height: 460px;
+            max-height: 560px;
             background: white;
-            z-index: 20;
+            border-radius: 12px 0 0 12px;
+            box-shadow: -4px 0 20px rgba(0,0,0,0.12);
             display: flex;
             flex-direction: column;
-            transform: translateX(-100%);
-            transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
-            border-radius: 0 0 0 0;
             overflow: hidden;
+            transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
+            border: 1px solid #e2e8f0;
+            border-right: none;
+            flex-shrink: 0;
         }
-        .patient-side-panel.open { transform: translateX(0); }
+        .patient-side-panel.open { width: 240px; }
         .patient-side-panel-header {
             background: #1e293b;
             color: white;
@@ -318,13 +326,21 @@
         </div>
     </div>
 
-    <!-- LIGHTBOX DE IMAGENS -->
+    <!-- LIGHTBOX DE IMAGENS / PDF -->
     <div id="lightbox-overlay" onclick="closeLightbox()">
-        <div class="flex gap-3 mb-4">
-            <span id="lightbox-title" class="text-white text-sm font-bold"></span>
-            <button onclick="event.stopPropagation(); closeLightbox()" class="ml-auto bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">✕ Fechar</button>
+        <!-- Barra de controles -->
+        <div class="flex items-center gap-2 mb-4 flex-wrap" onclick="event.stopPropagation()" style="width:100%;max-width:90vw;">
+            <span id="lightbox-title" class="text-white text-sm font-bold mr-auto"></span>
+            <!-- Zoom (só para imagens) -->
+            <button id="lightbox-zoom-out" onclick="lightboxZoom(-0.2)" class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors" title="Diminuir">&#x2212; Zoom</button>
+            <button id="lightbox-zoom-in" onclick="lightboxZoom(0.2)" class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors" title="Aumentar">&#x2b; Zoom</button>
+            <!-- Download -->
+            <a id="lightbox-download" href="#" download class="bg-emerald-500/80 hover:bg-emerald-500 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">↓ Download</a>
+            <button onclick="event.stopPropagation(); closeLightbox()" class="bg-white/20 hover:bg-red-500/80 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">✕ Fechar</button>
         </div>
-        <img id="lightbox-img" src="" alt="Visualização" onclick="event.stopPropagation()">
+        <!-- Visualizador: imagem ou PDF -->
+        <img id="lightbox-img" src="" alt="Visualização" onclick="event.stopPropagation()" style="max-width:90vw;max-height:75vh;object-fit:contain;border-radius:8px;box-shadow:0 0 40px rgba(0,0,0,0.5);transition:transform 0.2s;">
+        <iframe id="lightbox-pdf" src="" onclick="event.stopPropagation()" style="display:none;width:80vw;height:75vh;border:none;border-radius:8px;background:white;"></iframe>
         <div class="flex gap-3 mt-4" id="lightbox-nav"></div>
     </div>
 
@@ -582,23 +598,72 @@
         // ==========================================
         // LIGHTBOX DE IMAGENS
         // ==========================================
-        function openLightbox(mediaId, titulo) {
+        let lightboxZoomLevel = 1.0;
+
+        async function openLightbox(mediaId, titulo) {
             const overlay = document.getElementById('lightbox-overlay');
             const img = document.getElementById('lightbox-img');
+            const pdf = document.getElementById('lightbox-pdf');
             const titleEl = document.getElementById('lightbox-title');
-            if (!overlay || !img) return;
-            titleEl.textContent = titulo || 'Imagem';
-            img.src = `${BACKEND_URL}/api/media?id=${mediaId}`;
-            img.alt = titulo || 'Imagem';
+            const dlBtn = document.getElementById('lightbox-download');
+            const zoomIn = document.getElementById('lightbox-zoom-in');
+            const zoomOut = document.getElementById('lightbox-zoom-out');
+            if (!overlay) return;
+
+            const mediaUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
+            titleEl.textContent = titulo || 'Arquivo';
+            lightboxZoomLevel = 1.0;
+
+            // Detectar tipo do arquivo via HEAD request
+            let isPdf = false;
+            try {
+                const resp = await fetch(mediaUrl, { method: 'HEAD' });
+                const ct = resp.headers.get('content-type') || '';
+                isPdf = ct.includes('pdf');
+            } catch(e) { isPdf = false; }
+
+            if (isPdf) {
+                img.style.display = 'none';
+                img.src = '';
+                pdf.style.display = 'block';
+                pdf.src = mediaUrl;
+                zoomIn.style.display = 'none';
+                zoomOut.style.display = 'none';
+            } else {
+                pdf.style.display = 'none';
+                pdf.src = '';
+                img.style.display = 'block';
+                img.src = mediaUrl;
+                img.alt = titulo || 'Imagem';
+                img.style.transform = 'scale(1)';
+                zoomIn.style.display = '';
+                zoomOut.style.display = '';
+            }
+
+            // Configurar download
+            if (dlBtn) {
+                dlBtn.href = mediaUrl;
+                dlBtn.download = titulo || 'arquivo';
+            }
+
             overlay.classList.add('active');
             document.body.style.overflow = 'hidden';
+        }
+
+        function lightboxZoom(delta) {
+            const img = document.getElementById('lightbox-img');
+            if (!img || img.style.display === 'none') return;
+            lightboxZoomLevel = Math.min(Math.max(lightboxZoomLevel + delta, 0.3), 4.0);
+            img.style.transform = `scale(${lightboxZoomLevel})`;
         }
         
         function closeLightbox() {
             const overlay = document.getElementById('lightbox-overlay');
             const img = document.getElementById('lightbox-img');
+            const pdf = document.getElementById('lightbox-pdf');
             if (overlay) overlay.classList.remove('active');
-            if (img) img.src = '';
+            if (img) { img.src = ''; img.style.transform = 'scale(1)'; }
+            if (pdf) { pdf.src = ''; pdf.style.display = 'none'; }
             document.body.style.overflow = '';
         }
         
@@ -1478,10 +1543,7 @@
                 const isMinimized = minimizedChats.has(id);
                 const filePreview = pendingFiles[id];
 
-                const chatDiv = document.createElement('div');
-                chatDiv.className = `w-[320px] bg-white rounded-t-xl shadow-[0_0_30px_rgba(0,0,0,0.15)] border border-slate-300 flex flex-col chat-window relative ${isMinimized ? 'chat-minimized' : 'chat-expanded'}`;
-                
-                // Montar HTML do painel lateral de dados do paciente
+                // Montar dados do painel lateral
                 const pspRows = [
                     p.convenio ? `<div class="psp-row"><span class="psp-label">Convênio</span><span class="psp-value text-blue-700 font-black">${p.convenio}</span></div>` : '',
                     p.carteirinha ? `<div class="psp-row"><span class="psp-label">Carteirinha</span><span class="psp-value">${p.carteirinha}</span></div>` : '',
@@ -1504,19 +1566,31 @@
                         </div>
                     </div>` : '';
 
-                chatDiv.innerHTML = `
-                    <!-- Painel lateral de dados do paciente (desliza da esquerda) -->
-                    <div id="patient-panel-${id}" class="patient-side-panel">
-                        <div class="patient-side-panel-header">
-                            <span>📋 Dados do Paciente</span>
-                            <button onclick="togglePatientPanel('${id}')" class="text-slate-300 hover:text-white text-lg leading-none">&times;</button>
-                        </div>
-                        <div class="patient-side-panel-body">
-                            ${pspRows || '<p class="text-slate-400 text-xs text-center mt-4">Sem dados cadastrados ainda.</p>'}
-                            ${pspImages}
-                        </div>
-                    </div>
+                // Criar wrapper (painel + chat lado a lado)
+                const wrapperDiv = document.createElement('div');
+                wrapperDiv.className = 'chat-with-panel-wrapper';
+                wrapperDiv.id = `chat-wrapper-${id}`;
 
+                const panelDiv = document.createElement('div');
+                panelDiv.id = `patient-panel-${id}`;
+                panelDiv.className = 'patient-side-panel';
+                panelDiv.innerHTML = `
+                    <div class="patient-side-panel-header">
+                        <span>📋 Dados do Paciente</span>
+                        <button onclick="togglePatientPanel('${id}')" class="text-slate-300 hover:text-white text-lg leading-none">&times;</button>
+                    </div>
+                    <div class="patient-side-panel-body">
+                        ${pspRows || '<p class="text-slate-400 text-xs text-center mt-4">Sem dados cadastrados ainda.</p>'}
+                        ${pspImages}
+                    </div>
+                `;
+                wrapperDiv.appendChild(panelDiv);
+
+                const chatDiv = document.createElement('div');
+                chatDiv.className = `w-[320px] bg-white rounded-t-xl shadow-[0_0_30px_rgba(0,0,0,0.15)] border border-slate-300 flex flex-col chat-window ${isMinimized ? 'chat-minimized' : 'chat-expanded'}`;
+                wrapperDiv.appendChild(chatDiv);
+
+                chatDiv.innerHTML = `
                     <div onclick="toggleMinimizeChat('${id}')" class="bg-slate-800 hover:bg-slate-900 transition-colors text-white p-2.5 rounded-t-xl flex justify-between items-center cursor-pointer shrink-0">
                         <div class="flex items-center gap-2 overflow-hidden">
                             <div class="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold shrink-0">
@@ -1576,7 +1650,7 @@
                         </button>
                     </div>
                 `;
-                container.appendChild(chatDiv);
+                container.appendChild(wrapperDiv);
                 
                 // Configura o Emoji Picker
                 const picker = document.getElementById(`emoji-picker-${id}`);
@@ -1610,13 +1684,29 @@
                             const mediaId = msg.media_id || msg.mediaId || null;
                             if (mediaId) {
                                 const imgUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
-                                html += `<div class="msg-bubble msg-in" style="padding:6px;">
-                                    <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'Imagem do paciente')">
-                                        <img src="${imgUrl}" class="msg-thumbnail" alt="Imagem" onerror="this.parentElement.innerHTML='<div style=\'padding:8px;font-size:10px;color:#64748b;\'>\ud83d\udcce Imagem n\u00e3o dispon\u00edvel</div>'">
-                                        <div class="msg-thumbnail-overlay"><i data-lucide="zoom-in" class="w-5 h-5 text-white"></i></div>
-                                    </div>
-                                    <span class="msg-time">${time}</span>
-                                </div>`;
+                                // Detectar PDF pelo tipo de mensagem ou nome
+                                const isPdfMsg = (msg.mime_type || '').includes('pdf') || (msg.conteudo || '').toLowerCase().includes('.pdf') || (msg.conteudo || '').toLowerCase().includes('pdf');
+                                if (isPdfMsg) {
+                                    html += `<div class="msg-bubble msg-in" style="padding:6px;">
+                                        <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'PDF do paciente')" style="width:140px;height:100px;background:#f1f5f9;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #e2e8f0;">
+                                            <i data-lucide="file-text" style="width:32px;height:32px;color:#ef4444;"></i>
+                                            <span style="font-size:9px;color:#64748b;font-weight:700;">PDF — Clique para abrir</span>
+                                        </div>
+                                        <span class="msg-time">${time}</span>
+                                    </div>`;
+                                } else {
+                                    html += `<div class="msg-bubble msg-in" style="padding:6px;">
+                                        <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'Imagem do paciente')">
+                                            <img src="${imgUrl}" class="msg-thumbnail" alt="Imagem" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                            <div style="display:none;width:140px;height:100px;background:#f1f5f9;border-radius:8px;align-items:center;justify-content:center;flex-direction:column;gap:4px;cursor:pointer;border:1px solid #e2e8f0;">
+                                                <i data-lucide="image-off" style="width:24px;height:24px;color:#94a3b8;"></i>
+                                                <span style="font-size:9px;color:#94a3b8;">Imagem indisponível</span>
+                                            </div>
+                                            <div class="msg-thumbnail-overlay"><i data-lucide="zoom-in" class="w-5 h-5 text-white"></i></div>
+                                        </div>
+                                        <span class="msg-time">${time}</span>
+                                    </div>`;
+                                }
                             } else {
                                 html += `<div class="msg-bubble msg-in">
                                     <div class="flex items-center gap-2 text-slate-500">
