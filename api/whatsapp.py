@@ -1068,7 +1068,7 @@ def webhook():
                 else:
                     enviar_botoes(phone, "Não encontrei agendamentos futuros próximos no sistema. Mas não se preocupe, vamos organizar isso agora! 😊\n\nQual o melhor período para você? ☀️ ⛅", botoes)
             
-            elif "Secretaria" in msg_recebida:
+            elif "Secretaria" in msg_recebida or "📁" in msg_recebida:
                 update_paciente(phone, {"status": "menu_secretaria"})
                 # Funcionalidade 2: Botão Enviar Exames/Resultados
                 secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s5", "title": "📁 Enviar Exames/Resultados"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
