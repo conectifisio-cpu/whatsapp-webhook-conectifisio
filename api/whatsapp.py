@@ -223,11 +223,12 @@ def baixar_midia_whatsapp(media_id):
         res_info = requests.get(url_info, headers=headers_wa, timeout=10)
         if res_info.status_code != 200: return None
         media_url = res_info.json().get("url")
-        mime_type = res_info.json().get("mime_type", "image/jpeg")
+        # Baixa o conteúdo binário da mídia
         res_download = requests.get(media_url, headers=headers_wa, timeout=15)
         if res_download.status_code != 200: return None
-        b64_data = base64.b64encode(res_download.content).decode('utf-8')
-        return f"data:{mime_type};base64,{b64_data}"
+        # Retorna apenas o Base64 puro (sem o prefixo data:image/...)
+        # A API do Feegow espera o conteúdo bruto codificado em base64
+        return base64.b64encode(res_download.content).decode('utf-8')
     except: return None
 
 def buscar_feegow_por_telefone(phone):
