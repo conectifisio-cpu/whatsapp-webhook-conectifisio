@@ -216,20 +216,28 @@ def verificar_cobertura(convenio, servico):
     return True
 
 def baixar_midia_whatsapp(media_id):
+    """Baixa mídia do WhatsApp e retorna como data URI (data:mime/type;base64,...)
+    conforme exigido pela API do Feegow endpoint /patient/upload-base64."""
     if not media_id or not WHATSAPP_TOKEN: return None
     try:
         url_info = f"https://graph.facebook.com/v19.0/{media_id}"
         headers_wa = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
         res_info = requests.get(url_info, headers=headers_wa, timeout=10)
         if res_info.status_code != 200: return None
-        media_url = res_info.json().get("url")
-        # Baixa o conteúdo binário da mídia
-        res_download = requests.get(media_url, headers=headers_wa, timeout=15)
+        info_json = res_info.json()
+        media_url = info_json.get("url")
+        # Preserva o mime_type original para montar o data URI corretamente
+        mime_type = info_json.get("mime_type", "image/jpeg")
+        # Normaliza mime_types comuns do WhatsApp
+        if mime_type == "image/jpg": mime_type = "image/jpeg"
+        res_download = requests.get(media_url, headers=headers_wa, timeout=20)
         if res_download.status_code != 200: return None
-        # Retorna apenas o Base64 puro (sem o prefixo data:image/...)
-        # A API do Feegow espera o conteúdo bruto codificado em base64
-        return base64.b64encode(res_download.content).decode('utf-8')
-    except: return None
+        b64_data = base64.b64encode(res_download.content).decode('utf-8')
+        # A API do Feegow exige o prefixo data:mime/type;base64, conforme documentacao oficial
+        return f"data:{mime_type};base64,{b64_data}"
+    except Exception as e:
+        print(f"[ERRO] baixar_midia_whatsapp({media_id}): {e}")
+        return None
 
 def buscar_feegow_por_telefone(phone):
     if not FEEGOW_TOKEN: return None
@@ -343,17 +351,27 @@ def integrar_feegow(phone, info):
             try:
                 b64_cart = baixar_midia_whatsapp(carteirinha_id)
                 if b64_cart:
-                    res_cart = requests.post(f"{base_url}/patient/upload-base64", json={"paciente_id": feegow_id_int, "arquivo_descricao": "Carteirinha (Robô)", "base64_file": b64_cart}, headers=get_feegow_headers(), timeout=15)
+                    payload_cart = {"paciente_id": feegow_id_int, "arquivo_descricao": "Carteirinha (Rob\u00f4)", "base64_file": b64_cart}
+                    res_cart = requests.post(f"{base_url}/patient/upload-base64", json=payload_cart, headers=get_feegow_headers(), timeout=20)
+                    print(f"[FEEGOW] Upload Carteirinha: status={res_cart.status_code} resp={res_cart.text[:200]}")
                     if res_cart.status_code == 200 and res_cart.json().get("success") != False: fotos_enviadas.append("Carteirinha")
-            except: pass
+                else:
+                    print(f"[FEEGOW] Falha ao baixar carteirinha do WhatsApp (media_id={carteirinha_id})")
+            except Exception as e:
+                print(f"[FEEGOW] Erro upload carteirinha: {e}")
 
         if pedido_id:
             try:
                 b64_pedido = baixar_midia_whatsapp(pedido_id)
                 if b64_pedido:
-                    res_ped = requests.post(f"{base_url}/patient/upload-base64", json={"paciente_id": feegow_id_int, "arquivo_descricao": "Pedido Médico (Robô)", "base64_file": b64_pedido}, headers=get_feegow_headers(), timeout=15)
+                    payload_ped = {"paciente_id": feegow_id_int, "arquivo_descricao": "Pedido M\u00e9dico (Rob\u00f4)", "base64_file": b64_pedido}
+                    res_ped = requests.post(f"{base_url}/patient/upload-base64", json=payload_ped, headers=get_feegow_headers(), timeout=20)
+                    print(f"[FEEGOW] Upload Pedido: status={res_ped.status_code} resp={res_ped.text[:200]}")
                     if res_ped.status_code == 200 and res_ped.json().get("success") != False: fotos_enviadas.append("Pedido")
-            except: pass
+                else:
+                    print(f"[FEEGOW] Falha ao baixar pedido do WhatsApp (media_id={pedido_id})")
+            except Exception as e:
+                print(f"[FEEGOW] Erro upload pedido: {e}")
 
         status_final = f"ID: {feegow_id_int}"
         if fotos_enviadas: status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
