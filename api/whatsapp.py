@@ -340,26 +340,42 @@ def integrar_feegow(phone, info):
                 feegow_id = res_create.json().get("content", {}).get("paciente_id") or res_create.json().get("paciente_id")
         except: pass
 
-    elif feegow_id and convenio_id > 0:
+    elif feegow_id:
+        # Paciente veterano: Atualiza dados (especialmente convênio se mudou)
         try:
             res_pac = requests.get(f"{base_url}/patient/search?paciente_id={feegow_id}&photo=false", headers=get_feegow_headers(), timeout=10)
             pac_nome = info.get("title", "Paciente")
             pac_nasc = formatar_data_feegow(info.get("birthDate", ""))
             pac_email = info.get("email", "")
+            
             if res_pac.status_code == 200 and res_pac.json().get("success") != False:
                 conteudo = res_pac.json().get("content", [])
                 if conteudo:
-                    pac_data = conteudo[0]
+                    pac_data = conteudo[0] if isinstance(conteudo, list) else conteudo
                     pac_nome = pac_data.get("nome_completo", pac_data.get("nome", pac_nome))
                     if pac_data.get("data_nascimento"): pac_nasc = pac_data.get("data_nascimento")
                     if pac_data.get("email1"): pac_email = pac_data.get("email1")
             
             payload_edit = {
-                "paciente_id": int(feegow_id), "nome_completo": pac_nome, "data_nascimento": pac_nasc,
-                "celular1": celular, "email1": pac_email, "convenio_id": convenio_id, "plano_id": 0, "matricula": matricula
+                "paciente_id": int(feegow_id),
+                "nome_completo": pac_nome,
+                "data_nascimento": pac_nasc,
+                "celular1": celular,
+                "email1": pac_email
             }
-            requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=get_feegow_headers(), timeout=10)
-        except: pass
+            
+            # Se houver convênio novo, atualiza
+            if convenio_id > 0:
+                payload_edit.update({
+                    "convenio_id": convenio_id,
+                    "plano_id": 0,
+                    "matricula": matricula
+                })
+            
+            res_edit = requests.post(f"{base_url}/patient/edit", json=payload_edit, headers=get_feegow_headers(), timeout=10)
+            print(f"[FEEGOW] Atualização de veterano (ID {feegow_id}): status={res_edit.status_code} resp={res_edit.text[:200]}", file=sys.stderr)
+        except Exception as e:
+            print(f"[FEEGOW] Erro ao atualizar veterano: {e}", file=sys.stderr)
 
     fotos_enviadas = []
     if feegow_id:
