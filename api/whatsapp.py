@@ -363,35 +363,42 @@ def integrar_feegow(phone, info):
 
     fotos_enviadas = []
     if feegow_id:
-        feegow_id_int = int(feegow_id) 
+        import sys
+        feegow_id_int = int(feegow_id)
+        # Prioriza o Base64 já persistido no Firestore (baixado imediatamente ao receber a foto)
+        # Fallback para media_id caso o b64 não esteja disponível (pacientes antigos)
+        b64_cart_salvo = info.get("carteirinha_b64")
+        b64_ped_salvo = info.get("pedido_b64")
         carteirinha_id = info.get("carteirinha_media_id")
         pedido_id = info.get("pedido_media_id")
 
-        if carteirinha_id:
+        if b64_cart_salvo or carteirinha_id:
             try:
-                b64_cart = baixar_midia_whatsapp(carteirinha_id)
+                b64_cart = b64_cart_salvo or baixar_midia_whatsapp(carteirinha_id)
+                fonte_cart = "Firestore" if b64_cart_salvo else "WhatsApp API"
                 if b64_cart:
                     payload_cart = {"paciente_id": feegow_id_int, "arquivo_descricao": "Carteirinha (Rob\u00f4)", "base64_file": b64_cart}
                     res_cart = requests.post(f"{base_url}/patient/upload-base64", json=payload_cart, headers=get_feegow_headers(), timeout=20)
-                    import sys; print(f"[FEEGOW] Upload Carteirinha: status={res_cart.status_code} resp={res_cart.text[:300]}", file=sys.stderr)
+                    print(f"[FEEGOW] Upload Carteirinha ({fonte_cart}): status={res_cart.status_code} resp={res_cart.text[:300]}", file=sys.stderr)
                     if res_cart.status_code == 200 and res_cart.json().get("success") != False: fotos_enviadas.append("Carteirinha")
                 else:
-                    import sys; print(f"[FEEGOW] Falha ao baixar carteirinha do WhatsApp (media_id={carteirinha_id})", file=sys.stderr)
+                    print(f"[FEEGOW] Falha ao obter carteirinha (media_id={carteirinha_id})", file=sys.stderr)
             except Exception as e:
-                import sys; print(f"[FEEGOW] Erro upload carteirinha: {e}", file=sys.stderr)
+                print(f"[FEEGOW] Erro upload carteirinha: {e}", file=sys.stderr)
 
-        if pedido_id:
+        if b64_ped_salvo or pedido_id:
             try:
-                b64_pedido = baixar_midia_whatsapp(pedido_id)
+                b64_pedido = b64_ped_salvo or baixar_midia_whatsapp(pedido_id)
+                fonte_ped = "Firestore" if b64_ped_salvo else "WhatsApp API"
                 if b64_pedido:
                     payload_ped = {"paciente_id": feegow_id_int, "arquivo_descricao": "Pedido M\u00e9dico (Rob\u00f4)", "base64_file": b64_pedido}
                     res_ped = requests.post(f"{base_url}/patient/upload-base64", json=payload_ped, headers=get_feegow_headers(), timeout=20)
-                    import sys; print(f"[FEEGOW] Upload Pedido: status={res_ped.status_code} resp={res_ped.text[:300]}", file=sys.stderr)
+                    print(f"[FEEGOW] Upload Pedido ({fonte_ped}): status={res_ped.status_code} resp={res_ped.text[:300]}", file=sys.stderr)
                     if res_ped.status_code == 200 and res_ped.json().get("success") != False: fotos_enviadas.append("Pedido")
                 else:
-                    import sys; print(f"[FEEGOW] Falha ao baixar pedido do WhatsApp (media_id={pedido_id})", file=sys.stderr)
+                    print(f"[FEEGOW] Falha ao obter pedido (media_id={pedido_id})", file=sys.stderr)
             except Exception as e:
-                import sys; print(f"[FEEGOW] Erro upload pedido: {e}", file=sys.stderr)
+                print(f"[FEEGOW] Erro upload pedido: {e}", file=sys.stderr)
 
         status_final = f"ID: {feegow_id_int}"
         if fotos_enviadas: status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
@@ -1451,13 +1458,27 @@ def webhook():
         elif status == "foto_carteirinha":
             if not tem_anexo: responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
             else:
-                update_paciente(phone, {"status": "foto_pedido_medico", "tem_foto_carteirinha": True, "carteirinha_media_id": media_id})
+                # Baixa o conteúdo IMEDIATAMENTE — media_id do WhatsApp expira em ~5 min
+                b64_cart_imediato = baixar_midia_whatsapp(media_id) if media_id else None
+                update_paciente(phone, {
+                    "status": "foto_pedido_medico",
+                    "tem_foto_carteirinha": True,
+                    "carteirinha_media_id": media_id,
+                    "carteirinha_b64": b64_cart_imediato  # conteúdo persistido no Firestore
+                })
                 responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO DO SEU PEDIDO MÉDICO.")
 
         elif status == "foto_pedido_medico":
             if not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto do seu Pedido Médico.")
             else:
-                update_paciente(phone, {"status": "agendando", "tem_foto_pedido": True, "pedido_media_id": media_id})
+                # Baixa o conteúdo IMEDIATAMENTE — media_id do WhatsApp expira em ~5 min
+                b64_ped_imediato = baixar_midia_whatsapp(media_id) if media_id else None
+                update_paciente(phone, {
+                    "status": "agendando",
+                    "tem_foto_pedido": True,
+                    "pedido_media_id": media_id,
+                    "pedido_b64": b64_ped_imediato  # conteúdo persistido no Firestore
+                })
                 enviar_botoes(phone, "Documentação completa! 🎉\n\nQual o melhor período para verificarmos a sua vaga?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
 
         elif status == "agendando":
