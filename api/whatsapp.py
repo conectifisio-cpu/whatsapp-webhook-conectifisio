@@ -13,7 +13,7 @@ except ImportError:
     PILLOW_AVAILABLE = False
 from flask import Flask, request, jsonify, send_from_directory, render_template
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage as fb_storage
 
 # Configura o Flask para encontrar templates e static a partir da raiz do projeto
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -57,7 +57,9 @@ VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "conectifisio_webhook_2026")
 # INICIALIZAÇÃO DO FIREBASE
 # ==========================================
 firebase_creds_json = os.environ.get("FIREBASE_CREDENTIALS")
+FIREBASE_STORAGE_BUCKET = os.environ.get("FIREBASE_STORAGE_BUCKET", "conectifisio-bot.firebasestorage.app")
 db = None
+storage_bucket = None
 if firebase_creds_json:
     try:
         if not firebase_admin._apps:
@@ -65,8 +67,14 @@ if firebase_creds_json:
             if 'private_key' in cred_dict:
                 cred_dict['private_key'] = cred_dict['private_key'].replace('\\n', '\n')
             cred = credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred)
+            firebase_admin.initialize_app(cred, {'storageBucket': FIREBASE_STORAGE_BUCKET})
         db = firestore.client()
+        try:
+            storage_bucket = fb_storage.bucket()
+            import sys; print(f"[STORAGE] Bucket inicializado: {storage_bucket.name}", file=sys.stderr)
+        except Exception as e_storage:
+            import sys; print(f"[STORAGE] Falha ao inicializar bucket: {e_storage}", file=sys.stderr)
+            storage_bucket = None
     except: pass
 
 # ==========================================
@@ -221,21 +229,21 @@ def verificar_cobertura(convenio, servico):
         if "caixa" not in conv: return False
     return True
 
-def baixar_midia_whatsapp(media_id):
-    """Baixa mídia do WhatsApp e retorna como data URI (data:mime/type;base64,...)
-    conforme exigido pela API do Feegow endpoint /patient/upload-base64.
-    Imagens são sempre convertidas para JPEG para garantir compatibilidade."""
-    if not media_id or not WHATSAPP_TOKEN: return None
+def baixar_midia_whatsapp_raw(media_id):
+    """Baixa mídia do WhatsApp e retorna (bytes, mime_type).
+    Imagens são convertidas para JPEG para compatibilidade com Feegow.
+    Retorna (None, None) em caso de falha."""
+    if not media_id or not WHATSAPP_TOKEN: return None, None
     try:
         url_info = f"https://graph.facebook.com/v19.0/{media_id}"
         headers_wa = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
         res_info = requests.get(url_info, headers=headers_wa, timeout=10)
-        if res_info.status_code != 200: return None
+        if res_info.status_code != 200: return None, None
         info_json = res_info.json()
         media_url = info_json.get("url")
         mime_type = info_json.get("mime_type", "image/jpeg")
         res_download = requests.get(media_url, headers=headers_wa, timeout=20)
-        if res_download.status_code != 200: return None
+        if res_download.status_code != 200: return None, None
         conteudo = res_download.content
         # Para imagens (qualquer formato: webp, png, jpg, heic), converte para JPEG
         # O Feegow só renderiza corretamente JPEG e PDF
@@ -250,14 +258,113 @@ def baixar_midia_whatsapp(media_id):
                     mime_type = "image/jpeg"
             except Exception as conv_err:
                 import sys; print(f"[AVISO] Conversão de imagem falhou ({mime_type}): {conv_err}", file=sys.stderr)
-        # Normaliza mime_type
         if mime_type == "image/jpg": mime_type = "image/jpeg"
+        return conteudo, mime_type
+    except Exception as e:
+        import sys; print(f"[ERRO] baixar_midia_whatsapp_raw({media_id}): {e}", file=sys.stderr)
+        return None, None
+
+def baixar_midia_whatsapp(media_id):
+    """Baixa mídia do WhatsApp e retorna como data URI (data:mime/type;base64,...).
+    Wrapper de compatibilidade — usado pelo integrar_feegow como fallback."""
+    conteudo, mime_type = baixar_midia_whatsapp_raw(media_id)
+    if not conteudo: return None
+    b64_data = base64.b64encode(conteudo).decode('utf-8')
+    return f"data:{mime_type};base64,{b64_data}"
+
+# ==========================================
+# FIREBASE STORAGE — Armazenamento de mídia sem limite de 1MB
+# ==========================================
+# O Firestore tem limite de 1MB por campo. Fotos de celular em Base64 podem ter 2-5MB.
+# Solução: Salvar binário no Firebase Storage e guardar apenas a URL no Firestore.
+# O frontend não é afetado (usa media_id via proxy /api/media).
+
+def salvar_midia_storage(phone, tipo_doc, conteudo_bytes, mime_type):
+    """Salva mídia no Firebase Storage e retorna a URL pública de download.
+    Args:
+        phone: telefone do paciente (usado como pasta)
+        tipo_doc: 'carteirinha' ou 'pedido_medico'
+        conteudo_bytes: bytes do arquivo
+        mime_type: tipo MIME (ex: 'image/jpeg', 'application/pdf')
+    Returns:
+        URL de download público ou None em caso de falha
+    """
+    import sys
+    if not storage_bucket or not conteudo_bytes:
+        print(f"[STORAGE] Bucket indisponível ou conteúdo vazio para {phone}/{tipo_doc}", file=sys.stderr)
+        return None
+    try:
+        ext = 'jpg' if 'jpeg' in mime_type else ('pdf' if 'pdf' in mime_type else 'bin')
+        blob_path = f"pacientes/{phone}/{tipo_doc}.{ext}"
+        blob = storage_bucket.blob(blob_path)
+        blob.upload_from_string(conteudo_bytes, content_type=mime_type)
+        # Tornar público para leitura (necessário para o integrar_feegow baixar depois)
+        blob.make_public()
+        url = blob.public_url
+        tamanho_kb = len(conteudo_bytes) / 1024
+        print(f"[STORAGE] Salvo {blob_path} ({tamanho_kb:.1f} KB) → {url}", file=sys.stderr)
+        return url
+    except Exception as e:
+        print(f"[STORAGE] Erro ao salvar {phone}/{tipo_doc}: {e}", file=sys.stderr)
+        return None
+
+def baixar_do_storage_como_data_uri(url, mime_type_hint="image/jpeg"):
+    """Baixa arquivo do Firebase Storage e retorna como data URI para o Feegow."""
+    import sys
+    if not url: return None
+    try:
+        res = requests.get(url, timeout=20)
+        if res.status_code != 200:
+            print(f"[STORAGE] Falha ao baixar {url}: status={res.status_code}", file=sys.stderr)
+            return None
+        conteudo = res.content
+        # Detectar mime_type pelo conteúdo ou usar hint
+        mime_type = res.headers.get('Content-Type', mime_type_hint)
+        if 'jpeg' in mime_type or 'jpg' in mime_type: mime_type = 'image/jpeg'
+        elif 'pdf' in mime_type: mime_type = 'application/pdf'
         b64_data = base64.b64encode(conteudo).decode('utf-8')
-        # A API do Feegow exige o prefixo data:mime/type;base64, conforme documentacao oficial
+        tamanho_kb = len(conteudo) / 1024
+        print(f"[STORAGE] Baixado {url} ({tamanho_kb:.1f} KB) como data URI", file=sys.stderr)
         return f"data:{mime_type};base64,{b64_data}"
     except Exception as e:
-        import sys; print(f"[ERRO] baixar_midia_whatsapp({media_id}): {e}", file=sys.stderr)
+        print(f"[STORAGE] Erro ao baixar {url}: {e}", file=sys.stderr)
         return None
+
+def salvar_midia_imediata(phone, tipo_doc, media_id):
+    """Fluxo completo: baixa do WhatsApp → salva no Storage → retorna dados para o Firestore.
+    Retorna dict com campos para merge no Firestore:
+      - {tipo_doc}_storage_url: URL do Storage
+      - {tipo_doc}_b64: Base64 se < 900KB (compatibilidade), senão None
+      - {tipo_doc}_media_id: media_id original
+    """
+    import sys
+    conteudo, mime_type = baixar_midia_whatsapp_raw(media_id)
+    result = {f"{tipo_doc}_media_id": media_id}
+    
+    if not conteudo:
+        print(f"[MEDIA] Falha ao baixar {tipo_doc} do WhatsApp (media_id={media_id})", file=sys.stderr)
+        result[f"{tipo_doc}_b64"] = None
+        result[f"{tipo_doc}_storage_url"] = None
+        return result
+    
+    tamanho_b64 = len(base64.b64encode(conteudo))
+    tamanho_kb = tamanho_b64 / 1024
+    print(f"[MEDIA] {tipo_doc} baixado: {len(conteudo)/1024:.1f} KB raw, {tamanho_kb:.1f} KB Base64", file=sys.stderr)
+    
+    # Sempre salvar no Storage (fonte confiável sem limite de tamanho)
+    storage_url = salvar_midia_storage(phone, tipo_doc, conteudo, mime_type)
+    result[f"{tipo_doc}_storage_url"] = storage_url
+    
+    # Se cabe no Firestore (< 900KB em Base64), salvar também para compatibilidade
+    if tamanho_b64 < 900_000:
+        b64_data = base64.b64encode(conteudo).decode('utf-8')
+        result[f"{tipo_doc}_b64"] = f"data:{mime_type};base64,{b64_data}"
+        print(f"[MEDIA] {tipo_doc} salvo no Firestore (< 900KB)", file=sys.stderr)
+    else:
+        result[f"{tipo_doc}_b64"] = None  # Não salvar no Firestore — muito grande
+        print(f"[MEDIA] {tipo_doc} NÃO salvo no Firestore ({tamanho_kb:.1f} KB > 900KB) — usando Storage", file=sys.stderr)
+    
+    return result
 
 def buscar_feegow_por_telefone(phone):
     if not FEEGOW_TOKEN: return None
@@ -381,38 +488,70 @@ def integrar_feegow(phone, info):
     if feegow_id:
         import sys
         feegow_id_int = int(feegow_id)
-        # Prioriza o Base64 já persistido no Firestore (baixado imediatamente ao receber a foto)
-        # Fallback para media_id caso o b64 não esteja disponível (pacientes antigos)
+        # Cadeia de prioridade para obter a mídia:
+        # 1. Firebase Storage URL (novo, sem limite de tamanho)
+        # 2. Base64 salvo no Firestore (compatível com imagens < 900KB)
+        # 3. WhatsApp API via media_id (fallback, pode ter expirado)
+        cart_storage_url = info.get("carteirinha_storage_url")
+        ped_storage_url = info.get("pedido_storage_url")
         b64_cart_salvo = info.get("carteirinha_b64")
         b64_ped_salvo = info.get("pedido_b64")
         carteirinha_id = info.get("carteirinha_media_id")
         pedido_id = info.get("pedido_media_id")
 
-        if b64_cart_salvo or carteirinha_id:
+        # --- Upload Carteirinha ---
+        if cart_storage_url or b64_cart_salvo or carteirinha_id:
             try:
-                b64_cart = b64_cart_salvo or baixar_midia_whatsapp(carteirinha_id)
-                fonte_cart = "Firestore" if b64_cart_salvo else "WhatsApp API"
+                b64_cart = None
+                fonte_cart = "N/A"
+                # 1. Tentar Storage (fonte mais confiável, sem limite de tamanho)
+                if cart_storage_url:
+                    b64_cart = baixar_do_storage_como_data_uri(cart_storage_url)
+                    fonte_cart = "Storage"
+                # 2. Fallback: Base64 do Firestore (pode estar truncado se > 1MB)
+                if not b64_cart and b64_cart_salvo:
+                    b64_cart = b64_cart_salvo
+                    fonte_cart = "Firestore"
+                # 3. Fallback: WhatsApp API (media_id pode ter expirado)
+                if not b64_cart and carteirinha_id:
+                    b64_cart = baixar_midia_whatsapp(carteirinha_id)
+                    fonte_cart = "WhatsApp API"
+                
                 if b64_cart:
                     payload_cart = {"paciente_id": feegow_id_int, "arquivo_descricao": "Carteirinha (Rob\u00f4)", "base64_file": b64_cart}
-                    res_cart = requests.post(f"{base_url}/patient/upload-base64", json=payload_cart, headers=get_feegow_headers(), timeout=20)
+                    res_cart = requests.post(f"{base_url}/patient/upload-base64", json=payload_cart, headers=get_feegow_headers(), timeout=30)
                     print(f"[FEEGOW] Upload Carteirinha ({fonte_cart}): status={res_cart.status_code} resp={res_cart.text[:300]}", file=sys.stderr)
                     if res_cart.status_code == 200 and res_cart.json().get("success") != False: fotos_enviadas.append("Carteirinha")
                 else:
-                    print(f"[FEEGOW] Falha ao obter carteirinha (media_id={carteirinha_id})", file=sys.stderr)
+                    print(f"[FEEGOW] Falha ao obter carteirinha (todas as fontes falharam)", file=sys.stderr)
             except Exception as e:
                 print(f"[FEEGOW] Erro upload carteirinha: {e}", file=sys.stderr)
 
-        if b64_ped_salvo or pedido_id:
+        # --- Upload Pedido Médico ---
+        if ped_storage_url or b64_ped_salvo or pedido_id:
             try:
-                b64_pedido = b64_ped_salvo or baixar_midia_whatsapp(pedido_id)
-                fonte_ped = "Firestore" if b64_ped_salvo else "WhatsApp API"
+                b64_pedido = None
+                fonte_ped = "N/A"
+                # 1. Tentar Storage
+                if ped_storage_url:
+                    b64_pedido = baixar_do_storage_como_data_uri(ped_storage_url)
+                    fonte_ped = "Storage"
+                # 2. Fallback: Firestore
+                if not b64_pedido and b64_ped_salvo:
+                    b64_pedido = b64_ped_salvo
+                    fonte_ped = "Firestore"
+                # 3. Fallback: WhatsApp API
+                if not b64_pedido and pedido_id:
+                    b64_pedido = baixar_midia_whatsapp(pedido_id)
+                    fonte_ped = "WhatsApp API"
+                
                 if b64_pedido:
                     payload_ped = {"paciente_id": feegow_id_int, "arquivo_descricao": "Pedido M\u00e9dico (Rob\u00f4)", "base64_file": b64_pedido}
-                    res_ped = requests.post(f"{base_url}/patient/upload-base64", json=payload_ped, headers=get_feegow_headers(), timeout=20)
+                    res_ped = requests.post(f"{base_url}/patient/upload-base64", json=payload_ped, headers=get_feegow_headers(), timeout=30)
                     print(f"[FEEGOW] Upload Pedido ({fonte_ped}): status={res_ped.status_code} resp={res_ped.text[:300]}", file=sys.stderr)
                     if res_ped.status_code == 200 and res_ped.json().get("success") != False: fotos_enviadas.append("Pedido")
                 else:
-                    print(f"[FEEGOW] Falha ao obter pedido (media_id={pedido_id})", file=sys.stderr)
+                    print(f"[FEEGOW] Falha ao obter pedido (todas as fontes falharam)", file=sys.stderr)
             except Exception as e:
                 print(f"[FEEGOW] Erro upload pedido: {e}", file=sys.stderr)
 
@@ -1492,36 +1631,42 @@ def webhook():
         elif status == "foto_carteirinha":
             if not tem_anexo: responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
             else:
-                # Baixa o conteúdo IMEDIATAMENTE — media_id do WhatsApp expira em ~5 min
-                b64_cart_imediato = baixar_midia_whatsapp(media_id) if media_id else None
-                update_paciente(phone, {
+                # Baixa do WhatsApp IMEDIATAMENTE e salva no Firebase Storage
+                # (media_id expira em ~5 min, Storage não tem limite de 1MB)
+                media_data = salvar_midia_imediata(phone, "carteirinha", media_id) if media_id else {}
+                update_fields = {
                     "status": "foto_pedido_medico",
                     "tem_foto_carteirinha": True,
-                    "carteirinha_media_id": media_id,
-                    "carteirinha_b64": b64_cart_imediato  # conteúdo persistido no Firestore
-                })
+                }
+                update_fields.update(media_data)
+                update_paciente(phone, update_fields)
                 responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO DO SEU PEDIDO MÉDICO.")
 
         elif status == "foto_pedido_medico":
             if not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto do seu Pedido Médico.")
             else:
-                # Baixa o conteúdo IMEDIATAMENTE — media_id do WhatsApp expira em ~5 min
-                b64_ped_imediato = baixar_midia_whatsapp(media_id) if media_id else None
-                update_paciente(phone, {
+                # Baixa do WhatsApp IMEDIATAMENTE e salva no Firebase Storage
+                media_data = salvar_midia_imediata(phone, "pedido", media_id) if media_id else {}
+                update_fields = {
                     "status": "agendando",
                     "tem_foto_pedido": True,
-                    "pedido_media_id": media_id,
-                    "pedido_b64": b64_ped_imediato  # conteúdo persistido no Firestore
-                })
+                }
+                update_fields.update(media_data)
+                update_paciente(phone, update_fields)
                 enviar_botoes(phone, "Documentação completa! 🎉\n\nQual o melhor período para verificarmos a sua vaga?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
 
         elif status == "agendando":
             if msg_recebida in ["Manhã", "Tarde", "Noite"]:
                 info["periodo"] = msg_recebida
-                # Bug Fix: Convenêio vai para 'pendente_feegow' para aparecer na coluna correta do Kanban
+                # Bug Fix: Garantir que modalidade está correta antes de definir a coluna destino
+                # Se o paciente tem convênio salvo mas modalidade vazia, força "Convênio"
+                # Se tem fotos de carteirinha/pedido, também é Convênio
+                if not modalidade and (info.get("convenio") or info.get("carteirinha_media_id")):
+                    modalidade = "Convênio"
+                # Convênio vai para 'pendente_feegow' para aparecer na coluna correta do Kanban
                 # Particular vai para 'finalizado' (sem necessidade de validação)
                 novo_status = "pendente_feegow" if modalidade == "Convênio" else "finalizado"
-                update_data = {"periodo": msg_recebida, "status": novo_status}
+                update_data = {"periodo": msg_recebida, "status": novo_status, "modalidade": modalidade}
                 
                 if servico and "Pilates" not in servico:
                     resultado_feegow = integrar_feegow(phone, info)
