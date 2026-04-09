@@ -1022,6 +1022,16 @@ def webhook():
             return jsonify({"status": "courtesy_ignored"}), 200
 
         if status in ["finalizado", "atendimento_humano"]:
+            # Janela de Silêncio: Se finalizado há menos de 30 min e for mensagem curta, ignora
+            last_upd = info.get("lastUpdate")
+            if last_upd and status == "finalizado":
+                try:
+                    dt_last = datetime.fromisoformat(last_upd.replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - dt_last).total_seconds() < 1800: # 30 min
+                        if len(msg_limpa.split()) <= 2: # "Ok obrigado", "Valeu", etc
+                            return jsonify({"status": "silence_window_ignored"}), 200
+                except: pass
+
             enviar_botoes(phone, "Olá! Nossa equipe precisa de mais um tempinho para a resolução da sua solicitação, mas já avisei que você entrou em contato novamente! 😊\n\nSe quiser reiniciar o atendimento, clique abaixo:", [{"id": "menu_ini", "title": "Menu Inicial"}])
             return jsonify({"status": "aguardando_equipe"}), 200
             
@@ -1111,13 +1121,9 @@ def webhook():
                 enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Serviços", secoes)
             
             elif "Nova Guia" in msg_recebida or "Tratamento" in msg_recebida:
-                conv_salvo = info.get("convenio", "")
-                if conv_salvo and conv_salvo.lower() != "particular":
-                    update_paciente(phone, {"status": "confirmando_convenio_salvo"})
-                    enviar_botoes(phone, f"Vi aqui que você utilizou o convênio *{conv_salvo}* anteriormente.\n\nVamos seguir utilizando este mesmo plano?", [{"id": "c_manter", "title": "Sim, manter plano"}, {"id": "c_trocar", "title": "Troquei de plano"}, {"id": "c_part", "title": "Mudar p/ Particular"}])
-                else:
-                    update_paciente(phone, {"status": "modalidade"})
-                    enviar_botoes(phone, "As novas sessões serão pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
+                # Nova Pergunta para Veteranos: Queixa
+                update_paciente(phone, {"status": "cadastrando_queixa_veterano"})
+                responder_texto(phone, "Entendido! Vamos organizar sua nova guia. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
             
             elif "Reagendar" in msg_recebida:
                 sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
@@ -1135,6 +1141,18 @@ def webhook():
                 # Funcionalidade 2: Botão Enviar Exames/Resultados
                 secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s5", "title": "📁 Enviar Exames/Resultados"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
+
+        elif status == "cadastrando_queixa_veterano":
+            acolhimento = chamar_ia_custom(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
+            conv_salvo = info.get("convenio", "")
+            update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento})
+            
+            if conv_salvo and conv_salvo.lower() != "particular":
+                update_paciente(phone, {"status": "confirmando_convenio_salvo"})
+                enviar_botoes(phone, f"{acolhimento}\n\nVi aqui que você utilizou o convênio *{conv_salvo}* anteriormente. Vamos seguir com ele?", [{"id": "c_manter", "title": "Sim, manter plano"}, {"id": "c_trocar", "title": "Troquei de plano"}, {"id": "c_part", "title": "Mudar p/ Particular"}])
+            else:
+                update_paciente(phone, {"status": "modalidade"})
+                enviar_botoes(phone, f"{acolhimento}\n\nAs novas sessões serão pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
 
         elif status == "menu_secretaria":
             if "Voltar" in msg_recebida:
@@ -1448,8 +1466,8 @@ def webhook():
         elif status == "data_nascimento":
             validacao = validar_data_nascimento(msg_recebida)
             if validacao == "menor_12":
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "atendimento_humano"})
-                responder_texto(phone, "Entendido! 😊 Como o paciente é menor de 12 anos, nossa equipe de fisioterapia pediátrica entrará em contato agora mesmo para orientar o agendamento com segurança. Aguarde um instante! 👩‍⚕️")
+                update_paciente(phone, {"birthDate": msg_recebida, "status": "finalizado", "robo_ligado": False})
+                responder_texto(phone, "⚠️ Atenção: Identificamos que o paciente é menor de 12 anos. Informamos que não possuímos especialidade pediátrica em nossas unidades. Infelizmente, não poderemos realizar este agendamento. Recomendamos a busca por profissionais especializados na área infantil. Obrigado! 🙏")
             elif not validacao:
                 responder_texto(phone, "❌ Data de nascimento inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
             else:
@@ -1577,7 +1595,8 @@ def chat_manual():
         if message_text and not file_b64:
             res = responder_texto(phone, message_text, remetente="clinica")
             if res.status_code == 200:
-                update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": message_text, "unread": False})
+                # Auto-Pause: Desliga o robô quando o humano fala
+                update_paciente(phone, {"status": "pausado", "robo_ligado": False, "ultima_mensagem_clinica": message_text, "unread": False})
                 return jsonify({"success": True}), 200
             
         return jsonify({"success": False, "error": "Falha geral no envio"}), 500
