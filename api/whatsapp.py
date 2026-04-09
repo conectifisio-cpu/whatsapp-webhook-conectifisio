@@ -2,9 +2,15 @@ import os
 import json
 import re
 import traceback
+import io
 import requests
 import base64
 from datetime import datetime, timedelta
+try:
+    from PIL import Image as PILImage
+    PILLOW_AVAILABLE = True
+except ImportError:
+    PILLOW_AVAILABLE = False
 from flask import Flask, request, jsonify, send_from_directory, render_template
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -217,7 +223,8 @@ def verificar_cobertura(convenio, servico):
 
 def baixar_midia_whatsapp(media_id):
     """Baixa mídia do WhatsApp e retorna como data URI (data:mime/type;base64,...)
-    conforme exigido pela API do Feegow endpoint /patient/upload-base64."""
+    conforme exigido pela API do Feegow endpoint /patient/upload-base64.
+    Imagens são sempre convertidas para JPEG para garantir compatibilidade."""
     if not media_id or not WHATSAPP_TOKEN: return None
     try:
         url_info = f"https://graph.facebook.com/v19.0/{media_id}"
@@ -226,17 +233,30 @@ def baixar_midia_whatsapp(media_id):
         if res_info.status_code != 200: return None
         info_json = res_info.json()
         media_url = info_json.get("url")
-        # Preserva o mime_type original para montar o data URI corretamente
         mime_type = info_json.get("mime_type", "image/jpeg")
-        # Normaliza mime_types comuns do WhatsApp
-        if mime_type == "image/jpg": mime_type = "image/jpeg"
         res_download = requests.get(media_url, headers=headers_wa, timeout=20)
         if res_download.status_code != 200: return None
-        b64_data = base64.b64encode(res_download.content).decode('utf-8')
+        conteudo = res_download.content
+        # Para imagens (qualquer formato: webp, png, jpg, heic), converte para JPEG
+        # O Feegow só renderiza corretamente JPEG e PDF
+        if mime_type.startswith("image/") and mime_type != "image/jpeg":
+            try:
+                if PILLOW_AVAILABLE:
+                    img = PILImage.open(io.BytesIO(conteudo))
+                    if img.mode in ("RGBA", "P", "LA"): img = img.convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=92)
+                    conteudo = buf.getvalue()
+                    mime_type = "image/jpeg"
+            except Exception as conv_err:
+                import sys; print(f"[AVISO] Conversão de imagem falhou ({mime_type}): {conv_err}", file=sys.stderr)
+        # Normaliza mime_type
+        if mime_type == "image/jpg": mime_type = "image/jpeg"
+        b64_data = base64.b64encode(conteudo).decode('utf-8')
         # A API do Feegow exige o prefixo data:mime/type;base64, conforme documentacao oficial
         return f"data:{mime_type};base64,{b64_data}"
     except Exception as e:
-        print(f"[ERRO] baixar_midia_whatsapp({media_id}): {e}")
+        import sys; print(f"[ERRO] baixar_midia_whatsapp({media_id}): {e}", file=sys.stderr)
         return None
 
 def buscar_feegow_por_telefone(phone):
@@ -353,12 +373,12 @@ def integrar_feegow(phone, info):
                 if b64_cart:
                     payload_cart = {"paciente_id": feegow_id_int, "arquivo_descricao": "Carteirinha (Rob\u00f4)", "base64_file": b64_cart}
                     res_cart = requests.post(f"{base_url}/patient/upload-base64", json=payload_cart, headers=get_feegow_headers(), timeout=20)
-                    print(f"[FEEGOW] Upload Carteirinha: status={res_cart.status_code} resp={res_cart.text[:200]}")
+                    import sys; print(f"[FEEGOW] Upload Carteirinha: status={res_cart.status_code} resp={res_cart.text[:300]}", file=sys.stderr)
                     if res_cart.status_code == 200 and res_cart.json().get("success") != False: fotos_enviadas.append("Carteirinha")
                 else:
-                    print(f"[FEEGOW] Falha ao baixar carteirinha do WhatsApp (media_id={carteirinha_id})")
+                    import sys; print(f"[FEEGOW] Falha ao baixar carteirinha do WhatsApp (media_id={carteirinha_id})", file=sys.stderr)
             except Exception as e:
-                print(f"[FEEGOW] Erro upload carteirinha: {e}")
+                import sys; print(f"[FEEGOW] Erro upload carteirinha: {e}", file=sys.stderr)
 
         if pedido_id:
             try:
@@ -366,12 +386,12 @@ def integrar_feegow(phone, info):
                 if b64_pedido:
                     payload_ped = {"paciente_id": feegow_id_int, "arquivo_descricao": "Pedido M\u00e9dico (Rob\u00f4)", "base64_file": b64_pedido}
                     res_ped = requests.post(f"{base_url}/patient/upload-base64", json=payload_ped, headers=get_feegow_headers(), timeout=20)
-                    print(f"[FEEGOW] Upload Pedido: status={res_ped.status_code} resp={res_ped.text[:200]}")
+                    import sys; print(f"[FEEGOW] Upload Pedido: status={res_ped.status_code} resp={res_ped.text[:300]}", file=sys.stderr)
                     if res_ped.status_code == 200 and res_ped.json().get("success") != False: fotos_enviadas.append("Pedido")
                 else:
-                    print(f"[FEEGOW] Falha ao baixar pedido do WhatsApp (media_id={pedido_id})")
+                    import sys; print(f"[FEEGOW] Falha ao baixar pedido do WhatsApp (media_id={pedido_id})", file=sys.stderr)
             except Exception as e:
-                print(f"[FEEGOW] Erro upload pedido: {e}")
+                import sys; print(f"[FEEGOW] Erro upload pedido: {e}", file=sys.stderr)
 
         status_final = f"ID: {feegow_id_int}"
         if fotos_enviadas: status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
