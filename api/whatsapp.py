@@ -5,7 +5,7 @@ import traceback
 import io
 import requests
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 try:
     from PIL import Image as PILImage
     PILLOW_AVAILABLE = True
@@ -33,18 +33,6 @@ def serve_dashboard():
 # ==========================================
 # CONFIGURAÇÕES DE AMBIENTE E UNIDADES
 # ==========================================
-UNIDADES = {
-    "São Caetano": {
-        "endereco": "Rua Manoel Coelho, 600 - Sala 1011 - Centro, São Caetano do Sul - SP",
-        "maps": "https://maps.app.goo.gl/SaoCaetanoLink",
-        "recomendacao": "📍 Estamos localizados no Edifício Comercial Mercure, em frente à estação de trem."
-    },
-    "Ipiranga": {
-        "endereco": "Rua Bom Pastor, 2100 - Sala 505 - Ipiranga, São Paulo - SP",
-        "maps": "https://maps.app.goo.gl/IpirangaLink",
-        "recomendacao": "📍 Estamos a 5 minutos a pé do Metrô Sacomã. O prédio possui estacionamento no local."
-    }
-}
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -423,7 +411,7 @@ def consultar_agenda_feegow(paciente_id):
     if not FEEGOW_TOKEN or not paciente_id: return None
     hoje = datetime.now()
     futuro = hoje + timedelta(days=90)
-    url = f"https://api.feegow.com.br/v1/appoints/search?paciente_id={paciente_id}&data_start={hoje.strftime('%Y-%m-%d')}&data_end={futuro.strftime('%Y-%m-%d')}"
+    url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={hoje.strftime('%d-%m-%Y')}&data_end={futuro.strftime('%d-%m-%Y')}"
     try:
         res = requests.get(url, headers=get_feegow_headers(), timeout=10)
         if res.status_code == 200:
@@ -512,8 +500,9 @@ def integrar_feegow(phone, info):
     if feegow_id:
         import sys
         feegow_id_int = int(feegow_id)
+
         # Cadeia de prioridade para obter a mídia:
-        # 1. Firebase Storage URL (novo, sem limite de tamanho)
+        # 1. Firebase Storage URL (sem limite de tamanho)
         # 2. Base64 salvo no Firestore (compatível com imagens < 900KB)
         # 3. WhatsApp API via media_id (fallback, pode ter expirado)
         cart_storage_url = info.get("carteirinha_storage_url")
@@ -523,66 +512,128 @@ def integrar_feegow(phone, info):
         carteirinha_id = info.get("carteirinha_media_id")
         pedido_id = info.get("pedido_media_id")
 
+        def _upload_feegow(feegow_id_int, descricao, storage_url, b64_salvo, media_id_orig):
+            """Faz upload de um arquivo para o prontuário do Feegow.
+            Endpoint confirmado pelo Wix: /patient/upload-base64
+            Payload: { paciente_id, arquivo_descricao, base64_file (data URI completo) }
+            Loga HTTP status + resposta completa para diagnóstico."""
+            import sys
+
+            # --- Obter conteúdo binário ---
+            conteudo_bytes = None
+            mime_type = "image/jpeg"
+            fonte = "N/A"
+
+            if storage_url:
+                try:
+                    res_stor = requests.get(storage_url, timeout=20)
+                    if res_stor.status_code == 200:
+                        conteudo_bytes = res_stor.content
+                        mime_type = res_stor.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+                        fonte = "Storage"
+                        print(f"[FEEGOW-UPLOAD] {descricao} obtido do Storage ({len(conteudo_bytes)/1024:.1f} KB)", file=sys.stderr)
+                    else:
+                        print(f"[FEEGOW-UPLOAD] Storage retornou {res_stor.status_code} para {storage_url}", file=sys.stderr)
+                except Exception as e:
+                    print(f"[FEEGOW-UPLOAD] Erro ao baixar Storage: {e}", file=sys.stderr)
+
+            if not conteudo_bytes and b64_salvo:
+                try:
+                    raw = b64_salvo.split(",", 1)[-1] if "," in b64_salvo else b64_salvo
+                    conteudo_bytes = base64.b64decode(raw)
+                    fonte = "Firestore"
+                    print(f"[FEEGOW-UPLOAD] {descricao} obtido do Firestore ({len(conteudo_bytes)/1024:.1f} KB)", file=sys.stderr)
+                except Exception as e:
+                    print(f"[FEEGOW-UPLOAD] Erro ao decodificar b64 Firestore: {e}", file=sys.stderr)
+
+            if not conteudo_bytes and media_id_orig:
+                conteudo_bytes, mime_type = baixar_midia_whatsapp_raw(media_id_orig)
+                if conteudo_bytes:
+                    fonte = "WhatsApp API"
+                    print(f"[FEEGOW-UPLOAD] {descricao} obtido do WhatsApp ({len(conteudo_bytes)/1024:.1f} KB)", file=sys.stderr)
+
+            if not conteudo_bytes:
+                print(f"[FEEGOW-UPLOAD] FALHA TOTAL: nenhuma fonte disponível para {descricao}", file=sys.stderr)
+                return False
+
+            # --- Monta data URI (formato confirmado pelo Wix) ---
+            if "jpeg" not in mime_type and "jpg" not in mime_type and "pdf" not in mime_type:
+                mime_type = "image/jpeg"
+            b64_puro = base64.b64encode(conteudo_bytes).decode("utf-8")
+            data_uri = f"data:{mime_type};base64,{b64_puro}"
+
+            headers_json = {
+                "Content-Type": "application/json",
+                "x-access-token": FEEGOW_TOKEN,
+                "User-Agent": "Conectifisio-Integration/1.0"
+            }
+
+            # --- Estratégia 1: JSON com base64 (endpoint confirmado pelo Wix) ---
+            try:
+                payload_json = {
+                    "paciente_id": feegow_id_int,
+                    "arquivo_descricao": descricao,
+                    "base64_file": data_uri
+                }
+                res = requests.post(
+                    f"{base_url}/patient/upload-base64",
+                    json=payload_json,
+                    headers=headers_json,
+                    timeout=30
+                )
+                print(f"[FEEGOW-UPLOAD] upload-base64 ({fonte}): HTTP {res.status_code} | {res.text[:500]}", file=sys.stderr)
+                if res.status_code == 200:
+                    try:
+                        if res.json().get("success") != False:
+                            return True
+                    except:
+                        return True  # 200 sem JSON = sucesso
+            except Exception as e:
+                print(f"[FEEGOW-UPLOAD] Exceção upload-base64: {e}", file=sys.stderr)
+
+            # --- Estratégia 2: multipart/form-data (fallback) ---
+            try:
+                ext = "jpg" if "jpeg" in mime_type else ("pdf" if "pdf" in mime_type else "jpg")
+                nome_arquivo = f"{descricao.replace(' ', '_').replace('(', '').replace(')', '')}.{ext}"
+                res_mp = requests.post(
+                    f"{base_url}/patient/upload-base64",
+                    files={"arquivo": (nome_arquivo, conteudo_bytes, mime_type)},
+                    data={"paciente_id": str(feegow_id_int), "arquivo_descricao": descricao},
+                    headers={"x-access-token": FEEGOW_TOKEN, "User-Agent": "Conectifisio-Integration/1.0"},
+                    timeout=30
+                )
+                print(f"[FEEGOW-UPLOAD] multipart ({fonte}): HTTP {res_mp.status_code} | {res_mp.text[:500]}", file=sys.stderr)
+                if res_mp.status_code == 200:
+                    try:
+                        if res_mp.json().get("success") != False:
+                            return True
+                    except:
+                        return True
+            except Exception as e:
+                print(f"[FEEGOW-UPLOAD] Exceção multipart: {e}", file=sys.stderr)
+
+            print(f"[FEEGOW-UPLOAD] FALHA: todas estratégias falharam para {descricao} (paciente_id={feegow_id_int})", file=sys.stderr)
+            return False
+
         # --- Upload Carteirinha ---
         if cart_storage_url or b64_cart_salvo or carteirinha_id:
-            try:
-                b64_cart = None
-                fonte_cart = "N/A"
-                # 1. Tentar Storage (fonte mais confiável, sem limite de tamanho)
-                if cart_storage_url:
-                    b64_cart = baixar_do_storage_como_data_uri(cart_storage_url)
-                    fonte_cart = "Storage"
-                # 2. Fallback: Base64 do Firestore (pode estar truncado se > 1MB)
-                if not b64_cart and b64_cart_salvo:
-                    b64_cart = b64_cart_salvo
-                    fonte_cart = "Firestore"
-                # 3. Fallback: WhatsApp API (media_id pode ter expirado)
-                if not b64_cart and carteirinha_id:
-                    b64_cart = baixar_midia_whatsapp(carteirinha_id)
-                    fonte_cart = "WhatsApp API"
-                
-                if b64_cart:
-                    payload_cart = {"paciente_id": feegow_id_int, "arquivo_descricao": "Carteirinha (Rob\u00f4)", "base64_file": b64_cart}
-                    res_cart = requests.post(f"{base_url}/patient/upload-base64", json=payload_cart, headers=get_feegow_headers(), timeout=30)
-                    print(f"[FEEGOW] Upload Carteirinha ({fonte_cart}): status={res_cart.status_code} resp={res_cart.text[:300]}", file=sys.stderr)
-                    if res_cart.status_code == 200 and res_cart.json().get("success") != False: fotos_enviadas.append("Carteirinha")
-                else:
-                    print(f"[FEEGOW] Falha ao obter carteirinha (todas as fontes falharam)", file=sys.stderr)
-            except Exception as e:
-                print(f"[FEEGOW] Erro upload carteirinha: {e}", file=sys.stderr)
+            ok = _upload_feegow(feegow_id_int, "Carteirinha (Robô)",
+                                cart_storage_url, b64_cart_salvo, carteirinha_id)
+            if ok:
+                fotos_enviadas.append("Carteirinha")
 
         # --- Upload Pedido Médico ---
         if ped_storage_url or b64_ped_salvo or pedido_id:
-            try:
-                b64_pedido = None
-                fonte_ped = "N/A"
-                # 1. Tentar Storage
-                if ped_storage_url:
-                    b64_pedido = baixar_do_storage_como_data_uri(ped_storage_url)
-                    fonte_ped = "Storage"
-                # 2. Fallback: Firestore
-                if not b64_pedido and b64_ped_salvo:
-                    b64_pedido = b64_ped_salvo
-                    fonte_ped = "Firestore"
-                # 3. Fallback: WhatsApp API
-                if not b64_pedido and pedido_id:
-                    b64_pedido = baixar_midia_whatsapp(pedido_id)
-                    fonte_ped = "WhatsApp API"
-                
-                if b64_pedido:
-                    payload_ped = {"paciente_id": feegow_id_int, "arquivo_descricao": "Pedido M\u00e9dico (Rob\u00f4)", "base64_file": b64_pedido}
-                    res_ped = requests.post(f"{base_url}/patient/upload-base64", json=payload_ped, headers=get_feegow_headers(), timeout=30)
-                    print(f"[FEEGOW] Upload Pedido ({fonte_ped}): status={res_ped.status_code} resp={res_ped.text[:300]}", file=sys.stderr)
-                    if res_ped.status_code == 200 and res_ped.json().get("success") != False: fotos_enviadas.append("Pedido")
-                else:
-                    print(f"[FEEGOW] Falha ao obter pedido (todas as fontes falharam)", file=sys.stderr)
-            except Exception as e:
-                print(f"[FEEGOW] Erro upload pedido: {e}", file=sys.stderr)
+            ok = _upload_feegow(feegow_id_int, "Pedido Médico (Robô)",
+                                ped_storage_url, b64_ped_salvo, pedido_id)
+            if ok:
+                fotos_enviadas.append("Pedido")
 
         status_final = f"ID: {feegow_id_int}"
-        if fotos_enviadas: status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
+        if fotos_enviadas:
+            status_final += f" | Anexos: {', '.join(fotos_enviadas)}"
         return {"feegow_id": feegow_id_int, "feegow_status": status_final}
-        
+
     return {"feegow_status": "Erro Integração"}
 
 # ==========================================
@@ -1204,7 +1255,7 @@ def webhook():
              
         if msg_recebida == "Sim, continuar":
              responder_texto(phone, "Perfeito! Retomando...")
-             msg_recebida = "" 
+             return jsonify({"status": "retomada_confirmada"}), 200
 
         # ==========================================
         # LÓGICA DE ESTADOS
@@ -1331,8 +1382,40 @@ def webhook():
 
         elif status == "enviando_exames":
             if tem_anexo:
-                update_paciente(phone, {"status": "atendimento_humano", "queixa": "[EXAME ENVIADO]: Paciente enviou exames via robô."})
-                responder_texto(phone, "Recebido com sucesso! 📁 Já anexei ao seu prontuário. Nossa equipe vai analisar e te dar um retorno em breve.")
+                # Salva no Storage imediatamente (media_id expira em ~5 min)
+                media_data = salvar_midia_imediata(phone, "exame", media_id) if media_id else {}
+                update_fields = {
+                    "status": "atendimento_humano",
+                    "queixa": "[EXAME ENVIADO]: Paciente enviou exames via robô.",
+                    "tem_exame": True,
+                }
+                update_fields.update(media_data)
+                update_paciente(phone, update_fields)
+                # Tenta enviar ao prontuário do Feegow se já tiver feegow_id
+                if info.get("feegow_id") and media_data.get("exame_storage_url"):
+                    import sys
+                    try:
+                        feegow_id_int = int(info["feegow_id"])
+                        conteudo_bytes, mime_type = baixar_midia_whatsapp_raw(media_id) if media_id else (None, None)
+                        if not conteudo_bytes:
+                            res_stor = requests.get(media_data["exame_storage_url"], timeout=20)
+                            conteudo_bytes = res_stor.content if res_stor.status_code == 200 else None
+                            mime_type = res_stor.headers.get("Content-Type", "image/jpeg") if conteudo_bytes else None
+                        if conteudo_bytes:
+                            b64_puro = base64.b64encode(conteudo_bytes).decode("utf-8")
+                            data_uri = f"data:{mime_type};base64,{b64_puro}"
+                            headers_up = {"x-access-token": FEEGOW_TOKEN, "Content-Type": "application/json", "User-Agent": "Conectifisio-Integration/1.0"}
+                            for ep in ["/patient/upload-prontuario", "/patient/upload-base64"]:
+                                res_up = requests.post(f"https://api.feegow.com/v1/api{ep}",
+                                    json={"paciente_id": feegow_id_int, "arquivo_descricao": "Exame (Robô)", "base64_file": data_uri},
+                                    headers=headers_up, timeout=30)
+                                print(f"[FEEGOW-EXAME] {ep}: HTTP {res_up.status_code} | {res_up.text[:300]}", file=sys.stderr)
+                                if res_up.status_code == 200:
+                                    break
+                    except Exception as e_ex:
+                        import sys
+                        print(f"[FEEGOW-EXAME] Erro: {e_ex}", file=sys.stderr)
+                responder_texto(phone, "Recebido com sucesso! 📁 O arquivo foi salvo e nossa equipe vai analisar em breve.")
             else:
                 responder_texto(phone, "❌ Não recebi o arquivo. Por favor, envie o seu exame ou resultado (Foto ou PDF).")
 
@@ -1773,4 +1856,6 @@ def chat_manual():
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
-    app.run(port=5000)
+    # Cloud Run define PORT=8080 automaticamente. Fallback para 5000 em desenvolvimento local.
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
