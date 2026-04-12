@@ -167,15 +167,19 @@ def _busca_por_keywords(msg_limpa, faq_data):
     return None
 
 def _busca_por_ia(mensagem, faq_data):
-    """Usa Gemini para entender semanticamente se a mensagem corresponde a alguma FAQ.
-    Chamado apenas quando a busca por palavras-chave falhar."""
+    """Usa o modelo treinado OpenAI para responder duvidas da clinica.
+    Funciona com ou sem FAQ no Firestore:
+    - COM FAQ: fornece as respostas como contexto para o modelo
+    - SEM FAQ: o modelo responde com o conhecimento do treinamento direto"""
     import sys
-    if not API_KEY or len(mensagem.strip()) < 5:
+    if not OPENAI_API_KEY or len(mensagem.strip()) < 5:
+        if not OPENAI_API_KEY:
+            print("[FAQ-IA] OPENAI_API_KEY ausente", file=sys.stderr)
         return None
 
-    # Monta o contexto do FAQ para o prompt
+    # Monta contexto do FAQ se houver conteudo no Firestore
     linhas_faq = []
-    for cat in faq_data:
+    for cat in (faq_data or []):
         for pq in cat.get("perguntas_frequentes", []):
             pergunta = pq.get("pergunta", "")
             resposta = pq.get("resposta_ideal", "")
@@ -184,32 +188,38 @@ def _busca_por_ia(mensagem, faq_data):
                 entrada = "PERGUNTA: " + pergunta + chr(10) + "VARIACOES: " + variacoes + chr(10) + "RESPOSTA: " + resposta
                 linhas_faq.append(entrada)
 
-    if not linhas_faq:
-        return None
+    # Prompt adaptado: com ou sem FAQ no Firestore
+    if linhas_faq:
+        faq_formatado = (chr(10) + chr(10) + "---" + chr(10) + chr(10)).join(linhas_faq)
+        linhas_prompt = [
+            "Voce e o assistente virtual da clinica Conectifisio (fisioterapia, Sao Paulo).",
+            "",
+            "Um paciente enviou esta mensagem:",
+            '"' + mensagem + '"',
+            "",
+            "Abaixo estao as duvidas frequentes da clinica com as respostas corretas:",
+            "",
+            faq_formatado,
+            "",
+            "INSTRUCAO: Analise se a mensagem e uma duvida respondida pelo FAQ acima.",
+            "- Se SIM: responda SOMENTE com o texto exato da RESPOSTA correspondente.",
+            "- Se NAO: responda SOMENTE com a palavra NENHUMA.",
+            "",
+            "Resposta:"
+        ]
+    else:
+        # Sem FAQ no Firestore — modelo responde com conhecimento do treinamento
+        linhas_prompt = [
+            "Voce e o assistente virtual da clinica Conectifisio (fisioterapia).",
+            "Responda a duvida do paciente de forma clara e acolhedora em portugues brasileiro.",
+            "Se a mensagem nao for uma duvida sobre a clinica, responda SOMENTE com a palavra NENHUMA.",
+            "",
+            "Mensagem do paciente: " + mensagem,
+            "",
+            "Resposta:"
+        ]
 
-    faq_formatado = (chr(10) + chr(10) + "---" + chr(10) + chr(10)).join(linhas_faq)
-
-    linhas_prompt = [
-        "Voce e o assistente virtual da clinica Conectifisio (fisioterapia, Sao Paulo).",
-        "",
-        "Um paciente enviou esta mensagem:",
-        '"' + mensagem + '"',
-        "",
-        "Abaixo estao as duvidas frequentes da clinica com as respostas corretas:",
-        "",
-        faq_formatado,
-        "",
-        "INSTRUCAO: Analise se a mensagem do paciente e uma duvida que se encaixa em alguma das FAQs acima.",
-        "- Se SIM: responda SOMENTE com o texto exato da RESPOSTA correspondente, sem alterar nada.",
-        "- Se NAO (mensagem fora de escopo ou nao e uma duvida): responda SOMENTE com a palavra NENHUMA.",
-        "",
-        "Resposta:"
-    ]
     prompt = chr(10).join(linhas_prompt)
-
-    if not OPENAI_API_KEY:
-        print("[FAQ-IA] OPENAI_API_KEY ausente — FAQ semântico desativado", file=sys.stderr)
-        return None
 
     url = "https://api.openai.com/v1/chat/completions"
     headers_oai = {
@@ -219,7 +229,7 @@ def _busca_por_ia(mensagem, faq_data):
     payload = {
         "model": OPENAI_MODEL,
         "messages": [
-            {"role": "system", "content": "Voce e o assistente virtual da Conectifisio. Responda SOMENTE com o texto exato da FAQ correspondente, ou com a palavra NENHUMA se a mensagem nao for uma duvida respondida pelo FAQ."},
+            {"role": "system", "content": "Voce e o assistente virtual da clinica Conectifisio (fisioterapia, Sao Paulo - unidades Ipiranga e Sao Caetano do Sul). Voce foi treinado com todas as informacoes da clinica. Responda duvidas dos pacientes de forma clara, acolhedora e em portugues brasileiro. Se a mensagem nao for uma duvida sobre a clinica (ex: saudacao, agradecimento, assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
             {"role": "user", "content": prompt[:3000]}
         ],
         "max_tokens": 500,
@@ -242,24 +252,24 @@ def _busca_por_ia(mensagem, faq_data):
 
 def consultar_faq(mensagem):
     """FAQ com IA — dois estágios:
-    1. Busca rápida por palavras-chave (sem custo, sem API)
-    2. OpenAI ft:gpt-4o-mini:conectifisio-v1 como fallback semântico"""
+    1. Busca por palavras-chave no Firestore (se tiver conteúdo)
+    2. OpenAI ft:gpt-4o-mini:conectifisio-v1 sempre como fallback
+    O OpenAI funciona mesmo com Firestore vazio — usa o conhecimento do treinamento."""
     import sys
-    faq_data = _carregar_faq()
-    if not faq_data:
-        return None
-
     msg_limpa = mensagem.lower().strip()
+    faq_data = _carregar_faq()
 
-    # Estágio 1: palavras-chave (rápido)
-    match_kw = _busca_por_keywords(msg_limpa, faq_data)
-    if match_kw:
-        return match_kw
+    # Estágio 1: palavras-chave no Firestore (só se tiver conteúdo)
+    if faq_data:
+        match_kw = _busca_por_keywords(msg_limpa, faq_data)
+        if match_kw:
+            print("[FAQ-KW] Respondendo por palavra-chave do Firestore", file=sys.stderr)
+            return match_kw
 
-    # Estágio 2: Gemini semântico (fallback inteligente)
+    # Estágio 2: OpenAI sempre — com ou sem FAQ no Firestore
     match_ia = _busca_por_ia(mensagem, faq_data)
     if match_ia:
-        print(f"[FAQ-IA] Respondendo via Gemini semântico", file=sys.stderr)
+        print("[FAQ-IA] Respondendo via OpenAI", file=sys.stderr)
     return match_ia
 
 def update_paciente(phone, data):
