@@ -432,6 +432,7 @@ def consultar_agenda_feegow(paciente_id):
     return None
 
 def integrar_feegow(phone, info):
+    import sys  # necessário para print(..., file=sys.stderr) em todo o escopo da função
     if not FEEGOW_TOKEN: return {"feegow_status": "Token Ausente"}
     cpf = re.sub(r'\D', '', info.get("cpf", ""))
     feegow_id = info.get("feegow_id")
@@ -498,7 +499,6 @@ def integrar_feegow(phone, info):
 
     fotos_enviadas = []
     if feegow_id:
-        import sys
         feegow_id_int = int(feegow_id)
 
         # Cadeia de prioridade para obter a mídia:
