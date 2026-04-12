@@ -128,25 +128,139 @@ def get_paciente(phone):
     doc = db.collection("PatientsKanban").document(phone).get()
     return doc.to_dict() if doc.exists else {}
 
-def consultar_faq(mensagem):
-    if not db: return None
-    msg_limpa = mensagem.lower()
-    
-    # 1. Busca por palavras-chave nas categorias do FAQ
-    faq_ref = db.collection("FAQ").get()
-    for doc in faq_ref:
-        cat = doc.to_dict()
+# ==========================================
+# FAQ COM IA — Cache + Gemini semântico
+# ==========================================
+_faq_cache = {"data": None, "ts": 0}
+_FAQ_CACHE_TTL = 300  # 5 minutos — evita leituras repetidas do Firestore
+
+def _carregar_faq():
+    """Carrega o FAQ do Firestore com cache de 5 minutos."""
+    import sys, time
+    now = time.time()
+    if _faq_cache["data"] is not None and (now - _faq_cache["ts"]) < _FAQ_CACHE_TTL:
+        return _faq_cache["data"]
+    if not db:
+        return []
+    try:
+        docs = db.collection("FAQ").stream()
+        faq = [doc.to_dict() for doc in docs]
+        _faq_cache["data"] = faq
+        _faq_cache["ts"] = now
+        print(f"[FAQ] Cache atualizado: {len(faq)} categorias carregadas", file=sys.stderr)
+        return faq
+    except Exception as e:
+        print(f"[FAQ] Erro ao carregar Firestore: {e}", file=sys.stderr)
+        return _faq_cache["data"] or []
+
+def _busca_por_keywords(msg_limpa, faq_data):
+    """Busca rápida por palavras-chave — sem custo de API."""
+    import sys
+    for cat in faq_data:
         for pq in cat.get("perguntas_frequentes", []):
-            # Verifica pergunta principal e variações
-            if any(v.lower() in msg_limpa for v in [pq["pergunta"]] + pq.get("variacoes", [])):
-                return pq["resposta_ideal"]
-            # Verifica se a mensagem do paciente contém a pergunta do FAQ (inverso)
-            if any(msg_limpa in v.lower() for v in [pq["pergunta"]] + pq.get("variacoes", [])):
-                return pq["resposta_ideal"]
-                
-    # 2. Busca semântica simples no TrainingData (opcional, se não achou no FAQ estruturado)
-    # Por enquanto, ficaremos no FAQ estruturado para maior precisão.
+            todas = [pq.get("pergunta", "")] + pq.get("variacoes", [])
+            for v in todas:
+                if not v: continue
+                if v.lower() in msg_limpa or msg_limpa in v.lower():
+                    print(f"[FAQ-KW] Match: '{v[:40]}'", file=sys.stderr)
+                    return pq.get("resposta_ideal")
     return None
+
+def _busca_por_ia(mensagem, faq_data):
+    """Usa Gemini para entender semanticamente se a mensagem corresponde a alguma FAQ.
+    Chamado apenas quando a busca por palavras-chave falhar."""
+    import sys
+    if not API_KEY or len(mensagem.strip()) < 5:
+        return None
+
+    # Monta o contexto do FAQ para o prompt
+    linhas_faq = []
+    for cat in faq_data:
+        for pq in cat.get("perguntas_frequentes", []):
+            pergunta = pq.get("pergunta", "")
+            resposta = pq.get("resposta_ideal", "")
+            variacoes = ", ".join(pq.get("variacoes", []))
+            if pergunta and resposta:
+                entrada = "PERGUNTA: " + pergunta + chr(10) + "VARIACOES: " + variacoes + chr(10) + "RESPOSTA: " + resposta
+                linhas_faq.append(entrada)
+
+    if not linhas_faq:
+        return None
+
+    faq_formatado = (chr(10) + chr(10) + "---" + chr(10) + chr(10)).join(linhas_faq)
+
+    linhas_prompt = [
+        "Voce e o assistente virtual da clinica Conectifisio (fisioterapia, Sao Paulo).",
+        "",
+        "Um paciente enviou esta mensagem:",
+        '"' + mensagem + '"',
+        "",
+        "Abaixo estao as duvidas frequentes da clinica com as respostas corretas:",
+        "",
+        faq_formatado,
+        "",
+        "INSTRUCAO: Analise se a mensagem do paciente e uma duvida que se encaixa em alguma das FAQs acima.",
+        "- Se SIM: responda SOMENTE com o texto exato da RESPOSTA correspondente, sem alterar nada.",
+        "- Se NAO (mensagem fora de escopo ou nao e uma duvida): responda SOMENTE com a palavra NENHUMA.",
+        "",
+        "Resposta:"
+    ]
+    prompt = chr(10).join(linhas_prompt)
+
+    if not OPENAI_API_KEY:
+        print("[FAQ-IA] OPENAI_API_KEY ausente — FAQ semântico desativado", file=sys.stderr)
+        return None
+
+    url = "https://api.openai.com/v1/chat/completions"
+    headers_oai = {
+        "Authorization": "Bearer " + OPENAI_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": [
+            {"role": "system", "content": "Voce e o assistente virtual da Conectifisio. Responda SOMENTE com o texto exato da FAQ correspondente, ou com a palavra NENHUMA se a mensagem nao for uma duvida respondida pelo FAQ."},
+            {"role": "user", "content": prompt[:3000]}
+        ],
+        "max_tokens": 500,
+        "temperature": 0.1
+    }
+
+    try:
+        res = requests.post(url, json=payload, headers=headers_oai, timeout=15)
+        if res.status_code == 200:
+            resposta_ia = res.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            print("[FAQ-IA] OpenAI: " + resposta_ia[:80], file=sys.stderr)
+            if resposta_ia and resposta_ia.upper() != "NENHUMA" and len(resposta_ia) > 5:
+                return resposta_ia
+        else:
+            print("[FAQ-IA] OpenAI HTTP " + str(res.status_code) + ": " + res.text[:200], file=sys.stderr)
+    except Exception as e:
+        print("[FAQ-IA] Erro: " + str(e), file=sys.stderr)
+
+    return None
+
+def consultar_faq(mensagem):
+    """FAQ com IA — dois estágios:
+    1. Busca rápida por palavras-chave (sem custo, sem API)
+    2. OpenAI ft:gpt-4o-mini:conectifisio-v1 como fallback semântico"""
+    import sys
+    faq_data = _carregar_faq()
+    if not faq_data:
+        return None
+
+    msg_limpa = mensagem.lower().strip()
+
+    # Estágio 1: palavras-chave (rápido)
+    match_kw = _busca_por_keywords(msg_limpa, faq_data)
+    if match_kw:
+        return match_kw
+
+    # Estágio 2: Gemini semântico (fallback inteligente)
+    match_ia = _busca_por_ia(mensagem, faq_data)
+    if match_ia:
+        print(f"[FAQ-IA] Respondendo via Gemini semântico", file=sys.stderr)
+    return match_ia
 
 def update_paciente(phone, data):
     if not db: return
