@@ -234,41 +234,14 @@ def baixar_midia_whatsapp_raw(media_id):
         if res_download.status_code != 200: return None, None
         conteudo = res_download.content
         
-        # [NORMALIZAÇÃO FEEGOW] Para imagens, redimensiona e limpa metadados
+        # [NORMALIZAÇÃO FEEGOW] Pillow DESATIVADO — enviando bytes originais do WhatsApp
+        # Motivo: Pillow no Cloud Run produzia JPEG incompatível com o renderizador do Feegow.
+        # No Vercel (onde funcionava em março/2026) o Pillow se comportava diferente.
+        # Arquivo original do WhatsApp chega em formato que o Feegow aceita nativamente.
+        import sys
         if "image" in mime_type:
-            try:
-                if PILLOW_AVAILABLE:
-                    img = PILImage.open(io.BytesIO(conteudo))
-                    
-                    # 1. Corrige orientação baseada no EXIF (se houver) e remove metadados
-                    try:
-                        from PIL import ImageOps
-                        img = ImageOps.exif_transpose(img)
-                    except: pass
-                    
-                    # 2. Converte para RGB (remove transparência que quebra o Feegow)
-                    if img.mode in ("RGBA", "P", "LA"):
-                        img = img.convert("RGB")
-                    elif img.mode != "RGB":
-                        img = img.convert("RGB")
-                        
-                    # 3. Redimensionamento Inteligente (Máx 1200px)
-                    # Fotos de 12MP+ travam o processador de miniaturas do Feegow
-                    max_size = 1200
-                    width, height = img.size
-                    if width > max_size or height > max_size:
-                        ratio = min(max_size/width, max_size/height)
-                        new_size = (int(width * ratio), int(height * ratio))
-                        img = img.resize(new_size, PILImage.LANCZOS)
-                        import sys; print(f"[MEDIA] Redimensionado: {width}x{height} -> {new_size[0]}x{new_size[1]}", file=sys.stderr)
-                    
-                    # 4. Salva como JPEG limpo (sem metadados/EXIF)
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=75, optimize=True)
-                    conteudo = buf.getvalue()
-                    mime_type = "image/jpeg"
-            except Exception as conv_err:
-                import sys; print(f"[AVISO] Normalização de imagem falhou ({mime_type}): {conv_err}", file=sys.stderr)
+            if mime_type == "image/jpg": mime_type = "image/jpeg"
+            print(f"[MEDIA] Imagem recebida sem processamento Pillow: {mime_type}, {len(conteudo)/1024:.1f} KB", file=sys.stderr)
         
         if mime_type == "image/jpg": mime_type = "image/jpeg"
         return conteudo, mime_type
