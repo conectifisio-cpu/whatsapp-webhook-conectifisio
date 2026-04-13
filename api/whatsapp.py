@@ -210,13 +210,7 @@ def _busca_por_ia(mensagem, faq_data):
     else:
         # Sem FAQ no Firestore — modelo responde com conhecimento do treinamento
         linhas_prompt = [
-            "Voce e o assistente virtual da clinica Conectifisio (fisioterapia).",
-            "Responda a duvida do paciente de forma clara e acolhedora em portugues brasileiro.",
-            "Se a mensagem nao for uma duvida sobre a clinica, responda SOMENTE com a palavra NENHUMA.",
-            "",
-            "Mensagem do paciente: " + mensagem,
-            "",
-            "Resposta:"
+            mensagem
         ]
 
     prompt = chr(10).join(linhas_prompt)
@@ -229,7 +223,7 @@ def _busca_por_ia(mensagem, faq_data):
     payload = {
         "model": OPENAI_MODEL,
         "messages": [
-            {"role": "system", "content": "Voce e o assistente virtual da clinica Conectifisio (fisioterapia, Sao Paulo - unidades Ipiranga e Sao Caetano do Sul). Voce foi treinado com todas as informacoes da clinica. Responda duvidas dos pacientes de forma clara, acolhedora e em portugues brasileiro. Se a mensagem nao for uma duvida sobre a clinica (ex: saudacao, agradecimento, assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
+            {"role": "system", "content": "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural. Se a mensagem nao for uma duvida sobre a clinica (saudacao, agradecimento ou assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
             {"role": "user", "content": prompt[:3000]}
         ],
         "max_tokens": 500,
