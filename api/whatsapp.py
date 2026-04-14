@@ -6,6 +6,8 @@ import io
 import requests
 import base64
 from datetime import datetime, timedelta, timezone
+import threading
+_thread_local = threading.local()
 try:
     from PIL import Image as PILImage
     PILLOW_AVAILABLE = True
@@ -771,31 +773,34 @@ def chamar_gemini(query):
     except: pass
     return None
 
-def enviar_whatsapp(to, payload_msg):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+def enviar_whatsapp(to, payload_msg, numero_id=None):
+    """Envia mensagem pelo número correto.
+    numero_id: Phone Number ID de onde veio a mensagem (dual-number support).
+    Prioridade: argumento explícito > thread local > variável de ambiente."""
+    pid = numero_id or getattr(_thread_local, "numero_id", None) or PHONE_NUMBER_ID
+    url = f"https://graph.facebook.com/v19.0/{pid}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
     payload = {"messaging_product": "whatsapp", "to": to, **payload_msg}
     try: return requests.post(url, json=payload, headers=headers, timeout=10)
     except: return None
 
-def responder_texto(to, texto, remetente="robo"):
-    # Registrar no histórico e enviar via WhatsApp API
+def responder_texto(to, texto, remetente="robo", numero_id=None):
     registrar_historico(to, remetente, "texto", texto)
-    return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}})
+    return enviar_whatsapp(to, {"type": "text", "text": {"body": texto}}, numero_id=numero_id)
 
-def enviar_botoes(to, texto, botoes):
+def enviar_botoes(to, texto, botoes, numero_id=None):
     registrar_historico(to, "robo", "texto", texto)
     return enviar_whatsapp(to, {
         "type": "interactive",
         "interactive": {"type": "button", "body": {"text": texto}, "action": {"buttons": [{"type": "reply", "reply": {"id": b["id"], "title": b["title"][:20]}} for b in botoes]}}
-    })
+    }, numero_id=numero_id)
 
-def enviar_lista(to, texto, titulo_botao, secoes):
+def enviar_lista(to, texto, titulo_botao, secoes, numero_id=None):
     registrar_historico(to, "robo", "texto", texto)
     return enviar_whatsapp(to, {
         "type": "interactive",
         "interactive": {"type": "list", "body": {"text": texto}, "action": {"button": titulo_botao[:20], "sections": secoes}}
-    })
+    }, numero_id=numero_id)
 
 # ==========================================
 # PROXY DE MÍDIA — Visualização de imagens do WhatsApp no Dashboard
@@ -1173,6 +1178,11 @@ def webhook():
         message = val["messages"][0]
         phone = message["from"]
         msg_type = message.get("type")
+        # Captura o Phone Number ID de quem recebeu a mensagem (suporte dual-number)
+        # Permite responder sempre pelo mesmo número em que o paciente escreveu
+        numero_id = val.get("metadata", {}).get("phone_number_id") or PHONE_NUMBER_ID
+        _thread_local.numero_id = numero_id  # disponível para todas as funções de envio
+        import sys; print(f"[DUAL-NUM] Mensagem recebida no número ID: {numero_id}", file=sys.stderr)
         
         info = get_paciente(phone)
         status_atual = info.get("status", "triagem") if info else "triagem"
