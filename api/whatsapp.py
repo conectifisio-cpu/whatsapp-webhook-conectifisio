@@ -228,8 +228,8 @@ def _busca_por_ia(mensagem, faq_data):
             {"role": "system", "content": "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural. Se a mensagem nao for uma duvida sobre a clinica (saudacao, agradecimento ou assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
             {"role": "user", "content": prompt[:3000]}
         ],
-        "max_tokens": 500,
-        "temperature": 0.1
+        "max_tokens": 800,
+        "temperature": 0.2
     }
 
     try:
@@ -237,7 +237,8 @@ def _busca_por_ia(mensagem, faq_data):
         if res.status_code == 200:
             resposta_ia = res.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             print("[FAQ-IA] OpenAI: " + resposta_ia[:80], file=sys.stderr)
-            if resposta_ia and resposta_ia.upper() != "NENHUMA" and len(resposta_ia) > 5:
+            # Rejeita respostas truncadas (menos de 15 chars ou sem pontuação final)
+            if resposta_ia and resposta_ia.upper() != "NENHUMA" and len(resposta_ia) > 15:
                 return resposta_ia
         else:
             print("[FAQ-IA] OpenAI HTTP " + str(res.status_code) + ": " + res.text[:200], file=sys.stderr)
@@ -1251,17 +1252,17 @@ def webhook():
 
         # ==========================================
         # 🧠 CONSULTA AO FAQ (INTELIGÊNCIA DE DADOS REAIS)
-        # NÃO consulta FAQ para mensagens de cortesia (evita reiniciar fluxo)
+        # SOMENTE para pacientes fora do fluxo (triagem, finalizado, pausado, atendimento_humano)
+        # Nunca interrompe um fluxo ativo de agendamento
         # ==========================================
-        if msg_type == "text" and len(msg_limpa) > 5 and not is_cortesia:
+        STATUSES_FAQ_PERMITIDOS = [
+            "triagem", "finalizado", "atendimento_humano", "pausado",
+            "arquivado", "followup_1", "followup_2", "followup_3"
+        ]
+        if msg_type == "text" and len(msg_limpa) > 5 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
             resposta_faq = consultar_faq(msg_recebida)
-            if resposta_faq:
+            if resposta_faq and resposta_faq.upper() != "NENHUMA":
                 responder_texto(phone, resposta_faq)
-                # Se o paciente já estava em um fluxo, avisa que pode continuar
-                if status_atual not in ["triagem", "finalizado", "atendimento_humano"]:
-                    import time as _t_faq
-                    _t_faq.sleep(1.5)
-                    responder_texto(phone, "Espero ter ajudado com sua dúvida! 😊\n\nPodemos continuar o seu agendamento de onde paramos?")
                 return jsonify({"status": "faq_respondido"}), 200
 
         # ==========================================
