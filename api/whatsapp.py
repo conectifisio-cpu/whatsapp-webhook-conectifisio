@@ -902,222 +902,237 @@ def webhook():
             if not db:
                 return jsonify({"error": "DB indisponivel"}), 500
             try:
+                import sys as _sys
                 from datetime import timezone as _tz
                 agora = datetime.now(_tz.utc)
 
                 # ==========================================
-                # JANELAS DE ENGAJAMENTO B2C (horário Brasília = UTC-3)
-                # Só dispara mensagens dentro dessas janelas
+                # HORÁRIO COMERCIAL (Brasília = UTC-3)
+                # Seg-Sáb 8h-21h. Domingo sempre pula para segunda 8h
                 # ==========================================
-                hora_brasilia = (agora - timedelta(hours=3)).hour
-                JANELAS = [(8, 10), (12, 14), (17, 19)]
-                dentro_da_janela = any(inicio <= hora_brasilia < fim for inicio, fim in JANELAS)
+                def dentro_horario_comercial(dt_utc):
+                    dt_brt = dt_utc - timedelta(hours=3)
+                    dia_semana = dt_brt.weekday()  # 0=seg, 6=dom
+                    hora = dt_brt.hour
+                    if dia_semana == 6: return False  # Domingo nunca
+                    return 8 <= hora < 21
 
-                # Statuses elegíveis para follow-up
-                STATUSES_FOLLOWUP = [
-                    "triagem", "escolhendo_unidade", "cadastrando_nome",
-                    "escolhendo_especialidade", "cadastrando_queixa",
-                    "modalidade", "nome_convenio", "foto_carteirinha",
+                def proximo_slot_comercial(dt_utc):
+                    """Retorna o datetime do próximo slot comercial (8h do próximo dia útil)"""
+                    dt_brt = dt_utc - timedelta(hours=3)
+                    # Tenta amanhã primeiro
+                    proximo = dt_brt.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
+                    # Pula domingo
+                    if proximo.weekday() == 6:
+                        proximo += timedelta(days=1)
+                    return proximo
+
+                def pode_enviar(last_dt, minutos_necessarios):
+                    """Verifica se passou o tempo necessário E está no horário comercial."""
+                    agora_brt = agora - timedelta(hours=3)
+                    minutos_passados = (agora - last_dt).total_seconds() / 60
+                    if minutos_passados < minutos_necessarios:
+                        return False
+                    return dentro_horario_comercial(agora)
+
+                def parse_timestamp(last_raw):
+                    from datetime import timezone as _tz2
+                    if isinstance(last_raw, datetime):
+                        return last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
+                    elif isinstance(last_raw, str):
+                        s = last_raw.replace("Z", "+00:00")
+                        if " " in s and "+" not in s: s = s.replace(" ", "T")
+                        dt = datetime.fromisoformat(s)
+                        return dt if dt.tzinfo else dt.replace(tzinfo=_tz2.utc)
+                    elif hasattr(last_raw, "tzinfo"):
+                        return last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
+                    return datetime.fromisoformat(str(last_raw).replace("Z", "+00:00")).replace(tzinfo=_tz2.utc)
+
+                # Statuses elegíveis
+                STATUSES_CONVENIO = [
+                    "nome_convenio", "num_carteirinha", "foto_carteirinha",
                     "foto_pedido_medico", "cadastrando_nome_completo",
-                    "cadastrando_cpf", "cadastrando_nascimento",
-                    "cadastrando_email", "agendando", "finalizado",
-                    "num_carteirinha", "data_nascimento", "coletando_email",
-                    "pausado"
+                    "cpf", "data_nascimento", "coletando_email", "cadastrando_cpf",
+                    "cadastrando_nascimento", "cadastrando_email"
                 ]
-                # Statuses de Particular/Pilates — só alerta interno, sem mensagem ao paciente
-                STATUSES_ALERTA_HUMANO = [
-                    "agendando", "finalizado"
+                STATUSES_PILATES = [
+                    "pilates_modalidade", "pilates_part_exp", "pilates_part_periodo",
+                    "pilates_part_nome", "pilates_part_cpf", "pilates_part_nasc",
+                    "pilates_part_email", "pilates_app_nome_completo", "pilates_app_cpf",
+                    "pilates_app_nasc", "pilates_app_email", "pilates_app",
+                    "pilates_wellhub_id", "pilates_app_periodo", "pilates_app_pref",
+                    "pilates_caixa_nome", "pilates_caixa_cpf", "pilates_caixa_nasc",
+                    "pilates_caixa_email", "pilates_caixa_foto_pedido",
+                    "instagram_pilates_q1", "instagram_pilates_q2",
+                    "transferencia_pilates"
                 ]
-                # Statuses protegidos — nunca recebem follow-up
+                STATUSES_PARTICULAR = [
+                    "cadastrando_queixa", "modalidade", "cadastrando_nome_completo",
+                    "cpf", "data_nascimento", "coletando_email", "agendando"
+                ]
                 STATUSES_PROTEGIDOS = [
                     "atendimento_humano", "arquivado", "convertido",
-                    "perdido", "followup_1", "followup_2", "followup_3"
-                ]
-                # Statuses de abandono de cadastro (documentos pendentes)
-                STATUSES_CADASTRO = [
-                    "foto_carteirinha", "foto_pedido_medico",
-                    "num_carteirinha", "cadastrando_nome_completo",
-                    "data_nascimento", "coletando_email"
+                    "perdido", "followup_1", "followup_2", "followup_3",
+                    "pausado"
                 ]
 
                 docs = db.collection("PatientsKanban").stream()
                 enviados = []
                 ignorados = []
-                alertas_humano = []
 
                 for doc in docs:
                     p = doc.to_dict()
                     phone_p = doc.id
                     status_p = p.get("status", "")
-                    nome_p = p.get("title", "Paciente").split()[0]
+                    nome_p = (p.get("title", "Paciente") or "Paciente").split()[0]
                     modalidade_p = p.get("modalidade", "")
+                    servico_p = p.get("servico", "")
+                    origem_p = p.get("origem", "")
                     toque_atual = p.get("followup_toque", 0)
 
-                    if status_p in STATUSES_PROTEGIDOS or status_p not in STATUSES_FOLLOWUP:
+                    # Pula protegidos
+                    if status_p in STATUSES_PROTEGIDOS:
                         ignorados.append(phone_p)
                         continue
 
+                    # Determina o tipo do lead
+                    eh_convenio = (status_p in STATUSES_CONVENIO and modalidade_p == "Convenio") or (status_p in STATUSES_CONVENIO and modalidade_p not in ["Particular"])
+                    eh_pilates = status_p in STATUSES_PILATES or servico_p == "Pilates Studio" or origem_p == "instagram_pilates"
+                    eh_particular = modalidade_p == "Particular" and not eh_pilates
+
+                    if not eh_convenio and not eh_pilates and not eh_particular:
+                        ignorados.append(phone_p)
+                        continue
+
+                    # Parse do timestamp
                     last_raw = p.get("lastPatientInteraction") or p.get("lastInteraction")
                     if not last_raw:
                         ignorados.append(phone_p)
                         continue
                     try:
-                        from datetime import timezone as _tz2
-                        # Se for um objeto datetime do Python (ou do SDK do Firebase)
-                        if isinstance(last_raw, datetime):
-                            last_dt = last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
-                        # Se for uma string ISO
-                        elif isinstance(last_raw, str):
-                            # Trata formatos comuns e garante offset
-                            s = last_raw.replace('Z', '+00:00')
-                            if ' ' in s and '+' not in s: s = s.replace(' ', 'T')
-                            last_dt = datetime.fromisoformat(s)
-                            if last_dt.tzinfo is None:
-                                last_dt = last_dt.replace(tzinfo=_tz2.utc)
-                        # Fallback para outros objetos que tenham tzinfo ou possam ser convertidos
-                        elif hasattr(last_raw, 'tzinfo'):
-                            last_dt = last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
-                        else:
-                            # Tenta converter a representação em string
-                            last_dt = datetime.fromisoformat(str(last_raw).replace('Z', '+00:00')).replace(tzinfo=_tz2.utc)
+                        last_dt = parse_timestamp(last_raw)
                     except Exception as e_ts:
-                        print(f'[followup] erro timestamp {phone_p}: {e_ts} raw={last_raw}')
+                        print(f"[followup] erro timestamp {phone_p}: {e_ts}", file=_sys.stderr)
                         ignorados.append(phone_p)
                         continue
 
-                    horas_inativo = (agora - last_dt).total_seconds() / 3600
                     minutos_inativo = (agora - last_dt).total_seconds() / 60
 
                     # ==========================================
-                    # TIPO 3: Particular ou Pilates — ALERTA INTERNO (sem msg ao paciente)
+                    # CONVÊNIO — 30min, 60min, 90min → encerra
                     # ==========================================
-                    eh_particular = modalidade_p in ["Particular"] or "pilates" in status_p.lower()
-                    if eh_particular and not p.get("alerta_resgate_enviado") and horas_inativo >= 1:
-                        # Registra alerta no Firebase para o dashboard exibir
-                        hora_alerta = agora.isoformat()
-                        db.collection("PatientsKanban").document(phone_p).set({
-                            "alerta_resgate": True,
-                            "alerta_resgate_em": hora_alerta,
-                            "alerta_resgate_enviado": True,
-                            "alerta_resgate_texto": f"🚨 ALERTA DE RESGATE: Paciente {nome_p} iniciou cotação para {modalidade_p} e parou. Assuma o atendimento!"
-                        }, merge=True)
-                        alertas_humano.append({"phone": phone_p, "tipo": "alerta_particular"})
-                        continue  # Não manda mensagem ao paciente
+                    if eh_convenio and not eh_pilates:
+                        if toque_atual == 0 and pode_enviar(last_dt, 30):
+                            msg = (f"Oi {nome_p}! 😊 Percebi que você ficou a um passo de concluir o seu cadastro pelo convênio. "
+                                   f"Para garantirmos a sua vaga na agenda, preciso apenas de mais algumas informações. "
+                                   f"Leva menos de 2 minutinhos! Posso continuar?")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "convenio_t1"})
 
-                    # ==========================================
-                    # TIPO 1: Abandono de Cadastro (documentos pendentes)
-                    # ==========================================
-                    if status_p in STATUSES_CADASTRO:
-                        if toque_atual == 0 and not p.get("lembrete_cadastro_enviado") and minutos_inativo >= 30:
-                            if dentro_da_janela:
-                                msg = (f"🤖 Oi {nome_p}! Vi que paramos no meio do seu cadastro. "
-                                       f"Para eu conseguir liberar sua vaga, consegue me enviar a foto do pedido médico e da carteirinha agora?")
-                                responder_texto(phone_p, msg)
-                                db.collection("PatientsKanban").document(phone_p).set(
-                                    {"lembrete_cadastro_enviado": True, "followup_toque": 1,
-                                     "followup_enviado_em": agora.isoformat()}, merge=True)
-                                enviados.append({"phone": phone_p, "toque": "tipo1_t1"})
-                            continue
+                        elif toque_atual == 1 and pode_enviar(last_dt, 60):
+                            msg = (f"Olá {nome_p}! 🌟 Seu cadastro pelo convênio está quase pronto aqui comigo. "
+                                   f"Nossas agendas estão preenchendo rápido — se finalizarmos agora, "
+                                   f"consigo garantir um horário para você ainda esta semana. Podemos continuar?")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "convenio_t2"})
 
-                        elif toque_atual == 1 and horas_inativo >= 24:
-                            if dentro_da_janela:
-                                msg = (f"🤖 Olá! Passando para lembrar do seu agendamento. "
-                                       f"Iniciar o tratamento o quanto antes é fundamental. Consegue me dar um retorno hoje?")
-                                responder_texto(phone_p, msg)
-                                db.collection("PatientsKanban").document(phone_p).set(
-                                    {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
-                                enviados.append({"phone": phone_p, "toque": "tipo1_t2"})
-                            continue
+                        elif toque_atual == 2 and pode_enviar(last_dt, 90):
+                            msg = (f"Oi {nome_p}! 💙 Esta será minha última tentativa de contato por hoje. "
+                                   f"Seu cadastro ficou salvo aqui e, quando quiser retomar, é só me mandar um 'Oi' "
+                                   f"que continuo de onde paramos. Estaremos sempre de portas abertas!")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 3, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "convenio_t3"})
 
-                        elif toque_atual == 2 and horas_inativo >= 48:
-                            if dentro_da_janela:
-                                msg = (f"🤖 Oi, {nome_p}! Como não tivemos retorno, estou encerrando seu atendimento "
-                                       f"por aqui e liberando o horário para outros pacientes aguardando vaga. "
-                                       f"Se precisar no futuro, é só mandar um 'Oi'. Melhoras!")
-                                responder_texto(phone_p, msg)
-                                db.collection("PatientsKanban").document(phone_p).set(
-                                    {"followup_toque": 3, "status": "perdido",
-                                     "followup_enviado_em": agora.isoformat()}, merge=True)
-                                enviados.append({"phone": phone_p, "toque": "tipo1_t3_arquivado"})
-                            continue
+                        elif toque_atual == 3 and pode_enviar(last_dt, 105):  # 90 + 15min
+                            # Encerra silenciosamente
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"status": "arquivado", "motivo_encerramento": "followup_convenio_sem_resposta"}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "convenio_arquivado"})
 
                     # ==========================================
-                    # TIPO 2: Documentação enviada mas não agendou (Convênio)
+                    # PILATES — 30min, 60min, 90min → fica na fila (atendimento_humano)
                     # ==========================================
-                    if status_p in ["agendando", "finalizado"] and modalidade_p == "Convênio":
-                        if toque_atual == 0 and horas_inativo >= 2:
-                            if dentro_da_janela:
-                                msg = (f"🤖 Olá, {nome_p}! Sua documentação já está certinha! 🎉 "
-                                       f"Responda essa mensagem para escolhermos o melhor dia e período para a sua sessão.")
-                                responder_texto(phone_p, msg)
-                                db.collection("PatientsKanban").document(phone_p).set(
-                                    {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
-                                enviados.append({"phone": phone_p, "toque": "tipo2_t1"})
-                            continue
+                    elif eh_pilates:
+                        if toque_atual == 0 and pode_enviar(last_dt, 30):
+                            msg = (f"Oi {nome_p}! 🧘‍♀️ Você estava tão perto de garantir sua vaga no Pilates Estúdio! "
+                                   f"Me conta, ficou alguma dúvida sobre horários ou modalidades? "
+                                   f"Estou aqui para te ajudar a encontrar a opção perfeita para você.")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "pilates_t1"})
 
-                        elif toque_atual == 1 and horas_inativo >= 24:
-                            if dentro_da_janela:
-                                msg = (f"🤖 Olá! Passando para lembrar do seu agendamento. "
-                                       f"Iniciar o tratamento o quanto antes é fundamental. Consegue me dar um retorno hoje?")
-                                responder_texto(phone_p, msg)
-                                db.collection("PatientsKanban").document(phone_p).set(
-                                    {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
-                                enviados.append({"phone": phone_p, "toque": "tipo2_t2"})
-                            continue
+                        elif toque_atual == 1 and pode_enviar(last_dt, 60):
+                            msg = (f"Olá {nome_p}! ✨ Nossas turmas de Pilates estão com poucos lugares disponíveis. "
+                                   f"Seu cadastro já está salvo aqui comigo — faltam só alguns minutinhos para "
+                                   f"garantirmos a sua vaga. Podemos continuar?")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "pilates_t2"})
 
-                        elif toque_atual == 2 and horas_inativo >= 48:
-                            if dentro_da_janela:
-                                msg = (f"🤖 Oi, {nome_p}! Como não tivemos retorno, estou encerrando seu atendimento "
-                                       f"por aqui e liberando o horário para outros pacientes aguardando vaga. "
-                                       f"Se precisar no futuro, é só mandar um 'Oi'. Melhoras!")
-                                responder_texto(phone_p, msg)
-                                db.collection("PatientsKanban").document(phone_p).set(
-                                    {"followup_toque": 3, "status": "perdido",
-                                     "followup_enviado_em": agora.isoformat()}, merge=True)
-                                enviados.append({"phone": phone_p, "toque": "tipo2_t3_arquivado"})
-                            continue
+                        elif toque_atual == 2 and pode_enviar(last_dt, 90):
+                            msg = (f"Oi {nome_p}! 💙 Vou deixar sua vaga reservada por enquanto. "
+                                   f"Quando quiser retomar, é só me mandar um 'Oi' e continuamos de onde paramos. "
+                                   f"Nossa equipe também pode te atender pessoalmente se preferir!")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 3, "status": "atendimento_humano",
+                                 "followup_enviado_em": agora.isoformat(),
+                                 "motivo_fila": "followup_pilates_sem_resposta"}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "pilates_t3_fila"})
 
                     # ==========================================
-                    # FALLBACK: Outros statuses — follow-up genérico nas janelas
+                    # PARTICULAR — 30min, 60min, 90min → fica na fila (atendimento_humano)
                     # ==========================================
-                    if toque_atual == 0 and horas_inativo >= 2 and dentro_da_janela:
-                        msg = (f"Oi {nome_p}! 😊 Vi que não conseguimos finalizar o seu agendamento. "
-                               f"Ficou alguma dúvida? Estou por aqui para te ajudar!")
-                        responder_texto(phone_p, msg)
-                        db.collection("PatientsKanban").document(phone_p).set(
-                            {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": "generico_t1"})
+                    elif eh_particular:
+                        if toque_atual == 0 and pode_enviar(last_dt, 30):
+                            msg = (f"Oi {nome_p}! 😊 Você estava quase finalizando seu agendamento particular. "
+                                   f"Ficou alguma dúvida sobre valores ou procedimentos? "
+                                   f"Posso te ajudar agora mesmo!")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 1, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "particular_t1"})
 
-                    elif toque_atual == 1 and horas_inativo >= 24 and dentro_da_janela:
-                        msg = (f"Bom dia, {nome_p}! 🌅 Nossas agendas estão preenchendo rápido. "
-                               f"Seu cadastro já está pré-aprovado. Quer garantir sua vaga?")
-                        responder_texto(phone_p, msg)
-                        db.collection("PatientsKanban").document(phone_p).set(
-                            {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": "generico_t2"})
+                        elif toque_atual == 1 and pode_enviar(last_dt, 60):
+                            msg = (f"Olá {nome_p}! 🌟 Seu cadastro particular está quase pronto. "
+                                   f"Nossa agenda para essa semana está preenchendo — se finalizarmos agora, "
+                                   f"consigo um horário especial para você. Continuamos?")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 2, "followup_enviado_em": agora.isoformat()}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "particular_t2"})
 
-                    elif toque_atual == 2 and horas_inativo >= 48 and dentro_da_janela:
-                        msg = (f"Olá {nome_p}! Como não tivemos retorno, estou pausando o seu atendimento. "
-                               f"Quando quiser retomar, é só mandar um 'Oi'. Estaremos de portas abertas! 💙")
-                        responder_texto(phone_p, msg)
-                        db.collection("PatientsKanban").document(phone_p).set(
-                            {"followup_toque": 3, "status": "perdido",
-                             "followup_enviado_em": agora.isoformat()}, merge=True)
-                        enviados.append({"phone": phone_p, "toque": "generico_t3"})
+                        elif toque_atual == 2 and pode_enviar(last_dt, 90):
+                            msg = (f"Oi {nome_p}! 💙 Vou manter seu cadastro na nossa fila prioritária. "
+                                   f"Quando quiser retomar, é só me mandar um 'Oi'. "
+                                   f"Nossa equipe também está disponível para te atender diretamente!")
+                            responder_texto(phone_p, msg)
+                            db.collection("PatientsKanban").document(phone_p).set(
+                                {"followup_toque": 3, "status": "atendimento_humano",
+                                 "followup_enviado_em": agora.isoformat(),
+                                 "motivo_fila": "followup_particular_sem_resposta"}, merge=True)
+                            enviados.append({"phone": phone_p, "toque": "particular_t3_fila"})
 
                 return jsonify({
                     "ok": True,
-                    "dentro_da_janela": dentro_da_janela,
-                    "hora_brasilia": hora_brasilia,
+                    "hora_brasilia": (agora - timedelta(hours=3)).hour,
+                    "horario_comercial": dentro_horario_comercial(agora),
                     "enviados": len(enviados),
-                    "alertas_humano": len(alertas_humano),
                     "detalhes": enviados,
                     "ignorados": len(ignorados)
                 }), 200
             except Exception as e:
                 return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
-        # ==========================================
+                # ==========================================
         # ENVIO SEMIAUTOMÁTICO DE RECOMENDAÇÕES
         # Chamado pelo dashboard ao Finalizar ou Arquivar
         # ==========================================
@@ -1244,6 +1259,33 @@ def webhook():
             any(char in msg_limpa for char in _emojis_early)
         )
 
+        # ==========================================
+        # 📸 DETECÇÃO DE LEAD INSTAGRAM (Pilates)
+        # Mensagem automática configurada no anúncio Meta
+        # ==========================================
+        palavras_insta = ["interesse", "informações", "informacoes", "pilates"]
+        eh_lead_instagram = (
+            msg_type == "text" and
+            sum(1 for p in palavras_insta if p in msg_limpa) >= 2 and
+            not info.get("origem")  # Só na primeira mensagem
+        )
+        if eh_lead_instagram:
+            import sys as _sys_insta
+            print(f"[INSTAGRAM] Lead detectado de {phone}", file=_sys_insta.stderr)
+            update_paciente(phone, {
+                "status": "instagram_pilates_q1",
+                "servico": "Pilates Studio",
+                "unit": "São Caetano",
+                "origem": "instagram_pilates",
+                "followup_toque": 0
+            })
+            linha1 = "Olá! 😊 Sou o assistente virtual da Conectifisio e vou passar sua solicitação para o nosso fisioterapeuta."
+            linha2 = "Vi que você tem interesse no nosso Pilates Estúdio em São Caetano do Sul."
+            linha3 = "Você já praticou Pilates antes ou seria sua primeira experiência?"
+            msg_boas_vindas = linha1 + " " + linha2 + chr(10) + chr(10) + linha3
+            responder_texto(phone, msg_boas_vindas)
+            return jsonify({"status": "instagram_lead_capturado"}), 200
+
         palavras_socorro = ["ajuda", "humano", "atendente", "recepção", "recepcao", "falar com alguém", "pessoa"]
         if any(palavra in msg_limpa for palavra in palavras_socorro):
             update_paciente(phone, {"status": "pausado", "ultima_mensagem_paciente": f"[PEDIDO DE AJUDA] {msg_recebida}"})
@@ -1362,6 +1404,35 @@ def webhook():
         # ==========================================
         # LÓGICA DE ESTADOS
         # ==========================================
+        # ==========================================
+        # 📸 FLUXO INSTAGRAM PILATES
+        # ==========================================
+        if status == "instagram_pilates_q1":
+            # Resposta à pergunta "Já praticou Pilates antes?"
+            update_paciente(phone, {
+                "status": "instagram_pilates_q2",
+                "instagram_resp_q1": msg_recebida,
+                "followup_toque": 0
+            })
+            responder_texto(phone, "Que ótimo! E qual o seu principal objetivo com o Pilates?")
+            return jsonify({"status": "instagram_q1_respondida"}), 200
+
+        elif status == "instagram_pilates_q2":
+            # Resposta à pergunta "Qual seu objetivo?"
+            nome_lead = info.get("title", "").split()[0] if info.get("title") else ""
+            saudacao = f"Perfeito{', ' + nome_lead if nome_lead else ''}! 💙 " if nome_lead else "Perfeito! 💙 "
+            update_paciente(phone, {
+                "status": "atendimento_humano",
+                "instagram_resp_q2": msg_recebida,
+                "followup_toque": 0
+            })
+            responder_texto(phone, (
+                f"{saudacao}Registrei suas informações. "
+                f"Nossa equipe especializada vai entrar em contato em breve "
+                f"para te apresentar as melhores opções de Pilates Estúdio. 😊"
+            ))
+            return jsonify({"status": "instagram_lead_qualificado"}), 200
+
         if status == "triagem":
             update_paciente(phone, {"status": "escolhendo_unidade"})
             if info.get("is_historico"):
