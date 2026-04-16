@@ -1297,15 +1297,17 @@ def webhook():
         # SOMENTE para pacientes fora do fluxo (triagem, finalizado, pausado, atendimento_humano)
         # Nunca interrompe um fluxo ativo de agendamento
         # ==========================================
-        STATUSES_FAQ_PERMITIDOS = [
-            "triagem", "finalizado", "atendimento_humano", "pausado",
-            "arquivado", "followup_1", "followup_2", "followup_3"
-        ]
-        if msg_type == "text" and len(msg_limpa) > 5 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
-            resposta_faq = consultar_faq(msg_recebida)
-            if resposta_faq and resposta_faq.upper() != "NENHUMA":
-                responder_texto(phone, resposta_faq)
-                return jsonify({"status": "faq_respondido"}), 200
+        # ==========================================
+        # 🧠 FAQ COM IA — DESATIVADO TEMPORARIAMENTE
+        # Causando interferência no fluxo de atendimento
+        # Reativar após revisão do modelo OpenAI
+        # ==========================================
+        # STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "atendimento_humano", "pausado"]
+        # if msg_type == "text" and len(msg_limpa) > 5 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
+        #     resposta_faq = consultar_faq(msg_recebida)
+        #     if resposta_faq and resposta_faq.upper() != "NENHUMA":
+        #         responder_texto(phone, resposta_faq)
+        #         return jsonify({"status": "faq_respondido"}), 200
 
         # ==========================================
         # 🚀 A MÁQUINA DO TEMPO (INTERCEPTAÇÃO GLOBAL)
