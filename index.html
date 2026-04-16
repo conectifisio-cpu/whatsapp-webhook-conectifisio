@@ -315,9 +315,48 @@
                     <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2 mt-2">
                         <i data-lucide="log-in" class="w-4 h-4"></i> Entrar no Sistema
                     </button>
+                    <button type="button" onclick="esqueceuSenha()" class="w-full text-xs text-blue-500 hover:text-blue-700 font-semibold mt-2 py-1 transition-colors">
+                        Esqueci minha senha
+                    </button>
                 </div>
             </form>
-            <p id="login-error" class="text-xs text-red-500 text-center mt-4 hidden font-bold">E-mail ou senha incorretos.</p>
+            <p id="login-error" class="text-xs text-center mt-4 hidden font-bold" style="color:#ef4444">E-mail ou senha incorretos.</p>
+        </div>
+    </div>
+
+    <!-- MODAL GERENCIAR USUÁRIOS -->
+    <div id="modal-usuarios" style="display:none;" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between p-5 border-b border-slate-100">
+                <div>
+                    <h2 class="font-black text-slate-800 text-base">👥 Gerenciar Usuários</h2>
+                    <p class="text-[10px] text-slate-500 mt-0.5">Adicione ou remova acessos ao sistema</p>
+                </div>
+                <button onclick="fecharModalUsuarios()" class="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+                    <i data-lucide="x" class="w-4 h-4 text-slate-500"></i>
+                </button>
+            </div>
+            <!-- Adicionar novo usuário -->
+            <div class="p-4 bg-blue-50 border-b border-blue-100">
+                <p class="text-[10px] font-black text-blue-700 uppercase mb-2">Adicionar novo usuário</p>
+                <div class="flex flex-col gap-2">
+                    <input id="novo-usuario-nome" type="text" placeholder="Nome completo" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
+                    <input id="novo-usuario-email" type="email" placeholder="E-mail" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
+                    <select id="novo-usuario-role" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
+                        <option value="recepcao">👤 Recepção</option>
+                        <option value="admin">⭐ Admin</option>
+                    </select>
+                    <button onclick="adicionarUsuario()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-1">
+                        <i data-lucide="user-plus" class="w-3 h-3"></i> Adicionar e Enviar Convite
+                    </button>
+                    <p class="text-[9px] text-blue-600 text-center">Um e-mail com link para definir a senha será enviado automaticamente.</p>
+                </div>
+            </div>
+            <!-- Lista de usuários -->
+            <div class="flex-1 overflow-y-auto p-4">
+                <p class="text-[10px] font-black text-slate-500 uppercase mb-3">Usuários ativos</p>
+                <div id="lista-usuarios" class="flex flex-col gap-2"></div>
+            </div>
         </div>
     </div>
 
@@ -395,6 +434,17 @@
                             <button onclick="showManageQuickReplies()" class="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2">
                                 <i data-lucide="zap" class="w-3 h-3 text-amber-400"></i> Mensagens Rápidas
                             </button>
+                            <button onclick="baixarHistorico()" class="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2">
+                                <i data-lucide="download" class="w-3 h-3 text-green-500"></i> Baixar Log de Conversas
+                            </button>
+                            <div id="admin-menu-items" style="display:none;">
+                                <div class="border-t border-slate-100 mt-1 pt-1">
+                                    <p class="text-[9px] text-slate-400 font-bold uppercase px-3 py-1">Admin</p>
+                                    <button onclick="showGerenciarUsuarios()" class="w-full text-left px-3 py-2 text-xs text-blue-700 hover:bg-blue-50 flex items-center gap-2">
+                                        <i data-lucide="users" class="w-3 h-3 text-blue-500"></i> Gerenciar Usuários
+                                    </button>
+                                </div>
+                            </div>
                             <button onclick="logout()" class="w-full text-left px-3 py-2 text-xs text-red-600 hover:bg-red-50 flex items-center gap-2 border-t border-slate-100">
                                 <i data-lucide="log-out" class="w-3 h-3"></i> Sair do Sistema
                             </button>
@@ -628,18 +678,20 @@
         // ⚠️ SUBSTITUA com os dados do seu projeto Firebase
         // Firebase Console → Configurações do projeto → Seus apps → SDK
         const firebaseConfig = {
-            apiKey: "COLE_SUA_API_KEY_AQUI",
+            apiKey: "AIzaSyAHwHw0KO0Rp2Q_jTedLCPN7KLTPZhWJi8",
             authDomain: "conectifisio-bot.firebaseapp.com",
             projectId: "conectifisio-bot",
             storageBucket: "conectifisio-bot.firebasestorage.app",
-            messagingSenderId: "SEU_MESSAGING_SENDER_ID",
-            appId: "SEU_APP_ID"
+            messagingSenderId: "710869891837",
+            appId: "1:710869891837:web:1ac6f21cbefaab8a851c94"
         };
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
 
         // Persiste a sessão no browser (fecha e abre sem pedir login)
         auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+
+        const ADMIN_EMAILS = ['issa@ictusfisioterapia.com.br', 'monicamrtinsdesousa@gmail.com'];
 
         function initApp(user) {
             currentUser = user.email;
@@ -649,6 +701,10 @@
             if (profileUsername) profileUsername.innerText = displayName;
             const avatarEl = document.getElementById('user-avatar-initials');
             if (avatarEl) avatarEl.innerText = displayName.substring(0, 2).toUpperCase();
+            // Mostra menu admin apenas para admins
+            const isAdmin = ADMIN_EMAILS.includes(user.email);
+            const adminItems = document.getElementById('admin-menu-items');
+            if (adminItems) adminItems.style.display = isAdmin ? 'block' : 'none';
             document.getElementById('login-screen').style.display = 'none';
             document.getElementById('app-container').style.display = 'flex';
             fetchData();
@@ -694,6 +750,116 @@
         async function logout() {
             await auth.signOut();
             location.reload();
+        }
+
+        // ==========================================
+        // BAIXAR LOG DE CONVERSAS
+        // ==========================================
+        async function baixarHistorico() {
+            toggleProfileMenu();
+            const dias = prompt("Baixar histórico de quantos dias?\n\nDigite: 7, 15 ou 30", "7");
+            if (!dias) return;
+            const token = "conectifisio_followup_2025";
+            const url = `${BACKEND_URL}/api/whatsapp?action=export_historico&token=${token}&dias=${dias}`;
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `historico_${dias}dias.txt`;
+            a.click();
+        }
+
+        // ==========================================
+        // GERENCIAR USUÁRIOS (só admins)
+        // ==========================================
+        function showGerenciarUsuarios() {
+            toggleProfileMenu();
+            const modal = document.getElementById('modal-usuarios');
+            if (modal) { modal.style.display = 'flex'; carregarUsuarios(); }
+        }
+
+        function fecharModalUsuarios() {
+            const modal = document.getElementById('modal-usuarios');
+            if (modal) modal.style.display = 'none';
+        }
+
+        async function carregarUsuarios() {
+            const lista = document.getElementById('lista-usuarios');
+            if (!lista) return;
+            lista.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Carregando...</p>';
+            // Lista os usuários conhecidos (Firebase Admin SDK não está disponível no client)
+            // Mantemos uma lista no Firestore
+            try {
+                const snap = await firebase.firestore().collection('Usuarios').get();
+                if (snap.empty) {
+                    lista.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Nenhum usuário cadastrado ainda.</p>';
+                    return;
+                }
+                lista.innerHTML = snap.docs.map(doc => {
+                    const u = doc.data();
+                    return `<div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                        <div>
+                            <p class="text-xs font-bold text-slate-800">${u.nome || doc.id}</p>
+                            <p class="text-[10px] text-slate-500">${u.email}</p>
+                            <span class="text-[9px] px-2 py-0.5 rounded-full font-bold ${u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}">${u.role === 'admin' ? '⭐ Admin' : '👤 Recepção'}</span>
+                        </div>
+                        <button onclick="desativarUsuario('${doc.id}')" class="text-[10px] text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded hover:bg-red-50 transition-colors">Remover</button>
+                    </div>`;
+                }).join('');
+            } catch(e) {
+                lista.innerHTML = '<p class="text-xs text-red-400 text-center py-4">Erro ao carregar usuários.</p>';
+            }
+        }
+
+        async function adicionarUsuario() {
+            const email = document.getElementById('novo-usuario-email').value.trim();
+            const nome = document.getElementById('novo-usuario-nome').value.trim();
+            const role = document.getElementById('novo-usuario-role').value;
+            if (!email || !nome) { alert('Preencha nome e e-mail.'); return; }
+            try {
+                await firebase.firestore().collection('Usuarios').doc(email).set({
+                    email, nome, role, criado_em: new Date().toISOString()
+                });
+                document.getElementById('novo-usuario-email').value = '';
+                document.getElementById('novo-usuario-nome').value = '';
+                carregarUsuarios();
+                // Envia e-mail de redefinição de senha
+                await auth.sendPasswordResetEmail(email);
+                alert(`✅ Usuário adicionado!\nUm e-mail de configuração de senha foi enviado para ${email}.`);
+            } catch(e) {
+                alert('Erro ao adicionar usuário: ' + e.message);
+            }
+        }
+
+        async function desativarUsuario(email) {
+            if (!confirm(`Remover acesso de ${email}?`)) return;
+            try {
+                await firebase.firestore().collection('Usuarios').doc(email).delete();
+                carregarUsuarios();
+            } catch(e) {
+                alert('Erro: ' + e.message);
+            }
+        }
+
+        async function esqueceuSenha() {
+            const email = document.getElementById('login-user').value.trim();
+            const errorEl = document.getElementById('login-error');
+            if (!email) {
+                errorEl.textContent = 'Digite seu e-mail acima para receber o link de redefinição.';
+                errorEl.classList.remove('hidden');
+                errorEl.style.color = '#f59e0b';
+                return;
+            }
+            try {
+                await auth.sendPasswordResetEmail(email);
+                errorEl.textContent = '✅ Link de redefinição enviado para ' + email + '. Verifique sua caixa de entrada.';
+                errorEl.classList.remove('hidden');
+                errorEl.style.color = '#10b981';
+            } catch (err) {
+                errorEl.textContent = err.code === 'auth/user-not-found' 
+                    ? 'E-mail não encontrado no sistema.' 
+                    : 'Erro ao enviar e-mail. Tente novamente.';
+                errorEl.classList.remove('hidden');
+                errorEl.style.color = '#ef4444';
+            }
         }
 
         function toggleProfileMenu() {
