@@ -883,8 +883,24 @@ def webhook():
             try:
                 phone = request.args.get("phone")
                 new_status = request.args.get("status")
-                if phone and new_status:
-                    db.collection("PatientsKanban").document(phone).set({"status": new_status}, merge=True)
+                atendendo_por = request.args.get("atendendo_por", None)
+                atendendo_em = request.args.get("atendendo_em", None)
+                if not phone:
+                    return jsonify({"success": False}), 400
+                update_fields = {}
+                # status_skip=1 permite atualizar só o atendente sem mudar o status
+                if request.args.get("status_skip") != "1" and new_status:
+                    update_fields["status"] = new_status
+                # Atendente: salva ou limpa
+                if atendendo_por is not None:
+                    if atendendo_por == "":
+                        update_fields["atendendo_por"] = None
+                        update_fields["atendendo_em"] = None
+                    else:
+                        update_fields["atendendo_por"] = atendendo_por
+                        update_fields["atendendo_em"] = atendendo_em or firestore.SERVER_TIMESTAMP
+                if update_fields:
+                    db.collection("PatientsKanban").document(phone).set(update_fields, merge=True)
                     return jsonify({"success": True}), 200
                 return jsonify({"success": False}), 400
             except Exception as e: return jsonify({"error": str(e)}), 500
@@ -1457,6 +1473,10 @@ def webhook():
             return jsonify({"status": "bot_silenciado"}), 200
             
         if status == "arquivado":
+            # Se for cortesia (agradecimento, emoji) após arquivamento — ignora silenciosamente
+            if is_cortesia:
+                return jsonify({"status": "cortesia_arquivado_ignorada"}), 200
+            # Se for mensagem real — reativa o fluxo
             update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
             enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reativacao_arquivado"}), 200
@@ -1935,7 +1955,13 @@ def webhook():
 
         elif status == "nome_convenio":
             convenio_selecionado = msg_recebida
-            if not verificar_cobertura(convenio_selecionado, servico):
+            # Valida se o convênio veio da lista oficial
+            CONVENIOS_VALIDOS = ["Saúde Petrobras", "Mediservice", "Cassi", "Geap Saúde", "Amil",
+                                  "Bradesco Saúde", "Porto Seguro Saúde", "Prevent Senior", "Saúde Caixa"]
+            if convenio_selecionado not in CONVENIOS_VALIDOS:
+                secoes = [{"title": "Convênios Aceitos", "rows": [{"id": "c1", "title": "Saúde Petrobras"}, {"id": "c2", "title": "Mediservice"}, {"id": "c3", "title": "Cassi"}, {"id": "c4", "title": "Geap Saúde"}, {"id": "c5", "title": "Amil"}, {"id": "c6", "title": "Bradesco Saúde"}, {"id": "c7", "title": "Porto Seguro Saúde"}, {"id": "c8", "title": "Prevent Senior"}, {"id": "c9", "title": "Saúde Caixa"}]}]
+                enviar_lista(phone, "❌ Por favor, selecione um dos convênios disponíveis na lista abaixo:", "Ver Convênios", secoes)
+            elif not verificar_cobertura(convenio_selecionado, servico):
                 update_paciente(phone, {"convenio": convenio_selecionado, "status": "cobertura_recusada"})
                 enviar_botoes(phone, f"⚠️ O seu plano *{convenio_selecionado}* não possui cobertura direta para *{servico}* na nossa clínica.\n\nNo entanto, você pode realizar o atendimento Particular para solicitar reembolso. Deseja seguir no particular?", [{"id": "part", "title": "Seguir Particular"}, {"id": "out", "title": "Escolher outro"}])
             else:
@@ -2005,8 +2031,11 @@ def webhook():
 
         elif status == "num_carteirinha":
             num_limpo = re.sub(r'\D', '', msg_recebida)
-            update_paciente(phone, {"numCarteirinha": num_limpo, "status": "foto_carteirinha"})
-            responder_texto(phone, "Anotado! ✅ Agora a parte documental:\n\nEnvie uma FOTO NÍTIDA da sua carteirinha (use o ícone de clipe ou câmera do WhatsApp).")
+            if len(num_limpo) < 4:
+                responder_texto(phone, "❌ Número de carteirinha inválido. Por favor, digite apenas os números da sua carteirinha (mínimo 4 dígitos):")
+            else:
+                update_paciente(phone, {"numCarteirinha": num_limpo, "status": "foto_carteirinha"})
+                responder_texto(phone, "Anotado! ✅ Agora a parte documental:\n\nEnvie uma FOTO NÍTIDA da sua carteirinha (use o ícone de clipe ou câmera do WhatsApp).")
 
         elif status == "foto_carteirinha":
             if not tem_anexo: responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
