@@ -888,6 +888,104 @@ def webhook():
                     return jsonify({"success": True}), 200
                 return jsonify({"success": False}), 400
             except Exception as e: return jsonify({"error": str(e)}), 500
+
+        # ==========================================
+        # EXPORTAR HISTÓRICO DE CONVERSAS DA SEMANA
+        # Protegido pelo mesmo token do follow-up
+        # ==========================================
+        if request.args.get("action") == "export_historico":
+            token_recebido = request.args.get("token", "")
+            token_esperado = os.environ.get("FOLLOWUP_SECRET", "conectifisio_followup_2025")
+            if token_recebido != token_esperado:
+                return jsonify({"error": "Unauthorized"}), 401
+            if not db:
+                return jsonify({"error": "DB indisponivel"}), 500
+            try:
+                from datetime import timezone as _tz_exp
+                agora = datetime.now(_tz_exp.utc)
+                # Filtro: últimos 7 dias
+                dias = int(request.args.get("dias", 7))
+                desde = agora - timedelta(days=dias)
+                
+                docs = db.collection("PatientsKanban").stream()
+                conversas = []
+                
+                for doc in docs:
+                    p = doc.to_dict()
+                    historico = p.get("historico", [])
+                    if not historico:
+                        continue
+                    
+                    # Filtra mensagens da semana
+                    msgs_semana = []
+                    for msg in historico:
+                        try:
+                            data_msg = datetime.fromisoformat(
+                                str(msg.get("data", "")).replace("Z", "+00:00")
+                            )
+                            if data_msg.tzinfo is None:
+                                data_msg = data_msg.replace(tzinfo=_tz_exp.utc)
+                            if data_msg >= desde:
+                                msgs_semana.append(msg)
+                        except:
+                            msgs_semana.append(msg)
+                    
+                    if not msgs_semana:
+                        continue
+                    
+                    # Monta o resumo da conversa
+                    linhas = []
+                    for msg in msgs_semana:
+                        remetente = msg.get("de", "?")
+                        conteudo = msg.get("conteudo", "")
+                        hora = msg.get("data", "")[:16].replace("T", " ")
+                        if remetente == "paciente":
+                            linhas.append(f"  [{hora}] PACIENTE: {conteudo}")
+                        elif remetente == "robo":
+                            linhas.append(f"  [{hora}] 🤖 BOT: {conteudo}")
+                        elif remetente == "clinica":
+                            linhas.append(f"  [{hora}] 👩 CLINICA: {conteudo}")
+                    
+                    conversas.append({
+                        "phone": doc.id,
+                        "nome": p.get("title", "Desconhecido"),
+                        "status": p.get("status", ""),
+                        "servico": p.get("servico", ""),
+                        "modalidade": p.get("modalidade", ""),
+                        "convenio": p.get("convenio", ""),
+                        "total_msgs": len(msgs_semana),
+                        "conversa": chr(10).join(linhas)
+                    })
+                
+                # Ordena por total de mensagens (mais ativas primeiro)
+                conversas.sort(key=lambda x: x["total_msgs"], reverse=True)
+                
+                # Formato texto legível
+                saida = []
+                saida.append(f"=== HISTÓRICO DE CONVERSAS — ÚLTIMOS {dias} DIAS ===")
+                saida.append(f"Total de pacientes com atividade: {len(conversas)}")
+                saida.append("")
+                
+                for i, c in enumerate(conversas, 1):
+                    saida.append(f"{'='*60}")
+                    saida.append(f"#{i} | {c['nome']} | {c['phone']}")
+                    saida.append(f"Status: {c['status']} | Serviço: {c['servico']} | {c['modalidade']} | {c['convenio']}")
+                    saida.append(f"Mensagens: {c['total_msgs']}")
+                    saida.append("")
+                    saida.append(c["conversa"])
+                    saida.append("")
+                
+                texto_final = chr(10).join(saida)
+                
+                from flask import Response
+                return Response(
+                    texto_final,
+                    mimetype="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename=historico_{dias}dias.txt"}
+                )
+            except Exception as e:
+                import traceback as _tb
+                return jsonify({"error": str(e), "trace": _tb.format_exc()}), 500
                 
         # ==========================================
         # FOLLOW-UP AUTOMÁTICO — 3 TOQUES
