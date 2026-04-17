@@ -97,7 +97,6 @@
             /* Notif panel full width */
             #notif-panel { width: calc(100vw - 24px) !important; right: -60px !important; }
             /* Ocultar botão de alertas no mobile */
-            #audio-toggle .audio-label { display: none; }
         }
         
         /* --- LIGHTBOX DE IMAGENS --- */
@@ -785,27 +784,60 @@
             const lista = document.getElementById('lista-usuarios');
             if (!lista) return;
             lista.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Carregando...</p>';
-            // Lista os usuários conhecidos (Firebase Admin SDK não está disponível no client)
-            // Mantemos uma lista no Firestore
+            // Usuários fixos do sistema (base + Firestore)
+            const USUARIOS_FIXOS = [
+                { email: 'issa@ictusfisioterapia.com.br', nome: 'Issa Abud', role: 'admin' },
+                { email: 'monicamrtinsdesousa@gmail.com', nome: 'Mônica Martins', role: 'admin' },
+                { email: 'daniela.lopesrosa@gmail.com', nome: 'Daniela Rosa', role: 'recepcao' },
+                { email: 'leticiaazevedo4002@gmail.com', nome: 'Letícia Azevedo', role: 'recepcao' },
+            ];
             try {
-                const snap = await firebase.firestore().collection('Usuarios').get();
-                if (snap.empty) {
-                    lista.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">Nenhum usuário cadastrado ainda.</p>';
-                    return;
-                }
-                lista.innerHTML = snap.docs.map(doc => {
-                    const u = doc.data();
+                // Busca usuários adicionais no Firestore
+                let extras = [];
+                try {
+                    const snap = await firebase.firestore().collection('Usuarios').get();
+                    extras = snap.docs.map(doc => doc.data());
+                } catch(e) {}
+                // Combina fixos + extras (sem duplicar)
+                const emailsFixos = USUARIOS_FIXOS.map(u => u.email);
+                const todos = [...USUARIOS_FIXOS, ...extras.filter(u => !emailsFixos.includes(u.email))];
+                lista.innerHTML = todos.map(u => {
+                    const isAdmin = u.role === 'admin';
+                    const isCurrent = currentUser === u.email;
                     return `<div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
                         <div>
-                            <p class="text-xs font-bold text-slate-800">${u.nome || doc.id}</p>
+                            <p class="text-xs font-bold text-slate-800">${u.nome || u.email} ${isCurrent ? '<span class="text-[9px] text-green-600">(você)</span>' : ''}</p>
                             <p class="text-[10px] text-slate-500">${u.email}</p>
-                            <span class="text-[9px] px-2 py-0.5 rounded-full font-bold ${u.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}">${u.role === 'admin' ? '⭐ Admin' : '👤 Recepção'}</span>
+                            <span class="text-[9px] px-2 py-0.5 rounded-full font-bold ${isAdmin ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}">${isAdmin ? '⭐ Admin' : '👤 Recepção'}</span>
                         </div>
-                        <button onclick="desativarUsuario('${doc.id}')" class="text-[10px] text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded hover:bg-red-50 transition-colors">Remover</button>
+                        <div class="flex flex-col gap-1">
+                            <button onclick="resetarSenha('${u.email}')" class="text-[10px] text-blue-500 hover:text-blue-700 font-bold px-2 py-1 rounded hover:bg-blue-50 transition-colors">Resetar Senha</button>
+                            ${!isCurrent ? `<button onclick="removerUsuario('${u.email}')" class="text-[10px] text-red-500 hover:text-red-700 font-bold px-2 py-1 rounded hover:bg-red-50 transition-colors">Remover</button>` : ''}
+                        </div>
                     </div>`;
                 }).join('');
             } catch(e) {
-                lista.innerHTML = '<p class="text-xs text-red-400 text-center py-4">Erro ao carregar usuários.</p>';
+                lista.innerHTML = '<p class="text-xs text-red-400 text-center py-4">Erro ao carregar usuários: ' + e.message + '</p>';
+            }
+        }
+
+        async function resetarSenha(email) {
+            if (!confirm('Enviar e-mail de redefinição de senha para ' + email + '?')) return;
+            try {
+                await auth.sendPasswordResetEmail(email);
+                alert('✅ E-mail de redefinição enviado para ' + email);
+            } catch(e) {
+                alert('Erro: ' + e.message);
+            }
+        }
+
+        async function removerUsuario(email) {
+            if (!confirm('Remover acesso de ' + email + '?\n\nNota: isso remove o registro interno. Para bloquear o login completamente, desative o usuário no Firebase Console.')) return;
+            try {
+                await firebase.firestore().collection('Usuarios').doc(email).delete();
+                carregarUsuarios();
+            } catch(e) {
+                alert('Erro: ' + e.message);
             }
         }
 
@@ -908,6 +940,9 @@
         function playSound(type) {
             // Função mantida para compatibilidade, mas sem efeito
         }
+        if(type === 'alert' && audioAlert) { audioAlert.currentTime = 0; audioAlert.play(); }
+            } catch(e) {}
+        }
 
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
@@ -988,7 +1023,7 @@
                 if (waitMins < 10) alertedSlaIds.delete(p.id);
             });
 
-            if (hasAlert) playSound('alert'); else if (hasNew) playSound('new');
+            
         }
 
         // ==========================================
@@ -1719,7 +1754,7 @@
                     p.unit ? `<div class="psp-row"><span class="psp-label">Unidade</span><span class="psp-value">${p.unit}</span></div>` : '',
                     p.queixa ? `<div class="psp-row"><span class="psp-label">Queixa</span><span class="psp-value text-blue-800 italic">${p.queixa}</span></div>` : '',
                     p.email ? `<div class="psp-row"><span class="psp-label">E-mail</span><span class="psp-value">${p.email}</span></div>` : '',
-                    p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span></div>` : '',
+                    p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span><button onclick="copyToClipboard('${p.id}')" class="ml-1 p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors" title="Copiar"><i data-lucide="copy" class="w-3 h-3"></i></button></div>` : '',
                 ].filter(Boolean).join('');
 
                 const pspImages = (p.carteirinha_media_id || p.pedido_media_id) ? `
