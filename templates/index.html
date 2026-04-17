@@ -419,12 +419,23 @@
 
     <!-- LIGHTBOX DE IMAGENS -->
     <div id="lightbox-overlay" onclick="closeLightbox()">
-        <div class="flex gap-3 mb-4">
-            <span id="lightbox-title" class="text-white text-sm font-bold"></span>
-            <button onclick="event.stopPropagation(); closeLightbox()" class="ml-auto bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">✕ Fechar</button>
+        <div id="lightbox-container" onclick="event.stopPropagation()" style="display:flex; flex-direction:column; align-items:center; max-width:90vw; max-height:90vh;">
+            <div class="flex gap-3 mb-4 w-full items-center">
+                <span id="lightbox-title" class="text-white text-sm font-bold"></span>
+                <div class="ml-auto flex gap-2">
+                    <button id="lightbox-zoom-in" onclick="event.stopPropagation(); lightboxZoom(0.2)" class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">🔍+</button>
+                    <button id="lightbox-zoom-out" onclick="event.stopPropagation(); lightboxZoom(-0.2)" class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">🔍-</button>
+                    <button id="lightbox-rotate" onclick="event.stopPropagation(); lightboxRotate()" class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">↻</button>
+                    <a id="lightbox-download" href="#" download class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">⬇ Download</a>
+                    <button onclick="event.stopPropagation(); closeLightbox()" class="bg-white/20 hover:bg-white/40 text-white px-3 py-1 rounded-lg text-xs font-bold transition-colors">✕ Fechar</button>
+                </div>
+            </div>
+            <div style="overflow:auto; max-height:80vh; max-width:90vw;">
+                <img id="lightbox-img" src="" alt="Visualização" style="transition: transform 0.2s; transform-origin: center;" onclick="event.stopPropagation()">
+                <iframe id="lightbox-pdf" src="" style="display:none; width:80vw; height:80vh; border:none;" onclick="event.stopPropagation()"></iframe>
+            </div>
+            <div class="flex gap-3 mt-4" id="lightbox-nav"></div>
         </div>
-        <img id="lightbox-img" src="" alt="Visualização" onclick="event.stopPropagation()">
-        <div class="flex gap-3 mt-4" id="lightbox-nav"></div>
     </div>
 
     <!-- MODAL DE GESTÃO DE MENSAGENS RÁPIDAS -->
@@ -696,18 +707,18 @@
 
         async function openLightbox(mediaId, titulo) {
             const overlay = document.getElementById('lightbox-overlay');
-            const container = document.getElementById('lightbox-container');
             const img = document.getElementById('lightbox-img');
             const pdf = document.getElementById('lightbox-pdf');
             const titleEl = document.getElementById('lightbox-title');
             const dlBtn = document.getElementById('lightbox-download');
             const zoomIn = document.getElementById('lightbox-zoom-in');
             const zoomOut = document.getElementById('lightbox-zoom-out');
-            if (!overlay) return;
+            if (!overlay || !mediaId) return;
 
             const mediaUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
-            titleEl.textContent = titulo || 'Arquivo';
+            if (titleEl) titleEl.textContent = titulo || 'Arquivo';
             lightboxZoomLevel = 1.0;
+            lightboxRotation = 0;
 
             // Detectar tipo do arquivo via HEAD request
             let isPdf = false;
@@ -717,28 +728,29 @@
                 isPdf = ct.includes('pdf');
             } catch(e) { isPdf = false; }
 
-            if (isPdf) {
-                container.style.display = 'none';
+            if (isPdf && pdf) {
+                img.style.display = 'none';
                 img.src = '';
                 pdf.style.display = 'block';
                 pdf.src = mediaUrl;
-                zoomIn.style.display = 'none';
-                zoomOut.style.display = 'none';
+                if (zoomIn) zoomIn.style.display = 'none';
+                if (zoomOut) zoomOut.style.display = 'none';
             } else {
-                pdf.style.display = 'none';
-                pdf.src = '';
-                container.style.display = 'flex';
+                if (pdf) { pdf.style.display = 'none'; pdf.src = ''; }
+                img.style.display = 'block';
                 img.src = mediaUrl;
                 img.alt = titulo || 'Imagem';
                 img.style.transform = 'scale(1)';
-                zoomIn.style.display = '';
-                zoomOut.style.display = '';
+                img.style.maxWidth = '85vw';
+                img.style.maxHeight = '80vh';
+                if (zoomIn) zoomIn.style.display = '';
+                if (zoomOut) zoomOut.style.display = '';
             }
 
             // Configurar download
             if (dlBtn) {
                 dlBtn.href = mediaUrl;
-                dlBtn.download = titulo || 'arquivo';
+                dlBtn.download = (titulo || 'arquivo').replace(/\s/g, '_');
             }
 
             overlay.classList.add('active');
@@ -761,6 +773,14 @@
             }
         }
         
+        let lightboxRotation = 0;
+        function lightboxRotate() {
+            const img = document.getElementById('lightbox-img');
+            if (!img) return;
+            lightboxRotation = (lightboxRotation + 90) % 360;
+            img.style.transform = `scale(${lightboxZoomLevel}) rotate(${lightboxRotation}deg)`;
+        }
+
         function closeLightbox() {
             const overlay = document.getElementById('lightbox-overlay');
             const img = document.getElementById('lightbox-img');
