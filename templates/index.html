@@ -938,10 +938,7 @@
         let alertedSlaIds = new Set();
 
         function playSound(type) {
-            // Função mantida para compatibilidade, mas sem efeito
-        }
-        if(type === 'alert' && audioAlert) { audioAlert.currentTime = 0; audioAlert.play(); }
-            } catch(e) {}
+            // Som desativado
         }
 
         function showToast(message, type = 'info') {
