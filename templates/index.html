@@ -6,9 +6,9 @@
     <title>Conectifisio Command Center v3.1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Firebase Auth SDK -->
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
     <!-- Emoji Picker -->
     <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@^1/index.js"></script>
     <style>
@@ -97,6 +97,7 @@
             /* Notif panel full width */
             #notif-panel { width: calc(100vw - 24px) !important; right: -60px !important; }
             /* Ocultar botão de alertas no mobile */
+            #audio-toggle .audio-label { display: none; }
         }
         
         /* --- LIGHTBOX DE IMAGENS --- */
@@ -109,9 +110,11 @@
             align-items: center;
             justify-content: center;
             flex-direction: column;
+            padding: 24px;
+            box-sizing: border-box;
         }
         #lightbox-overlay.active { display: flex; }
-        #lightbox-img { max-width: 90vw; max-height: 80vh; object-fit: contain; border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.5); }
+        /* #lightbox-img styles moved to inline for zoom support */
         
         /* --- CARD DESTACADO --- */
         .card-flagged {
@@ -125,48 +128,66 @@
         }
         
         /* --- PAINEL LATERAL DO PACIENTE NO CHAT --- */
+        .chat-with-panel-wrapper {
+            display: flex;
+            flex-direction: row;
+            align-items: flex-end;
+            gap: 0;
+        }
         .patient-side-panel {
-            position: absolute;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 100%;
-            background: white;
-            z-index: 20;
+            width: 0;
+            min-height: 460px;
+            max-height: 560px;
+            background: #f8fafc;
+            border-radius: 1.5rem 0 0 1.5rem;
+            box-shadow: -4px 0 20px rgba(0,0,0,0.12);
             display: flex;
             flex-direction: column;
-            transform: translateX(-100%);
-            transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
-            border-radius: 0 0 0 0;
             overflow: hidden;
+            transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
+            border: 1px solid #e2e8f0;
+            border-right: none;
+            flex-shrink: 0;
         }
-        .patient-side-panel.open { transform: translateX(0); }
+        .patient-side-panel.open { width: 280px; }
         .patient-side-panel-header {
             background: #1e293b;
             color: white;
-            padding: 10px 12px;
+            padding: 12px 16px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            font-size: 11px;
-            font-weight: 800;
+            font-size: 12px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             flex-shrink: 0;
         }
         .patient-side-panel-body {
             flex: 1;
             overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .psp-card-section {
+            background: white;
             padding: 12px;
-            font-size: 11px;
+            border-radius: 1rem;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
         }
         .psp-row {
             display: flex;
             justify-content: space-between;
-            align-items: flex-start;
+            align-items: center;
             padding: 6px 0;
             border-bottom: 1px solid #f1f5f9;
         }
-        .psp-label { color: #94a3b8; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; }
-        .psp-value { color: #1e293b; font-weight: 600; font-size: 11px; text-align: right; max-width: 60%; word-break: break-word; }
+        .psp-row:last-child { border-bottom: none; }
+        .psp-label { color: #64748b; font-size: 10px; font-weight: 700; }
+        .psp-value { color: #1e293b; font-weight: 800; font-size: 11px; text-align: right; }
 
         /* --- PAINEL RESPOSTAS RÁPIDAS (ATALHO /) --- */
         .quick-replies-panel {
@@ -358,6 +379,43 @@
             </div>
         </div>
     </div>
+
+    <!-- MODAL GERENCIAR USUÁRIOS -->
+    <div id="modal-usuarios" style="display:none;" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between p-5 border-b border-slate-100">
+                <div>
+                    <h2 class="font-black text-slate-800 text-base">👥 Gerenciar Usuários</h2>
+                    <p class="text-[10px] text-slate-500 mt-0.5">Adicione ou remova acessos ao sistema</p>
+                </div>
+                <button onclick="fecharModalUsuarios()" class="p-2 hover:bg-slate-100 rounded-lg transition-colors">
+                    <i data-lucide="x" class="w-4 h-4 text-slate-500"></i>
+                </button>
+            </div>
+            <!-- Adicionar novo usuário -->
+            <div class="p-4 bg-blue-50 border-b border-blue-100">
+                <p class="text-[10px] font-black text-blue-700 uppercase mb-2">Adicionar novo usuário</p>
+                <div class="flex flex-col gap-2">
+                    <input id="novo-usuario-nome" type="text" placeholder="Nome completo" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
+                    <input id="novo-usuario-email" type="email" placeholder="E-mail" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
+                    <select id="novo-usuario-role" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
+                        <option value="recepcao">👤 Recepção</option>
+                        <option value="admin">⭐ Admin</option>
+                    </select>
+                    <button onclick="adicionarUsuario()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-1">
+                        <i data-lucide="user-plus" class="w-3 h-3"></i> Adicionar e Enviar Convite
+                    </button>
+                    <p class="text-[9px] text-blue-600 text-center">Um e-mail com link para definir a senha será enviado automaticamente.</p>
+                </div>
+            </div>
+            <!-- Lista de usuários -->
+            <div class="flex-1 overflow-y-auto p-4">
+                <p class="text-[10px] font-black text-slate-500 uppercase mb-3">Usuários ativos</p>
+                <div id="lista-usuarios" class="flex flex-col gap-2"></div>
+            </div>
+        </div>
+    </div>
+
 
     <!-- LIGHTBOX DE IMAGENS -->
     <div id="lightbox-overlay" onclick="closeLightbox()">
@@ -634,23 +692,87 @@
         // ==========================================
         // LIGHTBOX DE IMAGENS
         // ==========================================
-        function openLightbox(mediaId, titulo) {
+        let lightboxZoomLevel = 1.0;
+
+        async function openLightbox(mediaId, titulo) {
             const overlay = document.getElementById('lightbox-overlay');
+            const container = document.getElementById('lightbox-container');
             const img = document.getElementById('lightbox-img');
+            const pdf = document.getElementById('lightbox-pdf');
             const titleEl = document.getElementById('lightbox-title');
-            if (!overlay || !img) return;
-            titleEl.textContent = titulo || 'Imagem';
-            img.src = `${BACKEND_URL}/api/media?id=${mediaId}`;
-            img.alt = titulo || 'Imagem';
+            const dlBtn = document.getElementById('lightbox-download');
+            const zoomIn = document.getElementById('lightbox-zoom-in');
+            const zoomOut = document.getElementById('lightbox-zoom-out');
+            if (!overlay) return;
+
+            const mediaUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
+            titleEl.textContent = titulo || 'Arquivo';
+            lightboxZoomLevel = 1.0;
+
+            // Detectar tipo do arquivo via HEAD request
+            let isPdf = false;
+            try {
+                const resp = await fetch(mediaUrl, { method: 'HEAD' });
+                const ct = resp.headers.get('content-type') || '';
+                isPdf = ct.includes('pdf');
+            } catch(e) { isPdf = false; }
+
+            if (isPdf) {
+                container.style.display = 'none';
+                img.src = '';
+                pdf.style.display = 'block';
+                pdf.src = mediaUrl;
+                zoomIn.style.display = 'none';
+                zoomOut.style.display = 'none';
+            } else {
+                pdf.style.display = 'none';
+                pdf.src = '';
+                container.style.display = 'flex';
+                img.src = mediaUrl;
+                img.alt = titulo || 'Imagem';
+                img.style.transform = 'scale(1)';
+                zoomIn.style.display = '';
+                zoomOut.style.display = '';
+            }
+
+            // Configurar download
+            if (dlBtn) {
+                dlBtn.href = mediaUrl;
+                dlBtn.download = titulo || 'arquivo';
+            }
+
             overlay.classList.add('active');
             document.body.style.overflow = 'hidden';
+        }
+
+        function lightboxZoom(delta) {
+            const img = document.getElementById('lightbox-img');
+            if (!img || img.src === '') return;
+            lightboxZoomLevel = Math.min(Math.max(lightboxZoomLevel + delta, 0.3), 4.0);
+            img.style.transform = `scale(${lightboxZoomLevel})`;
+            
+            // Se o zoom for maior que 1, ajusta o tamanho do container para permitir scroll
+            if (lightboxZoomLevel > 1) {
+                img.style.maxWidth = 'none';
+                img.style.maxHeight = 'none';
+            } else {
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+            }
         }
         
         function closeLightbox() {
             const overlay = document.getElementById('lightbox-overlay');
             const img = document.getElementById('lightbox-img');
+            const pdf = document.getElementById('lightbox-pdf');
             if (overlay) overlay.classList.remove('active');
-            if (img) img.src = '';
+            if (img) { 
+                img.src = ''; 
+                img.style.transform = 'scale(1)';
+                img.style.maxWidth = '100%';
+                img.style.maxHeight = '100%';
+            }
+            if (pdf) { pdf.src = ''; pdf.style.display = 'none'; }
             document.body.style.overflow = '';
         }
         
@@ -671,11 +793,7 @@
             renderUI();
         }
 
-        // ==========================================
-        // FIREBASE AUTH — LOGIN SEGURO
-        // ==========================================
-        // ⚠️ SUBSTITUA com os dados do seu projeto Firebase
-        // Firebase Console → Configurações do projeto → Seus apps → SDK
+
         const firebaseConfig = {
             apiKey: "AIzaSyAHwHw0KO0Rp2Q_jTedLCPN7KLTPZhWJi8",
             authDomain: "conectifisio-bot.firebaseapp.com",
@@ -686,11 +804,9 @@
         };
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
-
-        // Persiste a sessão no browser (fecha e abre sem pedir login)
         auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
 
-        const ADMIN_EMAILS = ['issa@ictusfisioterapia.com.br', 'monicamrtinsdesousa@gmail.com'];
+                const ADMIN_EMAILS = ['issa@ictusfisioterapia.com.br', 'monicamrtinsdesousa@gmail.com'];
 
         function initApp(user) {
             currentUser = user.email;
@@ -736,9 +852,16 @@
                 await auth.signInWithEmailAndPassword(email, pass);
                 // onAuthStateChanged vai chamar initApp automaticamente
             } catch (err) {
-                errorEl.textContent = err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' 
-                    ? 'E-mail ou senha incorretos.' 
-                    : 'Erro ao fazer login. Tente novamente.';
+                console.error('[LOGIN ERROR]', err.code, err.message);
+                const msgs = {
+                    'auth/wrong-password': 'Senha incorreta.',
+                    'auth/user-not-found': 'E-mail não encontrado.',
+                    'auth/invalid-email': 'E-mail inválido.',
+                    'auth/invalid-credential': 'E-mail ou senha incorretos.',
+                    'auth/too-many-requests': 'Muitas tentativas. Aguarde alguns minutos.',
+                    'auth/network-request-failed': 'Sem conexão com a internet.'
+                };
+                errorEl.textContent = msgs[err.code] || ('Erro: ' + err.message);
                 errorEl.classList.remove('hidden');
                 btn.innerHTML = '<i data-lucide="log-in" class="w-4 h-4"></i> Entrar no Sistema';
                 btn.disabled = false;
@@ -941,6 +1064,8 @@
             // Som desativado
         }
 
+
+
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
             if(!container) return;
@@ -1020,7 +1145,7 @@
                 if (waitMins < 10) alertedSlaIds.delete(p.id);
             });
 
-            
+            if (hasAlert) playSound('alert'); else if (hasNew) playSound('new');
         }
 
         // ==========================================
@@ -1330,16 +1455,9 @@
                                 const displayQueixa = (p.queixa || p.queixa_ia || 'Aguardando resposta...').replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
                                 const isFlagged = flaggedCards.has(p.id);
-                                // Badge de atendente ativo
-                                const atendenteBadge = p.atendendo_por ? 
-                                    `<div class="flex items-center gap-1 bg-blue-50 border border-blue-200 rounded-full px-2 py-0.5 mb-2">
-                                        <span class="w-2 h-2 rounded-full bg-blue-500 animate-pulse inline-block"></span>
-                                        <span class="text-[9px] font-bold text-blue-700">👩 ${p.atendendo_por} atendendo</span>
-                                    </div>` : '';
                                 return `
                                 <div onclick="openChat('${p.id}')" class="bg-white p-4 rounded-[1.5rem] shadow-sm border-t-4 hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer flex flex-col relative ${alertClass} ${isFlagged ? 'card-flagged' : ''}" style="border-top-color: ${isFlagged ? '#ef4444' : col.color}">
                                     ${unreadBadge}
-                                    ${atendenteBadge}
                                     <div class="flex justify-between items-center mb-2">
                                         <span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded text-[9px] font-black uppercase">${p.unit || 'SCS'}</span>
                                         <span class="text-[10px] font-bold flex items-center gap-1 live-timer ${timerAlert}" data-time="${timerTime2}">--</span>
@@ -1431,7 +1549,7 @@
             const search = searchInput ? searchInput.value.toLowerCase() : '';
             const filterStage = filterInput ? filterInput.value : 'todos';
 
-            let leads = allFiltered.filter(p => p.servico === 'Pilates Studio' || p.origem === 'instagram_pilates');
+            let leads = allFiltered.filter(p => p.servico === 'Pilates Studio' || (p.queixa_ia && p.queixa_ia.toLowerCase().includes('pilates')));
             
             if(search) leads = leads.filter(p => (p.title||'').toLowerCase().includes(search) || (p.cellphone||'').includes(search));
             if(filterStage === 'ativos') leads = leads.filter(p => !['convertido', 'perdido', 'arquivado'].includes(p.status));
@@ -1674,6 +1792,7 @@
             }
         }
 
+
         function openChat(patientId) {
             const container = document.getElementById('floating-chats-container');
             if(container) container.style.display = 'flex';
@@ -1688,23 +1807,18 @@
                 return;
             }
             if (activeChats.length >= 3) {
-                const removido = activeChats.shift();
-                if (removido) marcarAtendente(removido, null); // Libera o anterior
+                activeChats.shift(); 
             }
             activeChats.push(patientId);
             minimizedChats.delete(patientId);
-            // Marca quem está atendendo
-            const nomeAtendente = currentUser ? (currentUser.split('@')[0] || currentUser) : 'Recepção';
-            marcarAtendente(patientId, nomeAtendente);
             renderChatWindows();
-            renderUI();
+            renderUI(); // Atualiza a UI para remover o piscar
         }
 
         function closeChat(patientId) {
             activeChats = activeChats.filter(id => id !== patientId);
             minimizedChats.delete(patientId);
             delete pendingFiles[patientId];
-            marcarAtendente(patientId, null); // Libera o atendente
             renderChatWindows();
         }
 
@@ -1737,45 +1851,62 @@
                 const isMinimized = minimizedChats.has(id);
                 const filePreview = pendingFiles[id];
 
-                const chatDiv = document.createElement('div');
-                chatDiv.className = `w-[320px] bg-white rounded-t-xl shadow-[0_0_30px_rgba(0,0,0,0.15)] border border-slate-300 flex flex-col chat-window relative ${isMinimized ? 'chat-minimized' : 'chat-expanded'}`;
-                
-                // Montar HTML do painel lateral de dados do paciente
+                // Montar dados do painel lateral
                 const pspRows = [
-                    p.convenio ? `<div class="psp-row"><span class="psp-label">Convênio</span><span class="psp-value text-blue-700 font-black">${p.convenio}</span></div>` : '',
-                    p.carteirinha ? `<div class="psp-row"><span class="psp-label">Carteirinha</span><span class="psp-value">${p.carteirinha}</span></div>` : '',
+                    p.servico ? `<div class="psp-row"><span class="psp-label">Serviço</span><span class="psp-value uppercase text-slate-900">${p.servico}</span></div>` : '',
+                    p.modalidade ? `<div class="psp-row"><span class="psp-label">Modalidade</span><span class="psp-value ${p.modalidade === 'Particular' ? 'text-emerald-600' : 'text-amber-600'}">${p.modalidade}</span></div>` : '',
+                    p.convenio ? `<div class="psp-row"><span class="psp-label">Convênio/App</span><span class="psp-value text-blue-700 uppercase">${p.convenio}</span></div>` : '',
+                    p.numCarteirinha ? `<div class="psp-row"><span class="psp-label">Nº Carteirinha</span><span class="psp-value">${p.numCarteirinha}</span></div>` : '',
                     p.cpf ? `<div class="psp-row"><span class="psp-label">CPF</span><span class="psp-value">${p.cpf}</span></div>` : '',
-                    p.periodo ? `<div class="psp-row"><span class="psp-label">Período</span><span class="psp-value">${p.periodo}</span></div>` : '',
-                    p.modalidade ? `<div class="psp-row"><span class="psp-label">Modalidade</span><span class="psp-value">${p.modalidade}</span></div>` : '',
-                    p.servico ? `<div class="psp-row"><span class="psp-label">Serviço</span><span class="psp-value">${p.servico}</span></div>` : '',
+                    p.periodo ? `<div class="psp-row"><span class="psp-label">Período</span><span class="psp-value text-indigo-600">⏰ ${p.periodo}</span></div>` : '',
                     p.unit ? `<div class="psp-row"><span class="psp-label">Unidade</span><span class="psp-value">${p.unit}</span></div>` : '',
-                    p.queixa ? `<div class="psp-row"><span class="psp-label">Queixa</span><span class="psp-value text-blue-800 italic">${p.queixa}</span></div>` : '',
-                    p.email ? `<div class="psp-row"><span class="psp-label">E-mail</span><span class="psp-value">${p.email}</span></div>` : '',
-                    p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span><button onclick="copyToClipboard('${p.id}')" class="ml-1 p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors" title="Copiar"><i data-lucide="copy" class="w-3 h-3"></i></button></div>` : '',
+                    p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span></div>` : '',
                 ].filter(Boolean).join('');
 
+                const pspQueixa = (p.queixa || p.queixa_ia) ? `
+                    <div class="psp-card-section bg-blue-50/50 border-blue-100">
+                        <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">O que te trouxe aqui?</p>
+                        <p class="text-[10px] text-blue-800 italic">"🤖 ${p.queixa || p.queixa_ia}"</p>
+                    </div>` : '';
+
                 const pspImages = (p.carteirinha_media_id || p.pedido_media_id) ? `
-                    <div class="mt-3">
-                        <p class="psp-label mb-2">Anexos</p>
+                    <div class="psp-card-section">
+                        <p class="text-[8px] text-slate-500 font-black uppercase tracking-widest mb-2">Anexos</p>
                         <div class="flex gap-2">
                             ${p.carteirinha_media_id ? `<button onclick="openLightbox('${p.carteirinha_media_id}','Carteirinha')" class="flex-1 flex items-center justify-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[9px] font-black py-2 rounded-lg border border-blue-200 transition-colors"><i data-lucide="id-card" class="w-3 h-3"></i> Carteirinha</button>` : ''}
                             ${p.pedido_media_id ? `<button onclick="openLightbox('${p.pedido_media_id}','Pedido Médico')" class="flex-1 flex items-center justify-center gap-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[9px] font-black py-2 rounded-lg border border-emerald-200 transition-colors"><i data-lucide="file-text" class="w-3 h-3"></i> Pedido</button>` : ''}
                         </div>
                     </div>` : '';
 
-                chatDiv.innerHTML = `
-                    <!-- Painel lateral de dados do paciente (desliza da esquerda) -->
-                    <div id="patient-panel-${id}" class="patient-side-panel">
-                        <div class="patient-side-panel-header">
-                            <span>📋 Dados do Paciente</span>
-                            <button onclick="togglePatientPanel('${id}')" class="text-slate-300 hover:text-white text-lg leading-none">&times;</button>
-                        </div>
-                        <div class="patient-side-panel-body">
-                            ${pspRows || '<p class="text-slate-400 text-xs text-center mt-4">Sem dados cadastrados ainda.</p>'}
+                // Criar wrapper (painel + chat lado a lado)
+                const wrapperDiv = document.createElement('div');
+                wrapperDiv.className = 'chat-with-panel-wrapper';
+                wrapperDiv.id = `chat-wrapper-${id}`;
+
+                const panelDiv = document.createElement('div');
+                panelDiv.id = `patient-panel-${id}`;
+                panelDiv.className = 'patient-side-panel';
+                panelDiv.innerHTML = `
+                    <div class="patient-side-panel-header">
+                        <span>📋 Dados do Paciente</span>
+                        <button onclick="togglePatientPanel('${id}')" class="text-slate-300 hover:text-white text-lg leading-none">&times;</button>
+                    </div>
+                        <div class="patient-side-panel-body custom-scrollbar">
+                            <div class="psp-card-section">
+                                <p class="text-[8px] text-slate-500 font-black uppercase tracking-widest mb-2">Informações Gerais</p>
+                                ${pspRows || '<p class="text-slate-400 text-[10px] text-center">Sem dados cadastrados.</p>'}
+                            </div>
+                            ${pspQueixa}
                             ${pspImages}
                         </div>
-                    </div>
+                `;
+                wrapperDiv.appendChild(panelDiv);
 
+                const chatDiv = document.createElement('div');
+                chatDiv.className = `w-[320px] bg-white rounded-t-xl shadow-[0_0_30px_rgba(0,0,0,0.15)] border border-slate-300 flex flex-col chat-window ${isMinimized ? 'chat-minimized' : 'chat-expanded'}`;
+                wrapperDiv.appendChild(chatDiv);
+
+                chatDiv.innerHTML = `
                     <div onclick="toggleMinimizeChat('${id}')" class="bg-slate-800 hover:bg-slate-900 transition-colors text-white p-2.5 rounded-t-xl flex justify-between items-center cursor-pointer shrink-0">
                         <div class="flex items-center gap-2 overflow-hidden">
                             <div class="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold shrink-0">
@@ -1835,7 +1966,7 @@
                         </button>
                     </div>
                 `;
-                container.appendChild(chatDiv);
+                container.appendChild(wrapperDiv);
                 
                 // Configura o Emoji Picker
                 const picker = document.getElementById(`emoji-picker-${id}`);
@@ -1869,13 +2000,29 @@
                             const mediaId = msg.media_id || msg.mediaId || null;
                             if (mediaId) {
                                 const imgUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
-                                html += `<div class="msg-bubble msg-in" style="padding:6px;">
-                                    <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'Imagem do paciente')">
-                                        <img src="${imgUrl}" class="msg-thumbnail" alt="Imagem" onerror="this.parentElement.innerHTML='<div style=\'padding:8px;font-size:10px;color:#64748b;\'>\ud83d\udcce Imagem n\u00e3o dispon\u00edvel</div>'">
-                                        <div class="msg-thumbnail-overlay"><i data-lucide="zoom-in" class="w-5 h-5 text-white"></i></div>
-                                    </div>
-                                    <span class="msg-time">${time}</span>
-                                </div>`;
+                                // Detectar PDF pelo tipo de mensagem ou nome
+                                const isPdfMsg = (msg.mime_type || '').includes('pdf') || (msg.conteudo || '').toLowerCase().includes('.pdf') || (msg.conteudo || '').toLowerCase().includes('pdf');
+                                if (isPdfMsg) {
+                                    html += `<div class="msg-bubble msg-in" style="padding:6px;">
+                                        <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'PDF do paciente')" style="width:140px;height:100px;background:#f1f5f9;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #e2e8f0;">
+                                            <i data-lucide="file-text" style="width:32px;height:32px;color:#ef4444;"></i>
+                                            <span style="font-size:9px;color:#64748b;font-weight:700;">PDF — Clique para abrir</span>
+                                        </div>
+                                        <span class="msg-time">${time}</span>
+                                    </div>`;
+                                } else {
+                                    html += `<div class="msg-bubble msg-in" style="padding:6px;">
+                                        <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'Imagem do paciente')">
+                                            <img src="${imgUrl}" class="msg-thumbnail" alt="Imagem" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                            <div style="display:none;width:140px;height:100px;background:#f1f5f9;border-radius:8px;align-items:center;justify-content:center;flex-direction:column;gap:4px;cursor:pointer;border:1px solid #e2e8f0;">
+                                                <i data-lucide="image-off" style="width:24px;height:24px;color:#94a3b8;"></i>
+                                                <span style="font-size:9px;color:#94a3b8;">Imagem indisponível</span>
+                                            </div>
+                                            <div class="msg-thumbnail-overlay"><i data-lucide="zoom-in" class="w-5 h-5 text-white"></i></div>
+                                        </div>
+                                        <span class="msg-time">${time}</span>
+                                    </div>`;
+                                }
                             } else {
                                 html += `<div class="msg-bubble msg-in">
                                     <div class="flex items-center gap-2 text-slate-500">
@@ -1949,21 +2096,6 @@
             if(!texto && !fileData) return;
 
             btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-white"></i>`;
-            
-            // Otimista: adiciona a mensagem localmente imediatamente (sem delay)
-            const agora_iso = new Date().toISOString();
-            const p = allPatients.find(x => x.id === id);
-            if (p) {
-                if (!p.historico) p.historico = [];
-                p.historico.push({
-                    de: 'clinica',
-                    tipo: fileData ? 'anexo' : 'texto',
-                    conteudo: fileData ? `[📎 Anexo enviado] ${texto}` : texto,
-                    data: agora_iso
-                });
-                updateChatMessagesHTML(id); // Atualiza o chat IMEDIATAMENTE
-            }
-            
             try {
                 const payload = { phone: id, message: texto, file_b64: fileData ? fileData.fileBase64 : null, file_name: fileData ? fileData.fileName : null, mime_type: fileData ? fileData.mimeType : null };
                 const res = await fetch(API_CHAT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -1972,18 +2104,9 @@
                     input.value = "";
                     delete pendingFiles[id];
                     renderChatWindows();
-                    setTimeout(() => fetchData(), 1500); // Aguarda 1.5s para o servidor processar
-                } else { 
-                    // Reverte a mensagem otimista em caso de erro
-                    if (p && p.historico) p.historico.pop();
-                    updateChatMessagesHTML(id);
-                    alert("Falha ao enviar a mensagem."); 
-                }
-            } catch (e) { 
-                if (p && p.historico) p.historico.pop();
-                updateChatMessagesHTML(id);
-                alert("Sem internet ou erro no servidor."); 
-            } 
+                    fetchData(); 
+                } else { alert("Falha ao enviar a mensagem."); }
+            } catch (e) { alert("Sem internet ou erro no servidor."); } 
             finally { if(btn) { btn.innerHTML = `<i data-lucide="send" class="w-4 h-4 text-white"></i>`; if(window.lucide) window.lucide.createIcons(); } }
         }
 
