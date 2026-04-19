@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conectifisio Command Center v3.1</title>
+    <title>Conectifisio Command Center v3.2</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -307,6 +307,104 @@
             animation: pulse-border 2s infinite;
             border-width: 2px !important;
         }
+
+        /* ===== WHATSAPP CHAT STYLE v3.2 ===== */
+        .chat-window .wa-header-bar {
+            background: #075e54;
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+            cursor: pointer;
+            border-radius: 14px 14px 0 0;
+        }
+        .chat-window .wa-avatar {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: #25d366; display: flex; align-items: center;
+            justify-content: center; font-weight: 700; font-size: 13px;
+            color: #fff; flex-shrink: 0;
+        }
+        .chat-window .wa-info { flex: 1; min-width: 0; }
+        .chat-window .wa-name { font-size: 13px; font-weight: 600; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
+        .chat-window .wa-status { font-size: 10px; color: rgba(255,255,255,.7); margin-top: 1px; }
+        .chat-window .wa-typing-txt { font-size: 10px; color: #25d366; margin-top: 1px; font-style: italic; display: none; }
+        .chat-window .wa-actions { display: flex; gap: 3px; flex-shrink: 0; }
+        .chat-window .wa-act-btn {
+            width: 30px; height: 30px; border-radius: 50%;
+            border: none; background: transparent; color: rgba(255,255,255,.8);
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: background .15s;
+        }
+        .chat-window .wa-act-btn:hover { background: rgba(255,255,255,.18); color: #fff; }
+        .chat-window .wa-act-btn.red:hover { background: rgba(239,68,68,.3); color: #fca5a5; }
+        .chat-window .wa-act-btn.green:hover { background: rgba(37,211,102,.3); color: #4ade80; }
+
+        /* Separador de data */
+        .wa-date-sep { display: flex; justify-content: center; margin: 8px 0 4px; pointer-events: none; }
+        .wa-date-sep span { background: rgba(255,255,255,.92); color: #54656f; font-size: 11px; font-weight: 500; padding: 3px 12px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+
+        /* Bolhas WA reais */
+        .wa-bubble { max-width: 82%; padding: 6px 10px 5px; font-size: 13px; line-height: 1.45; border-radius: 8px; word-break: break-word; position: relative; }
+        .wa-in  { background: #fff; border-radius: 0 8px 8px 8px; align-self: flex-start; box-shadow: 0 1px 1px rgba(0,0,0,.1); }
+        .wa-out { background: #dcf8c6; border-radius: 8px 0 8px 8px; align-self: flex-end; box-shadow: 0 1px 1px rgba(0,0,0,.1); }
+        .wa-bot { background: #e0f2fe; border-radius: 8px 8px 8px 0; align-self: flex-start; border-left: 3px solid #38bdf8; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+        .wa-meta { display: flex; align-items: center; gap: 3px; justify-content: flex-end; margin-top: 3px; }
+        .wa-time-lbl { font-size: 10px; color: #667781; white-space: nowrap; }
+        .wa-out .wa-time-lbl { color: #5a7a65; }
+
+        /* Reply quote dentro de bolha */
+        .wa-rq { background: rgba(0,0,0,.06); border-left: 3px solid #25d366; border-radius: 4px; padding: 4px 8px; margin-bottom: 5px; font-size: 11px; color: #54656f; }
+        .wa-rq-name { color: #075e54; font-weight: 600; font-size: 11px; margin-bottom: 2px; }
+        .wa-rq-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Barra de resposta no input */
+        .wa-reply-bar { background: #f0f2f5; border-top: 1px solid #e2e8f0; padding: 6px 10px; display: none; align-items: center; gap: 8px; flex-shrink: 0; }
+        .wa-reply-bar.open { display: flex; }
+        .wa-reply-inner { flex: 1; background: #fff; border-left: 3px solid #25d366; border-radius: 4px; padding: 4px 8px; min-width: 0; }
+        .wa-reply-from { font-size: 11px; font-weight: 600; color: #075e54; }
+        .wa-reply-txt { font-size: 11px; color: #667781; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        /* Wrap bolha + botão reply */
+        .wa-bwrap { display: flex; flex-direction: column; position: relative; margin-bottom: 2px; }
+        .wa-bwrap:hover .wa-reply-btn { opacity: 1; }
+        .wa-reply-btn {
+            position: absolute; right: -24px; top: 50%; transform: translateY(-50%);
+            width: 20px; height: 20px; border-radius: 50%;
+            background: rgba(255,255,255,.95); border: 1px solid #e2e8f0;
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; transition: opacity .15s; cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,.12); padding: 0;
+        }
+        .wa-in .wa-reply-btn { right: auto; left: -24px; }
+
+        /* Input bar WA */
+        .chat-input-bar {
+            display: flex; align-items: center;
+            background: #f0f2f5; border-top: 1px solid #e2e8f0;
+            padding: 6px 8px; gap: 5px; flex-shrink: 0; position: relative;
+        }
+        .chat-input-bar input[type=text] {
+            flex: 1; background: white; border: none; border-radius: 20px;
+            padding: 8px 14px; font-size: 13px; outline: none;
+            box-shadow: 0 1px 3px rgba(0,0,0,.08); min-width: 0; color: #111b21;
+        }
+        .chat-input-bar input::placeholder { color: #8696a0; }
+        .chat-input-bar .btn-icon {
+            width: 34px; height: 34px; display: flex; align-items: center;
+            justify-content: center; border-radius: 50%; color: #54656f;
+            cursor: pointer; transition: background .15s; flex-shrink: 0;
+            background: transparent; border: none;
+        }
+        .chat-input-bar .btn-icon:hover { background: rgba(0,0,0,.07); color: #111b21; }
+        .chat-input-bar .btn-send {
+            width: 38px; height: 38px; display: flex; align-items: center;
+            justify-content: center; border-radius: 50%; background: #25d366;
+            color: white; cursor: pointer; border: none; flex-shrink: 0;
+            transition: background .15s, transform .1s;
+        }
+        .chat-input-bar .btn-send:hover { background: #1da851; transform: scale(1.05); }
+        .wa-char-count { font-size: 10px; color: #8696a0; flex-shrink: 0; min-width: 18px; text-align: right; }
     </style>
 </head>
 <body class="h-screen flex overflow-hidden relative">
@@ -379,43 +477,6 @@
             </div>
         </div>
     </div>
-
-    <!-- MODAL GERENCIAR USUÁRIOS -->
-    <div id="modal-usuarios" style="display:none;" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
-            <div class="flex items-center justify-between p-5 border-b border-slate-100">
-                <div>
-                    <h2 class="font-black text-slate-800 text-base">👥 Gerenciar Usuários</h2>
-                    <p class="text-[10px] text-slate-500 mt-0.5">Adicione ou remova acessos ao sistema</p>
-                </div>
-                <button onclick="fecharModalUsuarios()" class="p-2 hover:bg-slate-100 rounded-lg transition-colors">
-                    <i data-lucide="x" class="w-4 h-4 text-slate-500"></i>
-                </button>
-            </div>
-            <!-- Adicionar novo usuário -->
-            <div class="p-4 bg-blue-50 border-b border-blue-100">
-                <p class="text-[10px] font-black text-blue-700 uppercase mb-2">Adicionar novo usuário</p>
-                <div class="flex flex-col gap-2">
-                    <input id="novo-usuario-nome" type="text" placeholder="Nome completo" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
-                    <input id="novo-usuario-email" type="email" placeholder="E-mail" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
-                    <select id="novo-usuario-role" class="w-full bg-white border border-blue-200 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500">
-                        <option value="recepcao">👤 Recepção</option>
-                        <option value="admin">⭐ Admin</option>
-                    </select>
-                    <button onclick="adicionarUsuario()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg text-xs transition-colors flex items-center justify-center gap-1">
-                        <i data-lucide="user-plus" class="w-3 h-3"></i> Adicionar e Enviar Convite
-                    </button>
-                    <p class="text-[9px] text-blue-600 text-center">Um e-mail com link para definir a senha será enviado automaticamente.</p>
-                </div>
-            </div>
-            <!-- Lista de usuários -->
-            <div class="flex-1 overflow-y-auto p-4">
-                <p class="text-[10px] font-black text-slate-500 uppercase mb-3">Usuários ativos</p>
-                <div id="lista-usuarios" class="flex flex-col gap-2"></div>
-            </div>
-        </div>
-    </div>
-
 
     <!-- LIGHTBOX DE IMAGENS -->
     <div id="lightbox-overlay" onclick="closeLightbox()">
@@ -558,7 +619,7 @@
                     <div class="relative" id="notif-wrapper">
                         <button onclick="toggleNotifPanel()" class="relative p-2 rounded-xl hover:bg-slate-100 transition-colors">
                             <i data-lucide="bell" class="w-5 h-5 text-slate-600"></i>
-                            <span id="notif-badge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-black rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">0</span>
+                            <span id="notif-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;font-size:9px;font-weight:700;border-radius:9999px;min-width:18px;height:18px;align-items:center;justify-content:center;padding:0 3px;">0</span>
                         </button>
                         <!-- Painel de notificações -->
                         <div id="notif-panel" class="hidden absolute right-0 top-12 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 overflow-hidden">
@@ -1188,9 +1249,9 @@
             const naoLidas = notifications.filter(n => !n.lida).length;
             if (naoLidas > 0) {
                 badge.textContent = naoLidas > 99 ? '99+' : naoLidas;
-                badge.classList.remove('hidden');
+                badge.style.display = 'flex';
             } else {
-                badge.classList.add('hidden');
+                badge.style.display = 'none';
             }
         }
 
@@ -1926,64 +1987,57 @@
                 chatDiv.className = `w-[320px] bg-white rounded-t-xl shadow-[0_0_30px_rgba(0,0,0,0.15)] border border-slate-300 flex flex-col chat-window ${isMinimized ? 'chat-minimized' : 'chat-expanded'}`;
                 wrapperDiv.appendChild(chatDiv);
 
+                const _statusTxt = p.status==='pausado'?'🔴 Robô OFF':(p.status==='atendimento_humano'?'🟡 Atendimento humano':'🟢 Em triagem');
                 chatDiv.innerHTML = `
-                    <div onclick="toggleMinimizeChat('${id}')" class="bg-slate-800 hover:bg-slate-900 transition-colors text-white p-2.5 rounded-t-xl flex justify-between items-center cursor-pointer shrink-0">
-                        <div class="flex items-center gap-2 overflow-hidden">
-                            <div class="w-7 h-7 bg-blue-500 rounded-full flex items-center justify-center text-xs font-bold shrink-0">
-                                ${(p.title || 'P').substring(0,2).toUpperCase()}
-                            </div>
-                            <div class="truncate">
-                                <h3 class="text-xs font-bold truncate leading-none mb-1">${p.title || 'Paciente'}</h3>
-                                <p class="text-[9px] text-slate-300 truncate leading-none">${p.servico || 'Triagem'}</p>
-                            </div>
+                    <div class="wa-header-bar" onclick="toggleMinimizeChat('${id}')">
+                        <div class="wa-avatar">${(p.title || 'P').substring(0,2).toUpperCase()}</div>
+                        <div class="wa-info" onclick="event.stopPropagation()">
+                            <div class="wa-name">${p.title || 'Paciente'}</div>
+                            <div id="wa-status-${id}" class="wa-status">${_statusTxt}</div>
+                            <div id="typing-${id}" class="wa-typing-txt">digitando...</div>
                         </div>
-                        <div class="flex items-center gap-1 shrink-0 ml-2">
-                            <button onclick="event.stopPropagation(); togglePatientPanel('${id}')" class="bg-slate-700 hover:bg-blue-500 p-1.5 rounded transition-colors text-white" title="Ver dados do paciente">
-                                <i data-lucide="user" class="w-4 h-4"></i>
-                            </button>
-                            <button onclick="event.stopPropagation(); arquivarComAuditoria('${id}', '${(p.title||'').replace(/'/g,'')}', '${p.unit||'Ipiranga'}')" class="bg-slate-700 hover:bg-emerald-500 p-1.5 rounded transition-colors text-white" title="Finalizar e Arquivar">
-                                <i data-lucide="archive-restore" class="w-4 h-4"></i>
-                            </button>
-                            <button onclick="event.stopPropagation(); closeChat('${id}')" class="bg-slate-700 hover:bg-red-500 p-1.5 rounded transition-colors text-white" title="Fechar Aba (Sem Arquivar)">
-                                <i data-lucide="x" class="w-4 h-4"></i>
-                            </button>
+                        <div class="wa-actions" onclick="event.stopPropagation()">
+                            <button onclick="togglePatientPanel('${id}')" class="wa-act-btn" title="Dados do paciente"><i data-lucide="user" class="w-4 h-4"></i></button>
+                            <button onclick="arquivarComAuditoria('${id}', '${(p.title||'').replace(/'/g,'')}', '${p.unit||'Ipiranga'}')" class="wa-act-btn green" title="Finalizar"><i data-lucide="check-circle" class="w-4 h-4"></i></button>
+                            <button onclick="closeChat('${id}')" class="wa-act-btn red" title="Fechar"><i data-lucide="x" class="w-4 h-4"></i></button>
                         </div>
                     </div>
 
-                    <div id="chat-msgs-container-${id}" class="flex-1 overflow-y-auto p-4 wa-bg flex flex-col custom-scrollbar ${isMinimized ? 'hidden' : ''}"></div>
+                    <div id="chat-msgs-container-${id}" class="flex-1 overflow-y-auto p-3 wa-bg flex flex-col custom-scrollbar ${isMinimized ? 'hidden' : ''}"></div>
+
+                    <div id="reply-bar-${id}" class="wa-reply-bar">
+                        <div class="wa-reply-inner">
+                            <div id="reply-from-${id}" class="wa-reply-from"></div>
+                            <div id="reply-txt-${id}" class="wa-reply-txt"></div>
+                        </div>
+                        <button onclick="clearReply('${id}')" style="background:transparent;border:none;color:#8696a0;cursor:pointer;padding:4px;"><i data-lucide="x" class="w-4 h-4"></i></button>
+                    </div>
 
                     <div id="file-preview-${id}" class="${(!isMinimized && filePreview) ? 'flex' : 'hidden'} bg-slate-100 border-t border-slate-200 p-2 justify-between items-center px-4">
                         <span class="text-[10px] font-bold text-slate-600 truncate max-w-[200px]">📎 ${filePreview ? filePreview.fileName : ''}</span>
-                        <button onclick="cancelarUploadChat('${id}')" class="text-red-500 hover:bg-red-100 p-1 rounded"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                        <button onclick="cancelarUploadChat('${id}')" class="text-red-500 p-1"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
                     </div>
 
                     <emoji-picker id="emoji-picker-${id}" class="shadow-xl border border-slate-200 rounded-lg"></emoji-picker>
 
-                    <!-- Painel de Respostas Rápidas (atalho /) -->
                     <div id="quick-replies-${id}" class="quick-replies-panel">
                         <div class="px-3 py-1.5 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
                             <span class="text-[9px] font-black text-blue-600 uppercase tracking-widest">/ Respostas Rápidas</span>
-                            <button onclick="toggleQuickReplies('${id}')" class="text-slate-400 hover:text-slate-600 text-sm leading-none">&times;</button>
+                            <button onclick="toggleQuickReplies('${id}')" class="text-slate-400 text-sm">&times;</button>
                         </div>
                         ${QUICK_REPLIES.map((r,i) => `<div class="quick-reply-item" data-index="${i}" onclick="useQuickReply('${id}', '${r.text.replace(/'/g, "\\'")}')"><div class="qr-title">${r.title}</div><div class="qr-preview">${r.text}</div></div>`).join('')}
                     </div>
 
-                    <!-- Nova barra de digitação limpa -->
                     <div class="chat-input-bar relative ${isMinimized ? 'hidden' : ''}">
-                        <button onclick="toggleEmojiPicker('${id}')" class="btn-icon" title="Emojis">
-                            <i data-lucide="smile" class="w-4 h-4"></i>
-                        </button>
+                        <button onclick="toggleEmojiPicker('${id}')" class="btn-icon" title="Emojis"><i data-lucide="smile" class="w-5 h-5"></i></button>
                         <input type="file" id="file-upload-${id}" class="hidden" accept="image/*,application/pdf" onchange="selecionarArquivoChat(event, '${id}')">
-                        <button onclick="document.getElementById('file-upload-${id}').click()" class="btn-icon" title="Anexar Arquivo">
-                            <i data-lucide="paperclip" class="w-4 h-4"></i>
-                        </button>
-                        <input type="text" id="chat-input-${id}" placeholder="Mensagem..." spellcheck="true" lang="pt-BR" autocorrect="on" autocapitalize="sentences"
+                        <button onclick="document.getElementById('file-upload-${id}').click()" class="btn-icon" title="Anexar"><i data-lucide="paperclip" class="w-5 h-5"></i></button>
+                        <input type="text" id="chat-input-${id}" placeholder="Digite uma mensagem" spellcheck="true" lang="pt-BR" autocorrect="on" autocapitalize="sentences"
                             oninput="handleChatInput(event, '${id}')"
                             onkeydown="handleChatKeydown(event, '${id}')"
                             onkeypress="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); enviarMsgChat('${id}'); }">
-                        <button onclick="enviarMsgChat('${id}')" id="btn-send-${id}" class="btn-send">
-                            <i data-lucide="send" class="w-4 h-4"></i>
-                        </button>
+                        <span class="wa-char-count" id="char-count-${id}"></span>
+                        <button onclick="enviarMsgChat('${id}')" id="btn-send-${id}" class="btn-send"><i data-lucide="send" class="w-4 h-4"></i></button>
                     </div>
                 `;
                 container.appendChild(wrapperDiv);
@@ -2002,85 +2056,85 @@
             if(window.lucide) window.lucide.createIcons();
         }
 
+        function _groupByDate(historico) {
+            const g = {};
+            (historico||[]).forEach(m => {
+                const d = m.data ? new Date(m.data).toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',year:'numeric'}) : 'Hoje';
+                if(!g[d]) g[d] = [];
+                g[d].push(m);
+            });
+            return g;
+        }
+
         function updateChatMessagesHTML(patientId) {
             const p = allPatients.find(x => x.id === patientId);
             const container = document.getElementById(`chat-msgs-container-${patientId}`);
             if(!p || !container) return;
 
+            const _esc = t => String(t||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            const _replyBtn = (msg) => `<button class="wa-reply-btn" onclick='_setReply("${patientId}",${JSON.stringify({de:msg.de,conteudo:msg.conteudo,data:msg.data}).replace(/'/g,"&#39;")})' title="Responder"><i data-lucide="reply" style="width:11px;height:11px;color:#64748b;"></i></button>`;
+
             let html = '';
             if (p.historico && p.historico.length > 0) {
-                p.historico.forEach(msg => {
-                    let time = formatTimezone(msg.data);
-                    const msgFormatada = String(msg.conteudo).replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                    const isAnexo = msg.tipo === 'anexo';
-                    
-                    if (msg.de === 'paciente' || msg.de === 'cliente') {
-                        if (isAnexo) {
-                            // Exibe miniatura clicável se tiver media_id
-                            const mediaId = msg.media_id || msg.mediaId || null;
-                            if (mediaId) {
-                                const imgUrl = `${BACKEND_URL}/api/media?id=${mediaId}`;
-                                // Detectar PDF pelo tipo de mensagem ou nome
-                                const isPdfMsg = (msg.mime_type || '').includes('pdf') || (msg.conteudo || '').toLowerCase().includes('.pdf') || (msg.conteudo || '').toLowerCase().includes('pdf');
-                                if (isPdfMsg) {
-                                    html += `<div class="msg-bubble msg-in" style="padding:6px;">
-                                        <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'PDF do paciente')" style="width:140px;height:100px;background:#f1f5f9;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;cursor:pointer;border:1px solid #e2e8f0;">
-                                            <i data-lucide="file-text" style="width:32px;height:32px;color:#ef4444;"></i>
-                                            <span style="font-size:9px;color:#64748b;font-weight:700;">PDF — Clique para abrir</span>
-                                        </div>
-                                        <span class="msg-time">${time}</span>
-                                    </div>`;
-                                } else {
-                                    html += `<div class="msg-bubble msg-in" style="padding:6px;">
-                                        <div class="msg-thumbnail-wrap" onclick="openLightbox('${mediaId}', 'Imagem do paciente')">
-                                            <img src="${imgUrl}" class="msg-thumbnail" alt="Imagem" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                            <div style="display:none;width:140px;height:100px;background:#f1f5f9;border-radius:8px;align-items:center;justify-content:center;flex-direction:column;gap:4px;cursor:pointer;border:1px solid #e2e8f0;">
-                                                <i data-lucide="image-off" style="width:24px;height:24px;color:#94a3b8;"></i>
-                                                <span style="font-size:9px;color:#94a3b8;">Imagem indisponível</span>
-                                            </div>
-                                            <div class="msg-thumbnail-overlay"><i data-lucide="zoom-in" class="w-5 h-5 text-white"></i></div>
-                                        </div>
-                                        <span class="msg-time">${time}</span>
-                                    </div>`;
-                                }
-                            } else {
-                                html += `<div class="msg-bubble msg-in">
-                                    <div class="flex items-center gap-2 text-slate-500">
-                                        <i data-lucide="image" class="w-4 h-4 text-blue-400"></i>
-                                        <span class="text-[10px] italic">${msgFormatada}</span>
+                const groups = _groupByDate(p.historico);
+                Object.entries(groups).forEach(([date, msgs]) => {
+                    html += `<div class="wa-date-sep"><span>${date}</span></div>`;
+                    msgs.forEach(msg => {
+                        const time = formatTimezone(msg.data);
+                        const fullDt = msg.data ? new Date(msg.data).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+                        const content = _esc(msg.conteudo);
+                        const isAnexo = msg.tipo === 'anexo';
+
+                        // Quote de reply se existir
+                        let rqHtml = '';
+                        if (msg.replyTo) {
+                            const rq = msg.replyTo;
+                            const rqName = rq.de==='paciente'||rq.de==='cliente' ? p.title||'Paciente' : (rq.de==='robo'?'Robô':'Você');
+                            rqHtml = `<div class="wa-rq"><div class="wa-rq-name">${rqName}</div><div class="wa-rq-txt">${_esc(rq.conteudo)}</div></div>`;
+                        }
+
+                        if (msg.de === 'paciente' || msg.de === 'cliente') {
+                            const mid = msg.media_id || msg.mediaId || null;
+                            if (isAnexo && mid) {
+                                const isPdf = (msg.mime_type||'').includes('pdf') || (msg.conteudo||'').toLowerCase().includes('.pdf');
+                                const imgUrl = `${BACKEND_URL}/api/media?id=${mid}`;
+                                html += `<div class="wa-bwrap" title="${fullDt}">
+                                    <div class="wa-bubble wa-in" style="padding:5px;">
+                                        ${rqHtml}
+                                        ${isPdf
+                                          ? `<div onclick="openLightbox('${mid}','PDF')" style="width:150px;height:90px;background:#f1f5f9;border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;cursor:pointer;"><i data-lucide="file-text" style="width:28px;height:28px;color:#ef4444;"></i><span style="font-size:9px;color:#64748b;font-weight:700;">PDF — toque para abrir</span></div>`
+                                          : `<img src="${imgUrl}" style="width:170px;height:120px;object-fit:cover;border-radius:7px;cursor:pointer;display:block;" onclick="openLightbox('${mid}','Imagem')" alt="Imagem" onerror="this.parentElement.innerHTML='<div style=\'width:150px;height:90px;background:#f1f5f9;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#94a3b8;\'>Indisponível</div>'">`
+                                        }
+                                        <div class="wa-meta"><span class="wa-time-lbl">${time}</span></div>
                                     </div>
-                                    <span class="msg-time">${time}</span>
+                                    ${_replyBtn(msg)}
+                                </div>`;
+                            } else {
+                                html += `<div class="wa-bwrap" title="${fullDt}">
+                                    <div class="wa-bubble wa-in">${rqHtml}${content}<div class="wa-meta"><span class="wa-time-lbl">${time}</span></div></div>
+                                    ${_replyBtn(msg)}
                                 </div>`;
                             }
-                        } else {
-                            html += `<div class="msg-bubble msg-in">${msgFormatada}<span class="msg-time">${time}</span></div>`;
-                        }
-                    } else if (msg.de === 'robo') {
-                        html += `<div class="msg-bubble msg-robo">🤖 ${msgFormatada}<span class="msg-time">${time}</span></div>`;
-                    } else {
-                        // Lógica de Checks (Status de Entrega)
-                        let checkIcon = '<i data-lucide="check" class="w-3 h-3 inline text-slate-400"></i>'; // Enviado
-                        if (msg.status === 'read') {
-                            checkIcon = '<i data-lucide="check-check" class="w-3 h-3 inline text-blue-500"></i>'; // Lido
-                        } else if (msg.status === 'delivered') {
-                            checkIcon = '<i data-lucide="check-check" class="w-3 h-3 inline text-slate-400"></i>'; // Entregue
-                        }
-                        
-                        if (isAnexo || msg.conteudo.includes('[📎')) {
-                            html += `<div class="msg-bubble msg-out">
-                                <div class="flex items-center gap-2">
-                                    <i data-lucide="paperclip" class="w-3 h-3 text-emerald-600"></i>
-                                    <span>${msgFormatada}</span>
-                                </div>
-                                <span class="msg-time">${time} ${checkIcon}</span>
+                        } else if (msg.de === 'robo') {
+                            html += `<div class="wa-bwrap" title="${fullDt}">
+                                <div class="wa-bubble wa-bot">${rqHtml}🤖 ${content}<div class="wa-meta"><span class="wa-time-lbl">${time}</span></div></div>
                             </div>`;
                         } else {
-                            html += `<div class="msg-bubble msg-out">${msgFormatada}<span class="msg-time">${time} ${checkIcon}</span></div>`;
+                            let chk = '<i data-lucide="check" style="width:12px;height:12px;display:inline;vertical-align:middle;color:#5a7a65;"></i>';
+                            if (msg.status === 'read') chk = '<i data-lucide="check-check" style="width:12px;height:12px;display:inline;vertical-align:middle;color:#53bdeb;"></i>';
+                            else if (msg.status === 'delivered') chk = '<i data-lucide="check-check" style="width:12px;height:12px;display:inline;vertical-align:middle;color:#5a7a65;"></i>';
+                            const body = isAnexo
+                                ? `<div style="display:flex;align-items:center;gap:5px;"><i data-lucide="paperclip" style="width:12px;height:12px;color:#059669;"></i>${content}</div>`
+                                : content;
+                            html += `<div class="wa-bwrap" title="${fullDt}">
+                                <div class="wa-bubble wa-out">${rqHtml}${body}<div class="wa-meta"><span class="wa-time-lbl">${time}</span>${chk}</div></div>
+                                ${_replyBtn(msg)}
+                            </div>`;
                         }
-                    }
+                    });
                 });
             } else {
-                html = `<div class="text-center text-[10px] text-slate-500 mt-10 bg-white/60 p-2 rounded-lg inline-block mx-auto">O histórico aparecerá na próxima mensagem.</div>`;
+                html = `<div style="text-align:center;font-size:11px;color:#667781;margin-top:40px;background:rgba(255,255,255,.7);padding:10px 16px;border-radius:10px;display:inline-block;align-self:center;">O histórico aparecerá na próxima mensagem.</div>`;
             }
 
             const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
@@ -2331,6 +2385,51 @@
                 document.querySelectorAll('.quick-replies-panel').forEach(p => p.classList.remove('visible'));
             }
         });
+
+
+        // ==========================================
+        // REPLY E CONTADOR DE CHARS (v3.2)
+        // ==========================================
+        function _setReply(id, msg) {
+            const bar = document.getElementById(`reply-bar-${id}`);
+            if (!bar) return;
+            const p = allPatients.find(x => x.id === id);
+            const name = msg.de==='paciente'||msg.de==='cliente' ? (p?p.title:'Paciente') : (msg.de==='robo'?'Robô':'Você');
+            const rf = document.getElementById(`reply-from-${id}`);
+            const rt = document.getElementById(`reply-txt-${id}`);
+            if (rf) rf.textContent = name;
+            if (rt) rt.textContent = msg.conteudo || '';
+            bar.classList.add('open');
+            window._replyingTo = window._replyingTo || {};
+            window._replyingTo[id] = msg;
+            const inp = document.getElementById(`chat-input-${id}`);
+            if (inp) inp.focus();
+        }
+
+        function clearReply(id) {
+            const bar = document.getElementById(`reply-bar-${id}`);
+            if (bar) bar.classList.remove('open');
+            if (window._replyingTo) delete window._replyingTo[id];
+        }
+
+        // Patch handleChatInput para incluir contador de caracteres
+        const _origHandleChatInput = handleChatInput;
+        function handleChatInput(event, id) {
+            const cc = document.getElementById(`char-count-${id}`);
+            if (cc) cc.textContent = event.target.value.length > 0 ? event.target.value.length : '';
+            _origHandleChatInput(event, id);
+        }
+
+        // Patch enviarMsgChat para incluir reply_to e limpar reply
+        const _origEnviarMsgChat = enviarMsgChat;
+        async function enviarMsgChat(id) {
+            const reply = (window._replyingTo && window._replyingTo[id]) || null;
+            // Injeta reply_to no payload via monkey-patch temporário
+            window._currentReply = reply;
+            await _origEnviarMsgChat(id);
+            clearReply(id);
+            window._currentReply = null;
+        }
 
         // Inicialização
         window.onload = checkLogin;
