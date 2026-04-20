@@ -2118,63 +2118,79 @@ def chat_manual():
 
         if not phone: return jsonify({"success": False, "error": "Falta telefone"}), 400
 
-        # IDs das duas unidades (SCS e Ipiranga)
-        ID_SCS = "1059746060556447"      
-        ID_IPIRANGA = "947053595167511" 
+        # ========================================================
+        # 1. SEM GAMBIARRA DE NÚMEROS: Busca a fonte da verdade
+        # ========================================================
+        paciente_info = get_paciente(phone) or {}
+        
+        # Pega o ID exato pelo qual o paciente iniciou a conversa (salvo pelo Webhook)
+        pid = paciente_info.get("numero_id")
 
-        ids_para_tentar = [ID_SCS, ID_IPIRANGA]
-        sucesso = False
-        erro_detalhado = ""
+        # Fallback estrito: se o paciente for antigo e não tiver 'numero_id' salvo
+        if not pid:
+            unidade = str(paciente_info.get("unit", "")).lower()
+            if "ipiranga" in unidade:
+                pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA", "947053595167511")
+            else:
+                pid = os.environ.get("PHONE_NUMBER_ID", "1059746060556447")
 
-        for pid in ids_para_tentar:
-            try:
-                url = f"https://graph.facebook.com/v19.0/{pid}/messages"
-                headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+        url = f"https://graph.facebook.com/v19.0/{pid}/messages"
+        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+
+        # ========================================================
+        # 2. SEM GAMBIARRA DE REDE: Tratamento profissional de falhas
+        # ========================================================
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        # Cria uma sessão que se reconecta automaticamente caso o Google Cloud "pisque"
+        session = requests.Session()
+        retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[ 500, 502, 503, 504 ])
+        session.mount('https://', HTTPAdapter(max_retries=retries))
+
+        # ========================================================
+        # 3. ENVIO LIMPO E DIRETO
+        # ========================================================
+        if file_b64:
+            b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
+            file_bytes = base64.b64decode(b64_data)
+            url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
+            
+            # Faz o upload
+            res_m = session.post(url_media, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, files={'file': (file_name, file_bytes, mime_type)}, data={'messaging_product': 'whatsapp'}, timeout=15)
+            m_id = res_m.json().get("id")
+            
+            if not m_id:
+                return jsonify({"success": False, "error": f"Falha no upload da imagem: {res_m.text}"}), 500
                 
-                # 1. Enviar com Anexo
-                if file_b64:
-                    b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
-                    file_bytes = base64.b64decode(b64_data)
-                    url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
-                    res_m = requests.post(url_media, headers=headers, files={'file': (file_name, file_bytes, mime_type)}, data={'messaging_product': 'whatsapp'}, timeout=10)
-                    m_id = res_m.json().get("id")
-                    
-                    if m_id:
-                        msg_type = "image" if "image" in mime_type else "document"
-                        payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": m_id}}
-                        if message_text: payload[msg_type]["caption"] = message_text
-                        res = requests.post(url, json=payload, headers=headers, timeout=10)
-                        if res.status_code == 200:
-                            sucesso = True
-                            break
-                        else:
-                            erro_detalhado = res.text
-                    else:
-                        erro_detalhado = res_m.text
-                
-                # 2. Enviar Texto (Fazendo o disparo direto para capturar o erro real)
-                else:
-                    payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": message_text}}
-                    res = requests.post(url, json=payload, headers=headers, timeout=10)
-                    if res.status_code == 200:
-                        sucesso = True
-                        break
-                    else:
-                        erro_detalhado = res.text
-            except Exception as e_intern:
-                erro_detalhado = f"Erro de conexão: {str(e_intern)}"
-                continue
+            msg_type = "image" if "image" in mime_type else "document"
+            payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": m_id}}
+            if message_text: payload[msg_type]["caption"] = message_text
+            
+            # Envia o anexo
+            res = session.post(url, json=payload, headers=headers, timeout=15)
+            
+        else:
+            # Envia texto simples
+            payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": message_text}}
+            res = session.post(url, json=payload, headers=headers, timeout=15)
 
-        if sucesso:
+        # ========================================================
+        # 4. VALIDAÇÃO DE SUCESSO
+        # ========================================================
+        if res.status_code == 200:
             registrar_historico(phone, "clinica", "texto" if not file_b64 else "anexo", message_text or "[Arquivo]")
             update_paciente(phone, {"status": "pausado", "unread": False, "robo_ligado": False})
             return jsonify({"success": True}), 200
-        
-        # Agora sim ele devolve o erro real da Meta na tela
-        return jsonify({"success": False, "error": erro_detalhado}), 500
+        else:
+            import sys
+            print(f"[ERRO-META] {res.text}", file=sys.stderr)
+            return jsonify({"success": False, "error": f"WhatsApp recusou: {res.text}"}), 500
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        import traceback, sys
+        print(traceback.format_exc(), file=sys.stderr)
+        return jsonify({"success": False, "error": f"Erro de conexão/servidor: {str(e)}"}), 500
 
 if __name__ == "__main__":
     # Cloud Run define PORT=8080 automaticamente. Fallback para 5000 em desenvolvimento local.
