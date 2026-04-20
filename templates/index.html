@@ -2169,7 +2169,7 @@
 
             if(!texto && !fileData) return;
 
-            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-white"></i>`;
+            if (btn) btn.disabled = true;
             try {
                 const payload = { phone: id, message: texto, file_b64: fileData ? fileData.fileBase64 : null, file_name: fileData ? fileData.fileName : null, mime_type: fileData ? fileData.mimeType : null };
                 const res = await fetch(API_CHAT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -2179,9 +2179,12 @@
                     delete pendingFiles[id];
                     renderChatWindows();
                     fetchData(); 
-                } else { alert("Falha ao enviar a mensagem."); }
-            } catch (e) { alert("Sem internet ou erro no servidor."); } 
-            finally { if(btn) { btn.innerHTML = `<i data-lucide="send" class="w-4 h-4 text-white"></i>`; if(window.lucide) window.lucide.createIcons(); } }
+                } else { 
+                    const err = await res.json().catch(function(){return {};});
+                    alert("Falha ao enviar: " + (err.error || res.status)); 
+                }
+            } catch (e) { alert("Erro de conexao: " + e.message); } 
+            finally { if(btn) btn.disabled = false; }
         }
 
         // ==========================================
