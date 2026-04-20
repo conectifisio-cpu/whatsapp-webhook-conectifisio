@@ -2118,79 +2118,57 @@ def chat_manual():
 
         if not phone: return jsonify({"success": False, "error": "Falta telefone"}), 400
 
-        # BUSCA O PACIENTE PARA IDENTIFICAR A UNIDADE E O ID CORRETO
-        paciente_info = get_paciente(phone)
-        
-        # 1. Tenta usar o ID gravado na última interação do paciente
-        pid = paciente_info.get("numero_id")
-        
-        # 2. Se não houver ID gravado (paciente antigo), decide pela Unidade conforme suas variáveis:
-        # Ipiranga (final 67511) e São Caetano (final 56447)
-        if not pid:
-            unidade = paciente_info.get("unit")
-            if unidade == "Ipiranga":
-                # ID do número 92661-6255
-                pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA")
-            else:
-                # ID do número 4226-1104 (Padrão/SCS)
-                pid = os.environ.get("PHONE_NUMBER_ID")
+        # IDs das duas unidades (Ipiranga e SCS)
+        ID_SCS = "1059746060556447"      # Final 56447
+        ID_IPIRANGA = "947053595167511" # Final 67511
 
-        # Fallback de segurança caso as variáveis de ambiente falhem
-        pid = pid or os.environ.get("PHONE_NUMBER_ID")
-        
-        # Define no thread local para as funções internas de envio (enviar_whatsapp, etc)
-        _thread_local.numero_id = pid
+        # Ordem de tentativa: tenta primeiro o principal de São Caetano, depois Ipiranga
+        ids_para_tentar = [ID_SCS, ID_IPIRANGA]
 
-        import sys
-        print(f"[CHAT-MANUAL] Enviando para {phone} via ID: {pid} (Unidade: {paciente_info.get('unit')})", file=sys.stderr)
+        sucesso = False
+        erro_detalhado = ""
 
-        # 1. Enviar Anexo (Se houver)
-        if file_b64:
-            b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
-            file_bytes = base64.b64decode(b64_data)
-
-            url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
-            files = {'file': (file_name, file_bytes, mime_type)}
-            res_media = requests.post(url_media, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, files=files, data={'messaging_product': 'whatsapp'})
-            media_id = res_media.json().get("id")
-
-            if media_id:
-                msg_type = "image" if "image" in mime_type else "document"
-                payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type}
-                if msg_type == "image":
-                    payload["image"] = {"id": media_id}
-                    if message_text: payload["image"]["caption"] = message_text
+        for pid in ids_para_tentar:
+            try:
+                # 1. Enviar com Anexo
+                if file_b64:
+                    b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
+                    file_bytes = base64.b64decode(b64_data)
+                    url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
+                    res_m = requests.post(url_media, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, files={'file': (file_name, file_bytes, mime_type)}, data={'messaging_product': 'whatsapp'}, timeout=10)
+                    m_id = res_m.json().get("id")
+                    
+                    if m_id:
+                        msg_type = "image" if "image" in mime_type else "document"
+                        payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": m_id}}
+                        if message_text: payload[msg_type]["caption"] = message_text
+                        res = requests.post(f"https://graph.facebook.com/v19.0/{pid}/messages", json=payload, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, timeout=10)
+                        if res.status_code == 200:
+                            sucesso = True
+                            break
+                # 2. Enviar Texto
                 else:
-                    payload["document"] = {"id": media_id, "filename": file_name}
-                    if message_text: payload["document"]["caption"] = message_text
+                    res = responder_texto(phone, message_text, remetente="clinica", numero_id=pid)
+                    if res and res.status_code == 200:
+                        sucesso = True
+                        break
+                
+                if 'res' in locals(): erro_detalhado = res.text
+            except Exception as e_intern:
+                erro_detalhado = str(e_intern)
+                continue
 
-                res_send = requests.post(f"https://graph.facebook.com/v19.0/{pid}/messages", json=payload, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"})
-                print(f"[CHAT-MANUAL] Anexo enviado: HTTP {res_send.status_code}", file=sys.stderr)
+        if sucesso:
+            registrar_historico(phone, "clinica", "texto" if not file_b64 else "anexo", message_text or "[Arquivo]")
+            update_paciente(phone, {"status": "pausado", "unread": False, "robo_ligado": False})
+            return jsonify({"success": True}), 200
+        
+        # Se chegou aqui, nenhum dos dois IDs funcionou
+        import sys
+        print(f"[ERRO-CRÍTICO] Falha total no envio para {phone}: {erro_detalhado}", file=sys.stderr)
+        return jsonify({"success": False, "error": f"WhatsApp recusou o envio pelos dois números. Erro: {erro_detalhado}"}), 500
 
-                txt_hist = f"[📎 Anexo enviado] {message_text}"
-                registrar_historico(phone, "clinica", "anexo", txt_hist)
-                update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": txt_hist, "unread": False})
-                return jsonify({"success": True}), 200
-            else:
-                print(f"[CHAT-MANUAL] Falha no upload de mídia: {res_media.text}", file=sys.stderr)
-                return jsonify({"success": False, "error": "Falha no upload de mídia"}), 500
-
-        # 2. Enviar Só Texto
-        if message_text and not file_b64:
-            res = responder_texto(phone, message_text, remetente="clinica", numero_id=pid)
-            print(f"[CHAT-MANUAL] Texto enviado: HTTP {res.status_code if res else 'None'}", file=sys.stderr)
-            if res and res.status_code == 200:
-                update_paciente(phone, {"status": "pausado", "robo_ligado": False, "ultima_mensagem_clinica": message_text, "unread": False})
-                return jsonify({"success": True}), 200
-            else:
-                erro = res.text if res else "Sem resposta do servidor"
-                print(f"[CHAT-MANUAL] Erro no envio: {erro}", file=sys.stderr)
-                return jsonify({"success": False, "error": f"WhatsApp retornou: {erro}"}), 500
-
-        return jsonify({"success": False, "error": "Nenhum conteúdo para enviar"}), 400
     except Exception as e:
-        import sys, traceback
-        print(f"[CHAT-MANUAL] Exception: {traceback.format_exc()}", file=sys.stderr)
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
