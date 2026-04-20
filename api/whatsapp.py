@@ -2125,14 +2125,28 @@ def chat_manual():
         
         # Pega o ID exato pelo qual o paciente iniciou a conversa (salvo pelo Webhook)
         pid = paciente_info.get("numero_id")
+        
+        import sys
+        print(f"[CHAT_MANUAL] phone={phone} numero_id_salvo={pid} unit={paciente_info.get('unit')}", file=sys.stderr)
 
-        # Fallback estrito: se o paciente for antigo e não tiver 'numero_id' salvo
+        # Fallback: se o paciente for antigo e não tiver 'numero_id' salvo
+        # ATENÇÃO: 'unit' é a unidade ESCOLHIDA pelo paciente, não necessariamente
+        # o número pelo qual ele entrou. Por isso este fallback pode errar.
+        # Solução definitiva: sempre que o paciente mandar mensagem, o webhook
+        # salva o numero_id — então aguardar próxima interação do paciente resolve.
         if not pid:
-            unidade = str(paciente_info.get("unit", "")).lower()
-            if "ipiranga" in unidade:
-                pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA", "947053595167511")
+            # Tenta usar o número de entrada salvo em campos alternativos
+            pid_entrada = paciente_info.get("phone_number_id_entrada") or paciente_info.get("numero_entrada")
+            if pid_entrada:
+                pid = pid_entrada
             else:
-                pid = os.environ.get("PHONE_NUMBER_ID", "1059746060556447")
+                # Último recurso: usa a unidade (pode estar errado para pacientes antigos)
+                unidade = str(paciente_info.get("unit", "")).lower()
+                if "ipiranga" in unidade:
+                    pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA", "947053595167511")
+                else:
+                    pid = os.environ.get("PHONE_NUMBER_ID", "1059746060556447")
+            print(f"[CHAT_MANUAL] FALLBACK usado — pid={pid} (numero_id ausente no Firebase)", file=sys.stderr)
 
         url = f"https://graph.facebook.com/v19.0/{pid}/messages"
         headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
