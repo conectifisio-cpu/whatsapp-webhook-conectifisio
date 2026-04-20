@@ -2118,16 +2118,31 @@ def chat_manual():
 
         if not phone: return jsonify({"success": False, "error": "Falta telefone"}), 400
 
-        # Buscar o numero_id correto do paciente (dual-number support)
-        # Se o paciente veio pelo Ipiranga, responde pelo Ipiranga. Senão, usa o número padrão.
-        try:
-            doc = db.collection("PatientsKanban").document(phone).get()
-            pid = (doc.to_dict() or {}).get("numero_id") or PHONE_NUMBER_ID
-        except:
-            pid = PHONE_NUMBER_ID
+        # BUSCA O PACIENTE PARA IDENTIFICAR A UNIDADE E O ID CORRETO
+        paciente_info = get_paciente(phone)
+        
+        # 1. Tenta usar o ID gravado na última interação do paciente
+        pid = paciente_info.get("numero_id")
+        
+        # 2. Se não houver ID gravado (paciente antigo), decide pela Unidade conforme suas variáveis:
+        # Ipiranga (final 67511) e São Caetano (final 56447)
+        if not pid:
+            unidade = paciente_info.get("unit")
+            if unidade == "Ipiranga":
+                # ID do número 92661-6255
+                pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA")
+            else:
+                # ID do número 4226-1104 (Padrão/SCS)
+                pid = os.environ.get("PHONE_NUMBER_ID")
+
+        # Fallback de segurança caso as variáveis de ambiente falhem
+        pid = pid or os.environ.get("PHONE_NUMBER_ID")
+        
+        # Define no thread local para as funções internas de envio (enviar_whatsapp, etc)
+        _thread_local.numero_id = pid
 
         import sys
-        print(f"[CHAT-MANUAL] Enviando para {phone} via número ID: {pid}", file=sys.stderr)
+        print(f"[CHAT-MANUAL] Enviando para {phone} via ID: {pid} (Unidade: {paciente_info.get('unit')})", file=sys.stderr)
 
         # 1. Enviar Anexo (Se houver)
         if file_b64:
