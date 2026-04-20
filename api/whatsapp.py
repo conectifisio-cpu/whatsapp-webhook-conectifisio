@@ -1357,6 +1357,7 @@ def webhook():
         agora_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')  # UTC explícito
         db.collection("PatientsKanban").document(phone).set(
             {"lastPatientInteraction": agora_iso,
+             "numero_id": numero_id,
              **(({"followup_toque": 0, "followup_retomado_em": agora_iso}) if info.get("followup_toque", 0) > 0 else {})},
             merge=True)
 
@@ -2114,15 +2115,26 @@ def chat_manual():
         file_b64 = data.get("file_b64")
         file_name = data.get("file_name", "arquivo")
         mime_type = data.get("mime_type", "")
-        
+
         if not phone: return jsonify({"success": False, "error": "Falta telefone"}), 400
+
+        # Buscar o numero_id correto do paciente (dual-number support)
+        # Se o paciente veio pelo Ipiranga, responde pelo Ipiranga. Senão, usa o número padrão.
+        try:
+            doc = db.collection("PatientsKanban").document(phone).get()
+            pid = (doc.to_dict() or {}).get("numero_id") or PHONE_NUMBER_ID
+        except:
+            pid = PHONE_NUMBER_ID
+
+        import sys
+        print(f"[CHAT-MANUAL] Enviando para {phone} via número ID: {pid}", file=sys.stderr)
 
         # 1. Enviar Anexo (Se houver)
         if file_b64:
             b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
             file_bytes = base64.b64decode(b64_data)
-            
-            url_media = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/media"
+
+            url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
             files = {'file': (file_name, file_bytes, mime_type)}
             res_media = requests.post(url_media, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, files=files, data={'messaging_product': 'whatsapp'})
             media_id = res_media.json().get("id")
@@ -2130,7 +2142,6 @@ def chat_manual():
             if media_id:
                 msg_type = "image" if "image" in mime_type else "document"
                 payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type}
-                
                 if msg_type == "image":
                     payload["image"] = {"id": media_id}
                     if message_text: payload["image"]["caption"] = message_text
@@ -2138,23 +2149,33 @@ def chat_manual():
                     payload["document"] = {"id": media_id, "filename": file_name}
                     if message_text: payload["document"]["caption"] = message_text
 
-                requests.post(f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages", json=payload, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"})
-                
+                res_send = requests.post(f"https://graph.facebook.com/v19.0/{pid}/messages", json=payload, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"})
+                print(f"[CHAT-MANUAL] Anexo enviado: HTTP {res_send.status_code}", file=sys.stderr)
+
                 txt_hist = f"[📎 Anexo enviado] {message_text}"
                 registrar_historico(phone, "clinica", "anexo", txt_hist)
                 update_paciente(phone, {"status": "pausado", "ultima_mensagem_clinica": txt_hist, "unread": False})
                 return jsonify({"success": True}), 200
+            else:
+                print(f"[CHAT-MANUAL] Falha no upload de mídia: {res_media.text}", file=sys.stderr)
+                return jsonify({"success": False, "error": "Falha no upload de mídia"}), 500
 
         # 2. Enviar Só Texto
         if message_text and not file_b64:
-            res = responder_texto(phone, message_text, remetente="clinica")
-            if res.status_code == 200:
-                # Auto-Pause: Desliga o robô quando o humano fala
+            res = responder_texto(phone, message_text, remetente="clinica", numero_id=pid)
+            print(f"[CHAT-MANUAL] Texto enviado: HTTP {res.status_code if res else 'None'}", file=sys.stderr)
+            if res and res.status_code == 200:
                 update_paciente(phone, {"status": "pausado", "robo_ligado": False, "ultima_mensagem_clinica": message_text, "unread": False})
                 return jsonify({"success": True}), 200
-            
-        return jsonify({"success": False, "error": "Falha geral no envio"}), 500
+            else:
+                erro = res.text if res else "Sem resposta do servidor"
+                print(f"[CHAT-MANUAL] Erro no envio: {erro}", file=sys.stderr)
+                return jsonify({"success": False, "error": f"WhatsApp retornou: {erro}"}), 500
+
+        return jsonify({"success": False, "error": "Nenhum conteúdo para enviar"}), 400
     except Exception as e:
+        import sys, traceback
+        print(f"[CHAT-MANUAL] Exception: {traceback.format_exc()}", file=sys.stderr)
         return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
