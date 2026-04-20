@@ -2415,23 +2415,73 @@
             if (window._replyingTo) delete window._replyingTo[id];
         }
 
-        // Patch handleChatInput para incluir contador de caracteres
-        const _origHandleChatInput = handleChatInput;
-        function handleChatInput(event, id) {
-            const cc = document.getElementById(`char-count-${id}`);
-            if (cc) cc.textContent = event.target.value.length > 0 ? event.target.value.length : '';
-            _origHandleChatInput(event, id);
+        // --- FUNÇÕES DE ENVIO CORRIGIDAS ---
+        async function enviarMsgChat(id) {
+            const input = document.getElementById(`chat-input-${id}`);
+            const btn = document.getElementById(`btn-send-${id}`);
+            const texto = input.value.trim();
+            const fileData = pendingFiles[id];
+            const reply = (window._replyingTo && window._replyingTo[id]) || null;
+
+            if(!texto && !fileData) return;
+
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-white"></i>`;
+            if(window.lucide) window.lucide.createIcons();
+
+            try {
+                const payload = { 
+                    phone: id, 
+                    message: texto, 
+                    file_b64: fileData ? fileData.fileBase64 : null, 
+                    file_name: fileData ? fileData.fileName : null, 
+                    mime_type: fileData ? fileData.mimeType : null,
+                    reply_to: reply // Envia a resposta se houver
+                };
+
+                const res = await fetch(API_CHAT, { 
+                    method: "POST", 
+                    headers: { "Content-Type": "application/json" }, 
+                    body: JSON.stringify(payload) 
+                });
+
+                if(res.ok) {
+                    input.value = "";
+                    const cc = document.getElementById(`char-count-${id}`);
+                    if (cc) cc.textContent = "";
+                    delete pendingFiles[id];
+                    clearReply(id);
+                    renderChatWindows();
+                    fetchData(); 
+                } else { 
+                    const errorData = await res.json();
+                    alert("Erro ao enviar: " + (errorData.error || "Verifique o console")); 
+                }
+            } catch (e) { 
+                alert("Sem internet ou erro no servidor."); 
+            } finally { 
+                if(btn) { 
+                    btn.innerHTML = `<i data-lucide="send" class="w-4 h-4 text-white"></i>`; 
+                    if(window.lucide) window.lucide.createIcons(); 
+                } 
+            }
         }
 
-        // Patch enviarMsgChat para incluir reply_to e limpar reply
-        const _origEnviarMsgChat = enviarMsgChat;
-        async function enviarMsgChat(id) {
-            const reply = (window._replyingTo && window._replyingTo[id]) || null;
-            // Injeta reply_to no payload via monkey-patch temporário
-            window._currentReply = reply;
-            await _origEnviarMsgChat(id);
-            clearReply(id);
-            window._currentReply = null;
+        function handleChatInput(event, id) {
+            const val = event.target.value;
+            // Contador de caracteres
+            const cc = document.getElementById(`char-count-${id}`);
+            if (cc) cc.textContent = val.length > 0 ? val.length : '';
+            
+            // Respostas rápidas
+            const panel = document.getElementById(`quick-replies-${id}`);
+            if (!panel) return;
+            if (val.startsWith('/')) {
+                const filter = val.slice(1);
+                renderQuickRepliesPanel(id, filter);
+                panel.classList.add('visible');
+            } else {
+                panel.classList.remove('visible');
+            }
         }
 
         // Inicialização
