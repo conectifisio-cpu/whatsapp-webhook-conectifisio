@@ -2118,44 +2118,51 @@ def chat_manual():
 
         if not phone: return jsonify({"success": False, "error": "Falta telefone"}), 400
 
-        # IDs das duas unidades (Ipiranga e SCS)
-        ID_SCS = "1059746060556447"      # Final 56447
-        ID_IPIRANGA = "947053595167511" # Final 67511
+        # IDs das duas unidades (SCS e Ipiranga)
+        ID_SCS = "1059746060556447"      
+        ID_IPIRANGA = "947053595167511" 
 
-        # Ordem de tentativa: tenta primeiro o principal de São Caetano, depois Ipiranga
         ids_para_tentar = [ID_SCS, ID_IPIRANGA]
-
         sucesso = False
         erro_detalhado = ""
 
         for pid in ids_para_tentar:
             try:
+                url = f"https://graph.facebook.com/v19.0/{pid}/messages"
+                headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+                
                 # 1. Enviar com Anexo
                 if file_b64:
                     b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
                     file_bytes = base64.b64decode(b64_data)
                     url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
-                    res_m = requests.post(url_media, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, files={'file': (file_name, file_bytes, mime_type)}, data={'messaging_product': 'whatsapp'}, timeout=10)
+                    res_m = requests.post(url_media, headers=headers, files={'file': (file_name, file_bytes, mime_type)}, data={'messaging_product': 'whatsapp'}, timeout=10)
                     m_id = res_m.json().get("id")
                     
                     if m_id:
                         msg_type = "image" if "image" in mime_type else "document"
                         payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": m_id}}
                         if message_text: payload[msg_type]["caption"] = message_text
-                        res = requests.post(f"https://graph.facebook.com/v19.0/{pid}/messages", json=payload, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, timeout=10)
+                        res = requests.post(url, json=payload, headers=headers, timeout=10)
                         if res.status_code == 200:
                             sucesso = True
                             break
-                # 2. Enviar Texto
+                        else:
+                            erro_detalhado = res.text
+                    else:
+                        erro_detalhado = res_m.text
+                
+                # 2. Enviar Texto (Fazendo o disparo direto para capturar o erro real)
                 else:
-                    res = responder_texto(phone, message_text, remetente="clinica", numero_id=pid)
-                    if res and res.status_code == 200:
+                    payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": message_text}}
+                    res = requests.post(url, json=payload, headers=headers, timeout=10)
+                    if res.status_code == 200:
                         sucesso = True
                         break
-                
-                if 'res' in locals(): erro_detalhado = res.text
+                    else:
+                        erro_detalhado = res.text
             except Exception as e_intern:
-                erro_detalhado = str(e_intern)
+                erro_detalhado = f"Erro de conexão: {str(e_intern)}"
                 continue
 
         if sucesso:
@@ -2163,10 +2170,8 @@ def chat_manual():
             update_paciente(phone, {"status": "pausado", "unread": False, "robo_ligado": False})
             return jsonify({"success": True}), 200
         
-        # Se chegou aqui, nenhum dos dois IDs funcionou
-        import sys
-        print(f"[ERRO-CRÍTICO] Falha total no envio para {phone}: {erro_detalhado}", file=sys.stderr)
-        return jsonify({"success": False, "error": f"WhatsApp recusou o envio pelos dois números. Erro: {erro_detalhado}"}), 500
+        # Agora sim ele devolve o erro real da Meta na tela
+        return jsonify({"success": False, "error": erro_detalhado}), 500
 
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
