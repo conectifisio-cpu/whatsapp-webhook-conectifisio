@@ -891,6 +891,9 @@ def webhook():
                 # status_skip=1 permite atualizar só o atendente sem mudar o status
                 if request.args.get("status_skip") != "1" and new_status:
                     update_fields["status"] = new_status
+                    # Salva timestamp de arquivamento para janela de proteção anti-reativação
+                    if new_status == "arquivado":
+                        update_fields["arquivado_em"] = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
                 # Atendente: salva ou limpa
                 if atendendo_por is not None:
                     if atendendo_por == "":
@@ -1477,7 +1480,29 @@ def webhook():
             # Se for cortesia (agradecimento, emoji) após arquivamento — ignora silenciosamente
             if is_cortesia:
                 return jsonify({"status": "cortesia_arquivado_ignorada"}), 200
-            # Se for mensagem real — reativa o fluxo
+            
+            # ==========================================
+            # PROTEÇÃO CONTRA CONDIÇÃO DE CORRIDA
+            # Mensagens enviadas pelo paciente ANTES ou
+            # LOGO APÓS o arquivamento não reativam o card.
+            # Janela de proteção: 3 minutos após arquivamento.
+            # ==========================================
+            arquivado_em = info.get("arquivado_em") or info.get("lastInteraction")
+            if arquivado_em:
+                try:
+                    from datetime import timezone
+                    ts = datetime.fromisoformat(arquivado_em.replace("Z", "+00:00"))
+                    agora_utc = datetime.now(timezone.utc)
+                    minutos_desde_arquivo = (agora_utc - ts).total_seconds() / 60
+                    if minutos_desde_arquivo < 3:
+                        import sys
+                        print(f"[ARQUIVADO] Reativação bloqueada — arquivado há {minutos_desde_arquivo:.1f} min (janela: 3 min)", file=sys.stderr)
+                        return jsonify({"status": "reativacao_bloqueada_janela"}), 200
+                except Exception as e:
+                    import sys
+                    print(f"[ARQUIVADO] Erro ao verificar janela de proteção: {e}", file=sys.stderr)
+
+            # Se for mensagem real fora da janela — reativa o fluxo
             update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
             enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reativacao_arquivado"}), 200
@@ -2125,28 +2150,14 @@ def chat_manual():
         
         # Pega o ID exato pelo qual o paciente iniciou a conversa (salvo pelo Webhook)
         pid = paciente_info.get("numero_id")
-        
-        import sys
-        print(f"[CHAT_MANUAL] phone={phone} numero_id_salvo={pid} unit={paciente_info.get('unit')}", file=sys.stderr)
 
-        # Fallback: se o paciente for antigo e não tiver 'numero_id' salvo
-        # ATENÇÃO: 'unit' é a unidade ESCOLHIDA pelo paciente, não necessariamente
-        # o número pelo qual ele entrou. Por isso este fallback pode errar.
-        # Solução definitiva: sempre que o paciente mandar mensagem, o webhook
-        # salva o numero_id — então aguardar próxima interação do paciente resolve.
+        # Fallback estrito: se o paciente for antigo e não tiver 'numero_id' salvo
         if not pid:
-            # Tenta usar o número de entrada salvo em campos alternativos
-            pid_entrada = paciente_info.get("phone_number_id_entrada") or paciente_info.get("numero_entrada")
-            if pid_entrada:
-                pid = pid_entrada
+            unidade = str(paciente_info.get("unit", "")).lower()
+            if "ipiranga" in unidade:
+                pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA", "947053595167511")
             else:
-                # Último recurso: usa a unidade (pode estar errado para pacientes antigos)
-                unidade = str(paciente_info.get("unit", "")).lower()
-                if "ipiranga" in unidade:
-                    pid = os.environ.get("PHONE_NUMBER_ID_IPIRANGA", "947053595167511")
-                else:
-                    pid = os.environ.get("PHONE_NUMBER_ID", "1059746060556447")
-            print(f"[CHAT_MANUAL] FALLBACK usado — pid={pid} (numero_id ausente no Firebase)", file=sys.stderr)
+                pid = os.environ.get("PHONE_NUMBER_ID", "1059746060556447")
 
         url = f"https://graph.facebook.com/v19.0/{pid}/messages"
         headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
