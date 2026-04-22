@@ -735,32 +735,45 @@ def integrar_feegow(phone, info):
 # ==========================================
 def chamar_ia_custom(query):
     """
-    Chama o modelo customizado da OpenAI (conectifisio-v1) para acolhimento e triagem.
+    Chama o modelo base gpt-4o-mini para acolhimento empático de queixas.
+    IMPORTANTE: NÃO usar o modelo fine-tuned (conectifisio-v1) aqui —
+    ele foi treinado para FAQ e gera respostas inadequadas para acolhimento.
     """
     if not OPENAI_API_KEY: 
-        # Fallback para Gemini se OpenAI não estiver configurada
         return chamar_gemini(query)
         
-    system_prompt = "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural."
+    system_prompt = (
+        "Você é o assistente virtual da ConectiFisio, clínica de fisioterapia em São Paulo. "
+        "O paciente acabou de descrever sua queixa ou motivo de contato. "
+        "Responda com UMA frase curta de acolhimento empático (máximo 2 linhas), "
+        "reconhecendo a situação do paciente de forma calorosa e humana. "
+        "NÃO ofereça informações sobre convênios, valores ou procedimentos. "
+        "NÃO faça perguntas. Apenas acolha."
+    )
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": OPENAI_MODEL,
+        "model": "gpt-4o-mini",  # Modelo BASE — não o fine-tuned (conectifisio-v1 é para FAQ)
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query[:500]}
+            {"role": "user", "content": query[:300]}
         ],
-        "max_tokens": 150,
-        "temperature": 0.7
+        "max_tokens": 80,
+        "temperature": 0.5
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
-            return res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-    except: pass
+            resposta = res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+            import sys
+            print(f"[ACOLHIMENTO] '{resposta[:80]}'", file=sys.stderr)
+            return resposta
+    except Exception as e:
+        import sys
+        print(f"[ACOLHIMENTO] Erro OpenAI: {e}", file=sys.stderr)
     return chamar_gemini(query)
 
 def chamar_gemini(query):
@@ -891,9 +904,6 @@ def webhook():
                 # status_skip=1 permite atualizar só o atendente sem mudar o status
                 if request.args.get("status_skip") != "1" and new_status:
                     update_fields["status"] = new_status
-                    # Salva timestamp de arquivamento para janela de proteção anti-reativação
-                    if new_status == "arquivado":
-                        update_fields["arquivado_em"] = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
                 # Atendente: salva ou limpa
                 if atendendo_por is not None:
                     if atendendo_por == "":
@@ -1480,29 +1490,7 @@ def webhook():
             # Se for cortesia (agradecimento, emoji) após arquivamento — ignora silenciosamente
             if is_cortesia:
                 return jsonify({"status": "cortesia_arquivado_ignorada"}), 200
-            
-            # ==========================================
-            # PROTEÇÃO CONTRA CONDIÇÃO DE CORRIDA
-            # Mensagens enviadas pelo paciente ANTES ou
-            # LOGO APÓS o arquivamento não reativam o card.
-            # Janela de proteção: 3 minutos após arquivamento.
-            # ==========================================
-            arquivado_em = info.get("arquivado_em") or info.get("lastInteraction")
-            if arquivado_em:
-                try:
-                    from datetime import timezone
-                    ts = datetime.fromisoformat(arquivado_em.replace("Z", "+00:00"))
-                    agora_utc = datetime.now(timezone.utc)
-                    minutos_desde_arquivo = (agora_utc - ts).total_seconds() / 60
-                    if minutos_desde_arquivo < 3:
-                        import sys
-                        print(f"[ARQUIVADO] Reativação bloqueada — arquivado há {minutos_desde_arquivo:.1f} min (janela: 3 min)", file=sys.stderr)
-                        return jsonify({"status": "reativacao_bloqueada_janela"}), 200
-                except Exception as e:
-                    import sys
-                    print(f"[ARQUIVADO] Erro ao verificar janela de proteção: {e}", file=sys.stderr)
-
-            # Se for mensagem real fora da janela — reativa o fluxo
+            # Se for mensagem real — reativa o fluxo
             update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
             enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reativacao_arquivado"}), 200
@@ -1580,6 +1568,42 @@ def webhook():
             return jsonify({"status": "instagram_lead_qualificado"}), 200
 
         if status == "triagem":
+            # ==========================================
+            # RETOMADA INTELIGENTE: verifica o que já foi coletado
+            # para não fazer o paciente repetir etapas já concluídas
+            # ==========================================
+            nome_salvo = info.get("title", "").strip()
+            unit_salvo = info.get("unit", "").strip()
+            
+            if nome_salvo and unit_salvo:
+                # Já tem nome e unidade — retoma do próximo passo
+                import sys
+                print(f"[TRIAGEM] Retomada inteligente — unit={unit_salvo} nome={nome_salvo}", file=sys.stderr)
+                
+                # Descobre qual é o próximo status correto
+                servico_salvo = info.get("servico", "")
+                convenio_salvo = info.get("convenio", "")
+                
+                if info.get("cpf"):
+                    # Tem CPF — provavelmente estava em agendando
+                    update_paciente(phone, {"status": "agendando"})
+                    enviar_botoes(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar seu agendamento.\n\nQual o melhor período para você? ☀️ ⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
+                elif servico_salvo and convenio_salvo:
+                    # Tem serviço e convênio — precisa só do CPF
+                    update_paciente(phone, {"status": "cpf"})
+                    responder_texto(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar seu cadastro.\n\nPara validarmos o seu registro, digite o seu CPF (apenas os 11 números):")
+                elif servico_salvo:
+                    # Tem serviço mas não convênio — retoma na queixa/modalidade
+                    update_paciente(phone, {"status": "cadastrando_queixa"})
+                    responder_texto(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar.\n\nMe conte brevemente: o que te trouxe à clínica hoje?")
+                else:
+                    # Tem nome e unidade mas não serviço — retoma na escolha de especialidade
+                    update_paciente(phone, {"status": "escolhendo_especialidade"})
+                    secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
+                    enviar_lista(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar.\n\nQual serviço você procura hoje?", "Ver Serviços", secoes)
+                return jsonify({"status": "retomada_inteligente"}), 200
+
+            # Sem dados anteriores — começa do zero normalmente
             update_paciente(phone, {"status": "escolhendo_unidade"})
             if info.get("is_historico"):
                 enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta à Conectifisio.\n\nPara iniciarmos seu novo atendimento, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
@@ -1955,8 +1979,13 @@ def webhook():
                     update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "agendando"})
                     enviar_botoes(phone, f"{acolhimento}\n\nComo você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
-                    update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro, por favor digite seu NOME COMPLETO (conforme documento):")
+                    if info.get("title") and len(info["title"].strip()) >= 2:
+                        # Nome já coletado em cadastrando_nome — pular direto para CPF
+                        update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cpf"})
+                        responder_texto(phone, f"{acolhimento}\n\nPara validarmos o seu registro, digite o seu CPF (apenas os 11 números):")
+                    else:
+                        update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cadastrando_nome_completo"})
+                        responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro, por favor digite seu NOME COMPLETO (conforme documento):")
             else:
                 update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "modalidade"})
                 conv_salvo = info.get("convenio", "")
@@ -1976,8 +2005,12 @@ def webhook():
                     update_paciente(phone, {"modalidade": "Particular", "status": "agendando"})
                     enviar_botoes(phone, "Perfeito! Como você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
-                    update_paciente(phone, {"modalidade": "Particular", "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
+                    if info.get("title") and len(info["title"].strip()) >= 2:
+                        update_paciente(phone, {"modalidade": "Particular", "status": "cpf"})
+                        responder_texto(phone, "Perfeito! Para validarmos seu registro, digite seu CPF (apenas os 11 números):")
+                    else:
+                        update_paciente(phone, {"modalidade": "Particular", "status": "cadastrando_nome_completo"})
+                        responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
 
         elif status == "nome_convenio":
             convenio_selecionado = msg_recebida
@@ -1995,8 +2028,12 @@ def webhook():
                     update_paciente(phone, {"convenio": convenio_selecionado, "status": "num_carteirinha"})
                     responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nComo você já é nosso paciente, pulei o preenchimento de CPF e E-mail! Para atualizarmos o seu cadastro, qual o NÚMERO DA SUA NOVA CARTEIRINHA? (Apenas números)")
                 else:
-                    update_paciente(phone, {"convenio": convenio_selecionado, "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
+                    if info.get("title") and len(info["title"].strip()) >= 2:
+                        update_paciente(phone, {"convenio": convenio_selecionado, "status": "cpf"})
+                        responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nPara validarmos o seu registro, digite seu CPF (apenas os 11 números):")
+                    else:
+                        update_paciente(phone, {"convenio": convenio_selecionado, "status": "cadastrando_nome_completo"})
+                        responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
 
         elif status == "cobertura_recusada":
             if "Particular" in msg_recebida:
