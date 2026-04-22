@@ -926,7 +926,7 @@
             const btn = e.target.querySelector('button[type=submit]');
             
             errorEl.classList.add('hidden');
-            btn.innerHTML = '<svg class="animate-spin w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Entrando...';
+            btn.textContent = 'Entrando...';
             btn.disabled = true;
 
             try {
@@ -1593,7 +1593,6 @@
                                         <button onclick="event.stopPropagation(); toggleBot('${p.id}', '${p.status}')" class="px-2 py-1.5 rounded font-bold ${p.status === 'pausado' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}">
                                             ${p.status === 'pausado' ? 'Robô OFF' : 'Robô ON'}
                                         </button>
-                                        ${p.status === 'pausado' ? '<button onclick="event.stopPropagation(); retormarCadastro(\'' + p.id + '\'')" class="px-2 py-1.5 rounded font-bold bg-amber-100 text-amber-700 text-[10px]" title="Retoma o cadastro">↩ Retomar</button>' : ''}
                                         <button onclick="event.stopPropagation(); arquivarComAuditoria('${p.id}', '${safeTitle}', '${p.unit || 'Ipiranga'}')" class="bg-slate-800 text-white px-3 py-1.5 rounded font-bold shadow-sm">Finalizar</button>
                                     </div>
                                 </div>`;
@@ -2426,8 +2425,7 @@
 
             if(!texto && !fileData) return;
 
-            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-white"></i>`;
-            if(window.lucide) window.lucide.createIcons();
+            if (btn) btn.disabled = true;
 
             try {
                 const payload = { 
@@ -2486,19 +2484,6 @@
         }
 
         // Inicialização
-
-        // ==========================================
-        // RETOMAR CADASTRO
-        // ==========================================
-        async function retormarCadastro(phone) {
-            if (!confirm('Reativar o bot e retomar o cadastro de onde parou?')) return;
-            try {
-                await fetch(`${API_UPDATE}&phone=${encodeURIComponent(phone)}&status=triagem`);
-                showToast('↩ Bot reativado — retomando cadastro', 'info');
-                fetchData();
-            } catch(e) { alert('Erro: ' + e.message); }
-        }
-
         window.onload = checkLogin;
     </script>
 </body>
