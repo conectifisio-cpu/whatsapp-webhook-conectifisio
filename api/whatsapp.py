@@ -735,45 +735,32 @@ def integrar_feegow(phone, info):
 # ==========================================
 def chamar_ia_custom(query):
     """
-    Chama o modelo base gpt-4o-mini para acolhimento empático de queixas.
-    IMPORTANTE: NÃO usar o modelo fine-tuned (conectifisio-v1) aqui —
-    ele foi treinado para FAQ e gera respostas inadequadas para acolhimento.
+    Chama o modelo customizado da OpenAI (conectifisio-v1) para acolhimento e triagem.
     """
     if not OPENAI_API_KEY: 
+        # Fallback para Gemini se OpenAI não estiver configurada
         return chamar_gemini(query)
         
-    system_prompt = (
-        "Você é o assistente virtual da ConectiFisio, clínica de fisioterapia em São Paulo. "
-        "O paciente acabou de descrever sua queixa ou motivo de contato. "
-        "Responda com UMA frase curta de acolhimento empático (máximo 2 linhas), "
-        "reconhecendo a situação do paciente de forma calorosa e humana. "
-        "NÃO ofereça informações sobre convênios, valores ou procedimentos. "
-        "NÃO faça perguntas. Apenas acolha."
-    )
+    system_prompt = "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural."
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "gpt-4o-mini",  # Modelo BASE — não o fine-tuned (conectifisio-v1 é para FAQ)
+        "model": OPENAI_MODEL,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query[:300]}
+            {"role": "user", "content": query[:500]}
         ],
-        "max_tokens": 80,
-        "temperature": 0.5
+        "max_tokens": 150,
+        "temperature": 0.7
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
-            resposta = res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-            import sys
-            print(f"[ACOLHIMENTO] '{resposta[:80]}'", file=sys.stderr)
-            return resposta
-    except Exception as e:
-        import sys
-        print(f"[ACOLHIMENTO] Erro OpenAI: {e}", file=sys.stderr)
+            return res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+    except: pass
     return chamar_gemini(query)
 
 def chamar_gemini(query):
@@ -1568,42 +1555,6 @@ def webhook():
             return jsonify({"status": "instagram_lead_qualificado"}), 200
 
         if status == "triagem":
-            # ==========================================
-            # RETOMADA INTELIGENTE: verifica o que já foi coletado
-            # para não fazer o paciente repetir etapas já concluídas
-            # ==========================================
-            nome_salvo = info.get("title", "").strip()
-            unit_salvo = info.get("unit", "").strip()
-            
-            if nome_salvo and unit_salvo:
-                # Já tem nome e unidade — retoma do próximo passo
-                import sys
-                print(f"[TRIAGEM] Retomada inteligente — unit={unit_salvo} nome={nome_salvo}", file=sys.stderr)
-                
-                # Descobre qual é o próximo status correto
-                servico_salvo = info.get("servico", "")
-                convenio_salvo = info.get("convenio", "")
-                
-                if info.get("cpf"):
-                    # Tem CPF — provavelmente estava em agendando
-                    update_paciente(phone, {"status": "agendando"})
-                    enviar_botoes(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar seu agendamento.\n\nQual o melhor período para você? ☀️ ⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
-                elif servico_salvo and convenio_salvo:
-                    # Tem serviço e convênio — precisa só do CPF
-                    update_paciente(phone, {"status": "cpf"})
-                    responder_texto(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar seu cadastro.\n\nPara validarmos o seu registro, digite o seu CPF (apenas os 11 números):")
-                elif servico_salvo:
-                    # Tem serviço mas não convênio — retoma na queixa/modalidade
-                    update_paciente(phone, {"status": "cadastrando_queixa"})
-                    responder_texto(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar.\n\nMe conte brevemente: o que te trouxe à clínica hoje?")
-                else:
-                    # Tem nome e unidade mas não serviço — retoma na escolha de especialidade
-                    update_paciente(phone, {"status": "escolhendo_especialidade"})
-                    secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
-                    enviar_lista(phone, f"Olá, {nome_salvo.split()[0]}! 😊 Vamos continuar.\n\nQual serviço você procura hoje?", "Ver Serviços", secoes)
-                return jsonify({"status": "retomada_inteligente"}), 200
-
-            # Sem dados anteriores — começa do zero normalmente
             update_paciente(phone, {"status": "escolhendo_unidade"})
             if info.get("is_historico"):
                 enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta à Conectifisio.\n\nPara iniciarmos seu novo atendimento, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
@@ -1979,13 +1930,8 @@ def webhook():
                     update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "agendando"})
                     enviar_botoes(phone, f"{acolhimento}\n\nComo você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
-                    if info.get("title") and len(info["title"].strip()) >= 2:
-                        # Nome já coletado em cadastrando_nome — pular direto para CPF
-                        update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cpf"})
-                        responder_texto(phone, f"{acolhimento}\n\nPara validarmos o seu registro, digite o seu CPF (apenas os 11 números):")
-                    else:
-                        update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cadastrando_nome_completo"})
-                        responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro, por favor digite seu NOME COMPLETO (conforme documento):")
+                    update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cadastrando_nome_completo"})
+                    responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro, por favor digite seu NOME COMPLETO (conforme documento):")
             else:
                 update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "modalidade"})
                 conv_salvo = info.get("convenio", "")
@@ -2005,12 +1951,8 @@ def webhook():
                     update_paciente(phone, {"modalidade": "Particular", "status": "agendando"})
                     enviar_botoes(phone, "Perfeito! Como você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
-                    if info.get("title") and len(info["title"].strip()) >= 2:
-                        update_paciente(phone, {"modalidade": "Particular", "status": "cpf"})
-                        responder_texto(phone, "Perfeito! Para validarmos seu registro, digite seu CPF (apenas os 11 números):")
-                    else:
-                        update_paciente(phone, {"modalidade": "Particular", "status": "cadastrando_nome_completo"})
-                        responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
+                    update_paciente(phone, {"modalidade": "Particular", "status": "cadastrando_nome_completo"})
+                    responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
 
         elif status == "nome_convenio":
             convenio_selecionado = msg_recebida
@@ -2028,12 +1970,8 @@ def webhook():
                     update_paciente(phone, {"convenio": convenio_selecionado, "status": "num_carteirinha"})
                     responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nComo você já é nosso paciente, pulei o preenchimento de CPF e E-mail! Para atualizarmos o seu cadastro, qual o NÚMERO DA SUA NOVA CARTEIRINHA? (Apenas números)")
                 else:
-                    if info.get("title") and len(info["title"].strip()) >= 2:
-                        update_paciente(phone, {"convenio": convenio_selecionado, "status": "cpf"})
-                        responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nPara validarmos o seu registro, digite seu CPF (apenas os 11 números):")
-                    else:
-                        update_paciente(phone, {"convenio": convenio_selecionado, "status": "cadastrando_nome_completo"})
-                        responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
+                    update_paciente(phone, {"convenio": convenio_selecionado, "status": "cadastrando_nome_completo"})
+                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
 
         elif status == "cobertura_recusada":
             if "Particular" in msg_recebida:
@@ -2253,6 +2191,73 @@ def chat_manual():
         import traceback, sys
         print(traceback.format_exc(), file=sys.stderr)
         return jsonify({"success": False, "error": f"Erro de conexão/servidor: {str(e)}"}), 500
+
+
+@app.route("/api/testar-amil", methods=["GET"])
+def testar_amil():
+    """Endpoint temporario para testar elegibilidade Amil TISS 4.02.00. Remover apos validacao."""
+    token = request.args.get("token", "")
+    if token != os.environ.get("VERIFY_TOKEN", ""):
+        return jsonify({"erro": "Token invalido"}), 403
+    cpf = re.sub(r"\D", "", request.args.get("cpf", ""))
+    if len(cpf) != 11:
+        return jsonify({"erro": "CPF invalido — informe 11 digitos: ?cpf=12345678901&token=..."}), 400
+    AMIL_USER = os.environ.get("AMIL_USERNAME", "")
+    AMIL_PASS = os.environ.get("AMIL_PASSWORD", "")
+    if not AMIL_USER or not AMIL_PASS:
+        return jsonify({"erro": "AMIL_USERNAME ou AMIL_PASSWORD nao configurados no Cloud Run"}), 500
+    import hashlib, uuid
+    senha_md5 = hashlib.md5(AMIL_PASS.encode()).hexdigest()
+    seq = str(uuid.uuid4().int)[:10]
+    agora = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+    hoje = datetime.utcnow().strftime("%Y-%m-%d")
+    soap = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"'
+        ' xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas">'
+        '<soapenv:Header/><soapenv:Body><ans:mensagemTISS>'
+        '<ans:cabecalhoTransacao><ans:identificacaoTransacao>'
+        f'<ans:tipoTransacao>VERIFICA_ELEGIBILIDADE</ans:tipoTransacao>'
+        f'<ans:sequencialTransacao>{seq}</ans:sequencialTransacao>'
+        f'<ans:dataRegistroTransacao>{hoje}</ans:dataRegistroTransacao>'
+        f'<ans:horaRegistroTransacao>{agora}</ans:horaRegistroTransacao>'
+        '</ans:identificacaoTransacao>'
+        f'<ans:origem><ans:identificacaoPrestador>'
+        f'<ans:codigoPrestadorNaOperadora>{AMIL_USER}</ans:codigoPrestadorNaOperadora>'
+        f'</ans:identificacaoPrestador></ans:origem>'
+        '<ans:destino><ans:registroANS>326305</ans:registroANS></ans:destino>'
+        '<ans:Padrao>4.02.00</ans:Padrao>'
+        f'<ans:loginPrestador><ans:login>{AMIL_USER}</ans:login>'
+        f'<ans:senha>{senha_md5}</ans:senha></ans:loginPrestador>'
+        '</ans:cabecalhoTransacao>'
+        '<ans:prestadorParaOperadora><ans:pedidoElegibilidade>'
+        f'<ans:dadosPrestador><ans:codigoPrestadorNaOperadora>{AMIL_USER}'
+        f'</ans:codigoPrestadorNaOperadora></ans:dadosPrestador>'
+        f'<ans:dadosBeneficiario><ans:cpfBeneficiario>{cpf}'
+        f'</ans:cpfBeneficiario></ans:dadosBeneficiario>'
+        '</ans:pedidoElegibilidade></ans:prestadorParaOperadora>'
+        '</ans:mensagemTISS></soapenv:Body></soapenv:Envelope>'
+    )
+    try:
+        import sys as _sys_amil
+        _sys_amil.stderr.write(f"[AMIL-TESTE] CPF={cpf[:3]}***{cpf[-2:]} USER={AMIL_USER[:3]}***\n")
+        resp = requests.post(
+            "https://api.servicos.grupoamil.com.br/api-tiss-verifica-elegibilidade/v4.02.00",
+            data=soap.encode("utf-8"),
+            headers={
+                "Content-Type": "text/xml;charset=UTF-8",
+                "SOAPAction": "tissVerificaElegibilidade_Operation"
+            },
+            timeout=15
+        )
+        return jsonify({
+            "http_status": resp.status_code,
+            "cpf_testado": cpf[:3] + "***" + cpf[-2:],
+            "prestador": AMIL_USER[:3] + "***",
+            "resposta_xml": resp.text
+        })
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
 
 if __name__ == "__main__":
     # Cloud Run define PORT=8080 automaticamente. Fallback para 5000 em desenvolvimento local.
