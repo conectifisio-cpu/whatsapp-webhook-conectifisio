@@ -39,7 +39,8 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini:conectifisio-v1") # Modelo customizado
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini-2024-07-18:conectifisio:conectifisio-v1:DRoJrLoz") # Modelo FAQ v1 (legado)
+OPENAI_FAQ_MODEL = os.environ.get("OPENAI_FAQ_MODEL", OPENAI_MODEL) # Modelo FAQ ativo (v2 quando disponível)
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "conectifisio_webhook_2026")
 
@@ -223,7 +224,7 @@ def _busca_por_ia(mensagem, faq_data):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": OPENAI_MODEL,
+        "model": OPENAI_FAQ_MODEL,  # Usa o modelo FAQ específico (conectifisio-v2)
         "messages": [
             {"role": "system", "content": "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural. Se a mensagem nao for uma duvida sobre a clinica (saudacao, agradecimento ou assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
             {"role": "user", "content": prompt[:3000]}
@@ -735,32 +736,45 @@ def integrar_feegow(phone, info):
 # ==========================================
 def chamar_ia_custom(query):
     """
-    Chama o modelo customizado da OpenAI (conectifisio-v1) para acolhimento e triagem.
+    Chama o modelo BASE gpt-4o-mini para acolhimento empático de queixas.
+    IMPORTANTE: NÃO usar o modelo fine-tuned aqui —
+    ele foi treinado para FAQ e gera respostas inadequadas para acolhimento.
     """
-    if not OPENAI_API_KEY: 
-        # Fallback para Gemini se OpenAI não estiver configurada
+    if not OPENAI_API_KEY:
         return chamar_gemini(query)
-        
-    system_prompt = "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural."
+
+    system_prompt = (
+        "Você é o assistente virtual da ConectiFisio, clínica de fisioterapia em São Paulo. "
+        "O paciente acabou de descrever sua queixa ou motivo de contato. "
+        "Responda com UMA frase curta de acolhimento empático (máximo 2 linhas), "
+        "reconhecendo a situação do paciente de forma calorosa e humana. "
+        "NÃO ofereça informações sobre convênios, valores ou procedimentos. "
+        "NÃO faça perguntas. Apenas acolha."
+    )
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "model": OPENAI_MODEL,
+        "model": "gpt-4o-mini",  # Modelo BASE — não o fine-tuned (conectifisio-v* é para FAQ)
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query[:500]}
+            {"role": "user", "content": query[:300]}
         ],
-        "max_tokens": 150,
-        "temperature": 0.7
+        "max_tokens": 80,
+        "temperature": 0.5
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=15)
         if res.status_code == 200:
-            return res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-    except: pass
+            resposta = res.json().get('choices', [{}])[0].get('message', {}).get('content', '').strip()
+            import sys
+            print(f"[ACOLHIMENTO] '{resposta[:80]}'", file=sys.stderr)
+            return resposta
+    except Exception as e:
+        import sys
+        print(f"[ACOLHIMENTO] Erro OpenAI: {e}", file=sys.stderr)
     return chamar_gemini(query)
 
 def chamar_gemini(query):
@@ -1413,16 +1427,90 @@ def webhook():
         # Nunca interrompe um fluxo ativo de agendamento
         # ==========================================
         # ==========================================
-        # 🧠 FAQ COM IA — DESATIVADO TEMPORARIAMENTE
-        # Causando interferência no fluxo de atendimento
-        # Reativar após revisão do modelo OpenAI
+        # 🎫 DETECÇÃO DE TOKEN DE CONVÊNIO
+        # Sequência numérica de 6-10 dígitos = token do convênio
+        # Salva no Firebase e notifica a recepção
         # ==========================================
-        # STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "atendimento_humano", "pausado"]
-        # if msg_type == "text" and len(msg_limpa) > 5 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
-        #     resposta_faq = consultar_faq(msg_recebida)
-        #     if resposta_faq and resposta_faq.upper() != "NENHUMA":
-        #         responder_texto(phone, resposta_faq)
-        #         return jsonify({"status": "faq_respondido"}), 200
+        import re as _re_token
+        _token_match = _re_token.fullmatch(r'[0-9]{6,10}', msg_limpa.strip())
+        _tem_palavra_token = any(w in msg_limpa for w in ["token", "tokem", "tokken", "código", "codigo", "autorização", "autorizacao"])
+        
+        if _token_match or (_tem_palavra_token and any(c.isdigit() for c in msg_recebida)):
+            # Extrair o número do token
+            _numeros = _re_token.findall(r'[0-9]{6,10}', msg_recebida)
+            _token_valor = _numeros[0] if _numeros else msg_recebida.strip()
+            
+            import sys
+            print(f"[TOKEN] Token detectado: {_token_valor} — phone={phone}", file=sys.stderr)
+            
+            update_paciente(phone, {
+                "token_convenio": _token_valor,
+                "token_recebido_em": agora_iso,
+                "status": "pausado",
+                "unread": True,
+                "ultima_mensagem_paciente": f"[TOKEN]: {_token_valor}"
+            })
+            responder_texto(phone, f"Token *{_token_valor}* recebido! ✅ Nossa recepção já foi notificada e vai registrar a autorização. 😊")
+            return jsonify({"status": "token_registrado"}), 200
+
+        # ==========================================
+        # 🧠 FAQ COM IA — ATIVO (conectifisio-v2)
+        # Responde dúvidas de pacientes fora do fluxo de agendamento.
+        # Quando encaminha para recepção, muda status para pausado
+        # para o card aparecer no kanban.
+        # ==========================================
+        # ==========================================
+        # INTERCEPTAÇÃO DE PERÍODO APÓS FAQ
+        # Se FAQ perguntou período e paciente respondeu — bot assume ANTES do FAQ ser chamado
+        # ==========================================
+        _periodos = ["manhã", "manha", "tarde", "noite", "de manhã", "de manha", "de tarde", "de noite", "pela manhã", "pela tarde", "pela noite"]
+        if info.get("faq_encaminhou") and msg_limpa.strip() in _periodos:
+            import sys
+            print(f"[FAQ→BOT] Período '{msg_recebida}' capturado — iniciando fluxo", file=sys.stderr)
+            update_paciente(phone, {
+                "status": "escolhendo_unidade",
+                "faq_encaminhou": False,
+                "periodo_preferido": msg_recebida
+            })
+            enviar_botoes(phone,
+                f"Ótimo! Para iniciarmos, em qual unidade você deseja ser atendido? 😊",
+                [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+            )
+            return jsonify({"status": "faq_periodo_capturado"}), 200
+
+        STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "atendimento_humano", "pausado", "arquivado"]
+        if msg_type == "text" and len(msg_limpa) > 3 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
+            resposta_faq = consultar_faq(msg_recebida)
+            if resposta_faq and resposta_faq.upper() != "NENHUMA":
+                import sys
+                print(f"[FAQ] Respondendo: '{resposta_faq[:60]}'", file=sys.stderr)
+                responder_texto(phone, resposta_faq)
+                # ==========================================
+                # PASSAGEM DE BASTÃO INTELIGENTE
+                # FAQ → Bot ou FAQ → Colaborador
+                # ==========================================
+                if "vou encaminhar" in resposta_faq.lower():
+                    import sys
+                    if "manhã, tarde ou noite" in resposta_faq.lower():
+                        # Paciente quer agendar — bot assume e pergunta período com botões
+                        # O bot vai mostrar botões [Manhã] [Tarde] [Noite] de forma estruturada
+                        update_paciente(phone, {
+                            "status": "triagem",
+                            "ultima_mensagem_paciente": msg_recebida,
+                            "faq_encaminhou": True
+                        })
+                        print(f"[FAQ→BOT] Iniciando fluxo de cadastro para {phone}", file=sys.stderr)
+                    else:
+                        # Encaminhamento administrativo (declaração, relatório, token, etc)
+                        # Colaborador assume via kanban
+                        update_paciente(phone, {
+                            "status": "pausado",
+                            "ultima_mensagem_paciente": msg_recebida,
+                            "unread": True,
+                            "faq_encaminhou": True
+                        })
+                        print(f"[FAQ→HUMANO] Encaminhou para recepção: {msg_recebida[:50]}", file=sys.stderr)
+                return jsonify({"status": "faq_respondido"}), 200
 
         # ==========================================
         # 🚀 A MÁQUINA DO TEMPO (INTERCEPTAÇÃO GLOBAL)
@@ -1470,6 +1558,20 @@ def webhook():
 
         # MUTE / ARQUIVADO
         if status == "pausado":
+            # Se FAQ encaminhou e paciente respondeu com período — retoma fluxo
+            if info.get("faq_encaminhou") and msg_limpa in ["manhã", "tarde", "noite", "de manhã", "de tarde", "de noite", "pela manhã", "pela tarde", "pela noite"]:
+                import sys
+                print(f"[FAQ→BOT] Paciente respondeu período '{msg_recebida}' — iniciando fluxo", file=sys.stderr)
+                update_paciente(phone, {
+                    "status": "escolhendo_unidade",
+                    "faq_encaminhou": False,
+                    "periodo_preferido": msg_recebida
+                })
+                enviar_botoes(phone,
+                    f"Ótimo! Para iniciarmos, em qual unidade você deseja ser atendido? 😊",
+                    [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                )
+                return jsonify({"status": "faq_periodo_capturado"}), 200
             update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida, "unread": True})
             return jsonify({"status": "bot_silenciado"}), 200
             
@@ -1555,6 +1657,21 @@ def webhook():
             return jsonify({"status": "instagram_lead_qualificado"}), 200
 
         if status == "triagem":
+            # ==========================================
+            # FAQ ENCAMINHOU — inicia fluxo direto
+            # O FAQ já explicou o serviço, bot pergunta a unidade
+            # ==========================================
+            if info.get("faq_encaminhou"):
+                update_paciente(phone, {
+                    "status": "escolhendo_unidade",
+                    "faq_encaminhou": False
+                })
+                enviar_botoes(phone,
+                    "Para iniciarmos seu atendimento, em qual unidade você deseja ser atendido? 😊",
+                    [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                )
+                return jsonify({"status": "faq_para_fluxo"}), 200
+
             update_paciente(phone, {"status": "escolhendo_unidade"})
             if info.get("is_historico"):
                 enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta à Conectifisio.\n\nPara iniciarmos seu novo atendimento, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
@@ -2191,73 +2308,6 @@ def chat_manual():
         import traceback, sys
         print(traceback.format_exc(), file=sys.stderr)
         return jsonify({"success": False, "error": f"Erro de conexão/servidor: {str(e)}"}), 500
-
-
-@app.route("/api/testar-amil", methods=["GET"])
-def testar_amil():
-    """Endpoint temporario para testar elegibilidade Amil TISS 4.02.00. Remover apos validacao."""
-    token = request.args.get("token", "")
-    if token != os.environ.get("VERIFY_TOKEN", ""):
-        return jsonify({"erro": "Token invalido"}), 403
-    cpf = re.sub(r"\D", "", request.args.get("cpf", ""))
-    if len(cpf) != 11:
-        return jsonify({"erro": "CPF invalido — informe 11 digitos: ?cpf=12345678901&token=..."}), 400
-    AMIL_USER = os.environ.get("AMIL_USERNAME", "")
-    AMIL_PASS = os.environ.get("AMIL_PASSWORD", "")
-    if not AMIL_USER or not AMIL_PASS:
-        return jsonify({"erro": "AMIL_USERNAME ou AMIL_PASSWORD nao configurados no Cloud Run"}), 500
-    import hashlib, uuid
-    senha_md5 = hashlib.md5(AMIL_PASS.encode()).hexdigest()
-    seq = str(uuid.uuid4().int)[:10]
-    agora = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-    hoje = datetime.utcnow().strftime("%Y-%m-%d")
-    soap = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"'
-        ' xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas">'
-        '<soapenv:Header/><soapenv:Body><ans:mensagemTISS>'
-        '<ans:cabecalhoTransacao><ans:identificacaoTransacao>'
-        f'<ans:tipoTransacao>VERIFICA_ELEGIBILIDADE</ans:tipoTransacao>'
-        f'<ans:sequencialTransacao>{seq}</ans:sequencialTransacao>'
-        f'<ans:dataRegistroTransacao>{hoje}</ans:dataRegistroTransacao>'
-        f'<ans:horaRegistroTransacao>{agora}</ans:horaRegistroTransacao>'
-        '</ans:identificacaoTransacao>'
-        f'<ans:origem><ans:identificacaoPrestador>'
-        f'<ans:codigoPrestadorNaOperadora>{AMIL_USER}</ans:codigoPrestadorNaOperadora>'
-        f'</ans:identificacaoPrestador></ans:origem>'
-        '<ans:destino><ans:registroANS>326305</ans:registroANS></ans:destino>'
-        '<ans:Padrao>4.02.00</ans:Padrao>'
-        f'<ans:loginPrestador><ans:login>{AMIL_USER}</ans:login>'
-        f'<ans:senha>{senha_md5}</ans:senha></ans:loginPrestador>'
-        '</ans:cabecalhoTransacao>'
-        '<ans:prestadorParaOperadora><ans:pedidoElegibilidade>'
-        f'<ans:dadosPrestador><ans:codigoPrestadorNaOperadora>{AMIL_USER}'
-        f'</ans:codigoPrestadorNaOperadora></ans:dadosPrestador>'
-        f'<ans:dadosBeneficiario><ans:cpfBeneficiario>{cpf}'
-        f'</ans:cpfBeneficiario></ans:dadosBeneficiario>'
-        '</ans:pedidoElegibilidade></ans:prestadorParaOperadora>'
-        '</ans:mensagemTISS></soapenv:Body></soapenv:Envelope>'
-    )
-    try:
-        import sys as _sys_amil
-        _sys_amil.stderr.write(f"[AMIL-TESTE] CPF={cpf[:3]}***{cpf[-2:]} USER={AMIL_USER[:3]}***\n")
-        resp = requests.post(
-            "https://api.servicos.grupoamil.com.br/api-tiss-verifica-elegibilidade/v4.02.00",
-            data=soap.encode("utf-8"),
-            headers={
-                "Content-Type": "text/xml;charset=UTF-8",
-                "SOAPAction": "tissVerificaElegibilidade_Operation"
-            },
-            timeout=15
-        )
-        return jsonify({
-            "http_status": resp.status_code,
-            "cpf_testado": cpf[:3] + "***" + cpf[-2:],
-            "prestador": AMIL_USER[:3] + "***",
-            "resposta_xml": resp.text
-        })
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
 
 if __name__ == "__main__":
     # Cloud Run define PORT=8080 automaticamente. Fallback para 5000 em desenvolvimento local.
