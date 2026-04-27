@@ -257,17 +257,11 @@ def consultar_faq(mensagem):
     msg_limpa = mensagem.lower().strip()
     faq_data = _carregar_faq()
 
-    # Estágio 1: palavras-chave no Firestore (só se tiver conteúdo)
-    if faq_data:
-        match_kw = _busca_por_keywords(msg_limpa, faq_data)
-        if match_kw:
-            print("[FAQ-KW] Respondendo por palavra-chave do Firestore", file=sys.stderr)
-            return match_kw
-
-    # Estágio 2: OpenAI sempre — com ou sem FAQ no Firestore
-    match_ia = _busca_por_ia(mensagem, faq_data)
+    # Estágio único: modelo fine-tuned v5 — ignora keywords do Firestore
+    # O Firestore tem respostas antigas incompatíveis com o fluxo atual
+    match_ia = _busca_por_ia(mensagem, [])  # passa lista vazia — modelo responde pelo treinamento
     if match_ia:
-        print("[FAQ-IA] Respondendo via OpenAI", file=sys.stderr)
+        print("[FAQ-IA] Respondendo via modelo v5", file=sys.stderr)
     return match_ia
 
 def update_paciente(phone, data):
@@ -2316,4 +2310,4 @@ def chat_manual():
 if __name__ == "__main__":
     # Cloud Run define PORT=8080 automaticamente. Fallback para 5000 em desenvolvimento local.
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port) 
+    app.run(host="0.0.0.0", port=port)
