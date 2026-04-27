@@ -1616,7 +1616,11 @@ def webhook():
             enviar_botoes(phone, "Olá! Nossa equipe precisa de mais um tempinho para a resolução da sua solicitação, mas já avisei que você entrou em contato novamente! 😊\n\nSe quiser reiniciar o atendimento, clique abaixo:", [{"id": "menu_ini", "title": "Menu Inicial"}])
             return jsonify({"status": "aguardando_equipe"}), 200
             
-        if any(msg_limpa.startswith(w) for w in ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]) and status not in ["triagem", "escolhendo_unidade"]:
+        # Escudo de saudação — só ativa se for APENAS saudação (sem conteúdo adicional)
+        # "Boa noite" → escudo ativa | "Boa noite, vocês atendem Amil?" → FAQ atua
+        _saudacoes = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]
+        _eh_so_saudacao = any(msg_limpa.strip() == w or msg_limpa.strip() == w + "!" or msg_limpa.strip() == w + "." for w in _saudacoes)
+        if _eh_so_saudacao and status not in ["triagem", "escolhendo_unidade"]:
              enviar_botoes(phone, "Olá! ✨ Notei que estávamos no meio do seu atendimento. Deseja continuar de onde paramos?", [{"id": "c_sim", "title": "Sim, continuar"}, {"id": "menu_ini", "title": "Recomeçar"}])
              return jsonify({"status": "retomada"}), 200
              
