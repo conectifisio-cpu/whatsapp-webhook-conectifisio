@@ -922,8 +922,41 @@ def _thread_verificar_porto(phone, cpf, numero_id):
         msg = chr(10).join(linhas)
         update_paciente(phone, {"status": "pausado", "unread": True, "porto_elegivel": False})
     
+    # Envia resultado e continua fluxo se elegível
     enviar_whatsapp(phone, {"type": "text", "text": {"body": msg}}, numero_id=numero_id)
     registrar_historico(phone, "robo", "texto", msg)
+    
+    if resultado.get("elegivel"):
+        import time
+        time.sleep(1)
+        # API já retornou: nome, plano, validade, número carteirinha, uuid
+        # Só falta: data de nascimento e email
+        nome = resultado.get("nome", "")
+        plano = resultado.get("plano", "")
+        validade = resultado.get("validade_carteira", "")
+        num_carteirinha = resultado.get("numeroCartao", "") or resultado.get("uuid", "")[:14]
+        
+        # Salvar todos os dados retornados pela API Porto Seguro
+        update_paciente(phone, {
+            "title": nome,
+            "convenio": "Porto Seguro Saúde",
+            "plano_porto": plano,
+            "numCarteirinha": num_carteirinha,
+            "validade_carteirinha": validade,
+            "modalidade": "Convenio",
+            "porto_elegivel": True,
+            "status": "data_nascimento"  # Só precisa de nascimento e email
+        })
+        
+        msg2 = (
+            "Perfeito! Ja identifiquei seu cadastro no Porto Seguro." + chr(10) +
+            "Nome: " + nome + chr(10) +
+            "Plano: " + plano + chr(10) + chr(10) +
+            "Para completar seu cadastro, qual sua data de nascimento? (Ex: 15/05/1980)"
+        )
+        enviar_whatsapp(phone, {"type": "text", "text": {"body": msg2}}, numero_id=numero_id)
+        registrar_historico(phone, "robo", "texto", msg2)
+    
     print("[PORTO-THREAD] Concluido para " + phone, file=sys.stderr)
 
 def iniciar_verificacao_porto_background(phone, cpf, numero_id):
