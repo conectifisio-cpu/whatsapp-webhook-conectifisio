@@ -110,6 +110,12 @@ def validar_cpf(cpf_str):
     return True
 
 def validar_data_nascimento(data_str):
+    # Aceitar ano com 2 dígitos (ex: 15/04/60 → 15/04/1960)
+    if re.match(r'^\d{2}/\d{2}/\d{2}$', data_str):
+        partes = data_str.split('/')
+        ano = int(partes[2])
+        ano_completo = 1900 + ano if ano >= 20 else 2000 + ano
+        data_str = f"{partes[0]}/{partes[1]}/{ano_completo}"
     if not re.match(r'^\d{2}/\d{2}/\d{4}$', data_str):
         return False
     try:
@@ -2416,7 +2422,12 @@ def webhook():
 
         elif status == "num_carteirinha":
             num_limpo = re.sub(r'\D', '', msg_recebida)
-            if len(num_limpo) < 4:
+            # Detectar mensagens de espera — pausar bot em vez de dar erro
+            _espera = ["momento", "aguarda", "agora não", "depois", "vou pegar", "não tenho", "nao tenho", "vou ver", "preciso ver"]
+            if any(e in msg_limpa for e in _espera) and len(num_limpo) < 4:
+                update_paciente(phone, {"status": "pausado", "unread": True, "ultima_mensagem_paciente": msg_recebida})
+                responder_texto(phone, "Sem problema! 😊 Quando tiver o número da carteirinha em mãos, é só me enviar aqui que continuamos.")
+            elif len(num_limpo) < 4:
                 responder_texto(phone, "❌ Número de carteirinha inválido. Por favor, digite apenas os números da sua carteirinha (mínimo 4 dígitos):")
             else:
                 update_paciente(phone, {"numCarteirinha": num_limpo, "status": "foto_carteirinha"})
@@ -2437,7 +2448,13 @@ def webhook():
                 responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO DO SEU PEDIDO MÉDICO.")
 
         elif status == "foto_pedido_medico":
-            if not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto do seu Pedido Médico.")
+            # Aceitar links de pedido médico digital (memed, etc.)
+            _links_pedido = ["memed.com.br", "drconnect", "bula.fiocruz", "receita", "http", "https"]
+            _tem_link_pedido = any(lp in msg_limpa for lp in _links_pedido) and not tem_anexo
+            if _tem_link_pedido:
+                update_paciente(phone, {"status": "agendando", "tem_foto_pedido": True, "pedido_link": msg_recebida})
+                enviar_botoes(phone, "Pedido médico digital recebido! 🎉\n\nQual o melhor período para verificarmos a sua vaga?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
+            elif not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto do seu Pedido Médico.")
             else:
                 # Baixa do WhatsApp IMEDIATAMENTE e salva no Firebase Storage
                 media_data = salvar_midia_imediata(phone, "pedido", media_id) if media_id else {}
