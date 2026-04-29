@@ -1679,7 +1679,15 @@ def webhook():
         _token_match = _re_token.fullmatch(r'[0-9]{6,10}', msg_limpa.strip())
         _tem_palavra_token = any(w in msg_limpa for w in ["token", "tokem", "tokken", "código", "codigo", "autorização", "autorizacao"])
         
-        if _token_match or (_tem_palavra_token and any(c.isdigit() for c in msg_recebida)):
+        # Não interceptar como token quando o bot está esperando dados numéricos legítimos
+        _status_espera_numero = status_atual in [
+            "data_nascimento", "cpf", "num_carteirinha",
+            "pilates_part_cpf", "pilates_part_nasc",
+            "pilates_app_cpf", "pilates_app_nasc",
+            "pilates_caixa_cpf", "pilates_caixa_nasc"
+        ]
+        
+        if not _status_espera_numero and (_token_match or (_tem_palavra_token and any(c.isdigit() for c in msg_recebida))):
             # Extrair o número do token
             _numeros = _re_token.findall(r'[0-9]{6,10}', msg_recebida)
             _token_valor = _numeros[0] if _numeros else msg_recebida.strip()
