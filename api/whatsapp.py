@@ -43,6 +43,10 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini-2024-07-18:conecti
 OPENAI_FAQ_MODEL = os.environ.get("OPENAI_FAQ_MODEL", OPENAI_MODEL) # Modelo FAQ ativo (v2 quando disponível)
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "conectifisio_webhook_2026")
+PORTO_SEGURO_CPF = os.environ.get("PORTO_SEGURO_CPF", "25052258852")
+PORTO_SEGURO_SENHA = os.environ.get("PORTO_SEGURO_SENHA", "")
+PORTO_SEGURO_CODIGO_PRESTADOR = "512560"
+PORTO_SEGURO_TUSS_FISIO = "25090089"
 
 # ==========================================
 # INICIALIZAÇÃO DO FIREBASE
@@ -724,6 +728,161 @@ def integrar_feegow(phone, info):
         return {"feegow_id": feegow_id_int, "feegow_status": status_final}
 
     return {"feegow_status": "Erro Integração"}
+
+
+# ==========================================
+# INTEGRAÇÃO PORTO SEGURO — Elegibilidade via Playwright
+# Portal: prestadores.portosaude.com.br
+# Sem captcha — Playwright headless com anti-detecção Imperva
+# ==========================================
+_porto_cache = {"token": None, "ts": 0}
+_PORTO_TOKEN_TTL = 3000  # 50 minutos
+
+def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
+    """Verifica elegibilidade Porto Seguro/Itaú Saúde via portal do prestador.
+    Usa Playwright headless para contornar proteção Imperva reese84.
+    Retorna dict com: elegivel, nome, plano, validade_carteira, negacao, erro"""
+    import sys, time, asyncio
+    
+    if tuss is None:
+        tuss = PORTO_SEGURO_TUSS_FISIO
+    
+    if not PORTO_SEGURO_SENHA:
+        print("[PORTO] PORTO_SEGURO_SENHA não configurada", file=sys.stderr)
+        return {"erro": "Credenciais Porto Seguro não configuradas"}
+    
+    cpf_limpo = re.sub(r'\D', '', str(cpf_paciente))
+    
+    async def _executar():
+        import requests as _req
+        
+        # Obter token (com cache)
+        now = time.time()
+        token = _porto_cache.get("token")
+        if not token or (now - _porto_cache.get("ts", 0)) > _PORTO_TOKEN_TTL:
+            token = await _fazer_login_porto()
+            if token:
+                _porto_cache["token"] = token
+                _porto_cache["ts"] = now
+        
+        if not token:
+            return {"erro": "Falha no login Porto Seguro"}
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://prestadores.portosaude.com.br",
+            "Referer": "https://prestadores.portosaude.com.br/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "New-Index": "0"
+        }
+        BASE = "https://wwws.portoseguro.com.br/go-saud-jdig-prestador-api/v1"
+        
+        try:
+            # Passo 1: Buscar beneficiário por CPF
+            r1 = _req.post(f"{BASE}/authorization/health-card",
+                json={"cpf": cpf_limpo, "carteirinha": ""},
+                headers=headers, timeout=15)
+            
+            if r1.status_code in [401, 403]:
+                _porto_cache["token"] = None  # Token expirado — limpar cache
+                return {"erro": "Token expirado — tente novamente"}
+            
+            if r1.status_code != 200:
+                return {"erro": f"Beneficiário não encontrado (HTTP {r1.status_code})"}
+            
+            cards = r1.json().get("health_cards", [])
+            if not cards:
+                return {"elegivel": False, "motivo": "CPF não encontrado na base Porto Seguro"}
+            
+            card = cards[0]
+            uuid = card.get("uuid")
+            nome = card.get("nome", "")
+            plano = card.get("nomePlano", "")
+            validade = card.get("validadeCartao", "")
+            
+            # Passo 2: Verificar elegibilidade
+            r2 = _req.post(
+                f"{BASE}/authorization/{PORTO_SEGURO_CODIGO_PRESTADOR}/elegibility-check",
+                json={"uuid": uuid, "procedimento": tuss, "regime": "2"},
+                headers=headers, timeout=15)
+            
+            if r2.status_code != 200:
+                return {"erro": f"Erro elegibilidade (HTTP {r2.status_code})"}
+            
+            eleg = r2.json()
+            elegivel = eleg.get("elegivel", False)
+            negacao = eleg.get("negacao", "").strip().strip(",").strip()
+            
+            print(f"[PORTO] CPF {cpf_limpo[:3]}*** elegivel={elegivel}", file=sys.stderr)
+            
+            return {
+                "elegivel": elegivel,
+                "nome": nome,
+                "plano": plano,
+                "validade_carteira": validade,
+                "negacao": negacao if negacao else None,
+                "procedimento": tuss
+            }
+        except Exception as e:
+            print(f"[PORTO] Erro: {e}", file=sys.stderr)
+            return {"erro": str(e)}
+    
+    async def _fazer_login_porto():
+        import sys
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-setuid-sandbox",
+                          "--disable-blink-features=AutomationControlled",
+                          "--disable-dev-shm-usage"]
+                )
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+                    viewport={"width": 1366, "height": 768},
+                    locale="pt-BR"
+                )
+                page = await context.new_page()
+                await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+                
+                token_capturado = None
+                
+                async def interceptar(request):
+                    nonlocal token_capturado
+                    auth = request.headers.get("authorization", "")
+                    if auth.startswith("Bearer ") and len(auth) > 100:
+                        token_capturado = auth.replace("Bearer ", "")
+                
+                page.on("request", interceptar)
+                
+                await page.goto("https://prestadores.portosaude.com.br/portal-prestador/",
+                               wait_until="networkidle", timeout=30000)
+                await page.fill("input[type=\"text\"]", PORTO_SEGURO_CPF)
+                await page.fill("input[type=\"password\"]", PORTO_SEGURO_SENHA)
+                await page.click("button[type=\"submit\"]")
+                await page.wait_for_url("**/portal-prestador/**", timeout=15000)
+                await page.wait_for_timeout(3000)
+                await browser.close()
+                
+                if token_capturado:
+                    print(f"[PORTO] Token capturado com sucesso", file=sys.stderr)
+                return token_capturado
+        except Exception as e:
+            print(f"[PORTO] Erro login: {e}", file=sys.stderr)
+            return None
+    
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        resultado = loop.run_until_complete(_executar())
+        loop.close()
+        return resultado
+    except Exception as e:
+        print(f"[PORTO] Erro loop: {e}", file=sys.stderr)
+        return {"erro": str(e)}
 
 # ==========================================
 # MENSAGERIA E IA
