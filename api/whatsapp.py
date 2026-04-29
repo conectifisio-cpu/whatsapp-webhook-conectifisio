@@ -1100,6 +1100,33 @@ def media_proxy():
 # ==========================================
 # WEBHOOK PRINCIPAL
 # ==========================================
+# ==========================================
+# ENDPOINT: LIGAR/DESLIGAR ROBÔ GLOBALMENTE
+# Botão de emergência do dashboard
+# ==========================================
+@app.route("/api/robo/status", methods=["GET", "POST", "OPTIONS"])
+def robo_status():
+    if request.method == "OPTIONS":
+        return jsonify({"status": "ok"}), 200
+    if not db:
+        return jsonify({"error": "DB indisponivel"}), 500
+    try:
+        config_ref = db.collection("Config").document("global")
+        if request.method == "GET":
+            doc = config_ref.get()
+            robo_on = doc.to_dict().get("robo_ligado", True) if doc.exists else True
+            return jsonify({"robo_ligado": robo_on}), 200
+        elif request.method == "POST":
+            data = request.get_json()
+            robo_on = data.get("robo_ligado", True)
+            config_ref.set({"robo_ligado": robo_on}, merge=True)
+            import sys
+            print(f"[EMERGENCIA] Robô {'LIGADO' if robo_on else 'DESLIGADO'} globalmente", file=sys.stderr)
+            return jsonify({"robo_ligado": robo_on, "ok": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/whatsapp", methods=["GET", "POST", "OPTIONS"])
 def webhook():
     if request.method == "OPTIONS":
@@ -1564,6 +1591,16 @@ def webhook():
     # --- POST: RECEBER MENSAGENS WHATSAPP ---
     data = request.get_json()
     if not data or "entry" not in data: return jsonify({"status": "ok"}), 200
+    
+    # Verificar se robô está ligado globalmente (botão de emergência)
+    if db:
+        try:
+            config_doc = db.collection("Config").document("global").get()
+            if config_doc.exists and config_doc.to_dict().get("robo_ligado") == False:
+                import sys
+                print("[EMERGENCIA] Robô desligado globalmente — mensagem ignorada", file=sys.stderr)
+                return jsonify({"status": "robo_desligado"}), 200
+        except: pass
 
     try:
         val = data["entry"][0]["changes"][0]["value"]
@@ -1964,9 +2001,10 @@ def webhook():
                     responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
 
         elif status == "cadastrando_nome":
-            # Bug 6: Nome Curto (Exigir pelo menos Nome e Sobrenome)
-            if len(msg_limpa.split()) < 2 or msg_recebida.isdigit():
-                responder_texto(phone, "❌ Por favor, digite seu NOME E SOBRENOME para o cadastro:")
+            # Exigir Nome e Sobrenome com pelo menos 2 chars cada
+            partes_nome = [p for p in msg_limpa.split() if len(p) >= 2]
+            if len(partes_nome) < 2 or msg_recebida.isdigit():
+                responder_texto(phone, "❌ Por favor, digite seu NOME E SOBRENOME completos para o cadastro:")
             else:
                 # ==========================================
                 # DETECÇÃO DE TERCEIRO AGENDANDO PARA OUTRO
@@ -2338,7 +2376,10 @@ def webhook():
             # Valida se o convênio veio da lista oficial
             CONVENIOS_VALIDOS = ["Saúde Petrobras", "Mediservice", "Cassi", "Geap Saúde", "Amil",
                                   "Bradesco Saúde", "Porto Seguro Saúde", "Prevent Senior", "Saúde Caixa"]
-            if convenio_selecionado not in CONVENIOS_VALIDOS:
+            CONVENIOS_NAO_ATENDIDOS = ["Unimed", "Sulamerica", "SulAmérica", "Hapvida", "NotreDame", "Notre Dame", "Golden Cross", "Apivida"]
+            if any(c.lower() in convenio_selecionado.lower() for c in CONVENIOS_NAO_ATENDIDOS):
+                responder_texto(phone, f"Infelizmente não atendemos o convênio {convenio_selecionado}. 😊 Os convênios que aceitamos são: Amil, Bradesco Saúde, Porto Seguro, Prevent Senior, Saúde Caixa, Saúde Petrobras, Mediservice, Cassi e Geap Saúde. Gostaria de verificar outra opção ou realizar o atendimento particular?")
+            elif convenio_selecionado not in CONVENIOS_VALIDOS:
                 secoes = [{"title": "Convênios Aceitos", "rows": [{"id": "c1", "title": "Saúde Petrobras"}, {"id": "c2", "title": "Mediservice"}, {"id": "c3", "title": "Cassi"}, {"id": "c4", "title": "Geap Saúde"}, {"id": "c5", "title": "Amil"}, {"id": "c6", "title": "Bradesco Saúde"}, {"id": "c7", "title": "Porto Seguro Saúde"}, {"id": "c8", "title": "Prevent Senior"}, {"id": "c9", "title": "Saúde Caixa"}]}]
                 enviar_lista(phone, "❌ Por favor, selecione um dos convênios disponíveis na lista abaixo:", "Ver Convênios", secoes)
             elif not verificar_cobertura(convenio_selecionado, servico):
@@ -2363,7 +2404,8 @@ def webhook():
                 enviar_lista(phone, "Sem problemas! Qual outro serviço você gostaria de buscar?", "Ver Serviços", secoes)
 
         elif status == "cadastrando_nome_completo":
-            if len(msg_limpa) < 2 or msg_recebida.isdigit(): responder_texto(phone, "❌ Por favor, digite um nome válido.")
+            partes_nc = [p for p in msg_limpa.split() if len(p) >= 2]
+            if len(partes_nc) < 2 or msg_recebida.isdigit(): responder_texto(phone, "❌ Por favor, digite seu NOME E SOBRENOME completos:")
             else:
                 update_paciente(phone, {"title": msg_recebida, "status": "cpf"})
                 responder_texto(phone, "Nome registrado! ✅ Agora, para validarmos o seu registro com segurança junto ao sistema, digite o seu CPF (apenas os 11 números):")
