@@ -889,74 +889,79 @@ def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
 # Evita timeout do WhatsApp (20s) rodando Playwright em thread separada
 # ==========================================
 def _thread_verificar_porto(phone, cpf, numero_id):
-    import sys
+    """Verifica elegibilidade Porto Seguro em background.
+    Em qualquer caso (elegível, inelegível ou erro) continua o fluxo de cadastro.
+    Marca para conferência do colaborador se houver problema."""
+    import sys, time
     print("[PORTO-THREAD] Verificando " + phone, file=sys.stderr)
     resultado = verificar_elegibilidade_porto_seguro(cpf)
     
-    if resultado.get("erro"):
-        msg = "Nao consegui verificar sua elegibilidade no Porto Seguro. Nossa recepcao vai confirmar manualmente em breve."
-        update_paciente(phone, {"status": "pausado", "unread": True})
-    elif resultado.get("elegivel"):
-        nome = resultado.get("nome", "")
-        plano = resultado.get("plano", "")
-        validade = resultado.get("validade_carteira", "")
-        linhas = [
-            "Elegibilidade confirmada pelo Porto Seguro!",
-            "",
-            "Beneficiario: " + nome,
-            "Plano: " + plano,
-            "Validade: " + validade,
-            "",
-            "Nossa recepcao vai confirmar os horarios e retorna em breve."
-        ]
-        msg = chr(10).join(linhas)
-        update_paciente(phone, {"status": "pausado", "unread": True, "porto_elegivel": True, "porto_nome": nome, "porto_plano": plano})
-    else:
-        negacao = resultado.get("negacao") or "Plano sem cobertura"
-        linhas = [
-            "Seu plano Porto Seguro nao possui cobertura para fisioterapia neste momento.",
-            "Motivo: " + negacao,
-            "",
-            "Voce pode realizar o atendimento de forma particular. Gostaria de mais informacoes?"
-        ]
-        msg = chr(10).join(linhas)
-        update_paciente(phone, {"status": "pausado", "unread": True, "porto_elegivel": False})
+    elegivel = resultado.get("elegivel", False)
+    erro = resultado.get("erro")
+    negacao = resultado.get("negacao") or ""
+    nome = resultado.get("nome", "")
+    plano = resultado.get("plano", "")
+    validade = resultado.get("validade_carteira", "")
+    num_carteirinha = resultado.get("numeroCartao", "") or ""
     
-    # Envia resultado e continua fluxo se elegível
-    enviar_whatsapp(phone, {"type": "text", "text": {"body": msg}}, numero_id=numero_id)
-    registrar_historico(phone, "robo", "texto", msg)
-    
-    if resultado.get("elegivel"):
-        import time
-        time.sleep(1)
-        # API já retornou: nome, plano, validade, número carteirinha, uuid
-        # Só falta: data de nascimento e email
-        nome = resultado.get("nome", "")
-        plano = resultado.get("plano", "")
-        validade = resultado.get("validade_carteira", "")
-        num_carteirinha = resultado.get("numeroCartao", "") or resultado.get("uuid", "")[:14]
-        
-        # Salvar todos os dados retornados pela API Porto Seguro
+    if erro:
+        # Erro de conexão ou autenticação — continua cadastro e marca para conferência
+        msg = (
+            "Nao consegui verificar sua elegibilidade automaticamente. " +
+            "Vamos continuar seu cadastro e nossa recepcao vai confirmar a cobertura antes do atendimento."
+        )
+        update_paciente(phone, {
+            "porto_erro": erro,
+            "porto_conferencia": True
+        })
+    elif elegivel:
+        # Elegível — salva dados e informa paciente
+        msg = (
+            "Elegibilidade confirmada pelo Porto Seguro!" + chr(10) + chr(10) +
+            "Nome: " + nome + chr(10) +
+            "Plano: " + plano + chr(10) +
+            "Validade: " + validade
+        )
         update_paciente(phone, {
             "title": nome,
-            "convenio": "Porto Seguro Saúde",
             "plano_porto": plano,
             "numCarteirinha": num_carteirinha,
             "validade_carteirinha": validade,
-            "modalidade": "Convenio",
-            "porto_elegivel": True,
-            "status": "data_nascimento"  # Só precisa de nascimento e email
+            "porto_elegivel": True
         })
-        
-        msg2 = (
-            "Perfeito! Ja identifiquei seu cadastro no Porto Seguro." + chr(10) +
-            "Nome: " + nome + chr(10) +
-            "Plano: " + plano + chr(10) + chr(10) +
-            "Para completar seu cadastro, qual sua data de nascimento? (Ex: 15/05/1980)"
+    else:
+        # Inelegível — informa mas continua o cadastro para conferência manual
+        msg = (
+            "Seu plano Porto Seguro nao possui cobertura ativa no momento." + chr(10) +
+            ("Motivo: " + negacao.strip(",").strip() if negacao.strip(",").strip() else "") + chr(10) + chr(10) +
+            "Vamos continuar seu cadastro e nossa recepcao vai confirmar a situacao antes do atendimento."
         )
-        enviar_whatsapp(phone, {"type": "text", "text": {"body": msg2}}, numero_id=numero_id)
-        registrar_historico(phone, "robo", "texto", msg2)
+        update_paciente(phone, {
+            "title": nome,
+            "plano_porto": plano,
+            "numCarteirinha": num_carteirinha,
+            "porto_elegivel": False,
+            "porto_conferencia": True
+        })
     
+    # Envia mensagem de resultado
+    enviar_whatsapp(phone, {"type": "text", "text": {"body": msg}}, numero_id=numero_id)
+    registrar_historico(phone, "robo", "texto", msg)
+    time.sleep(1)
+    
+    # Em qualquer caso — continua fluxo de cadastro
+    # Só falta: data de nascimento e email (nome e carteirinha já vieram da API)
+    if nome:
+        # API retornou nome — pula direto para nascimento
+        update_paciente(phone, {"status": "data_nascimento", "modalidade": "Convenio", "convenio": "Porto Seguro Saúde"})
+        msg2 = "Para completar seu cadastro, qual sua data de nascimento? (Ex: 15/05/1980)"
+    else:
+        # API não retornou nome — coleta nome manualmente
+        update_paciente(phone, {"status": "cadastrando_nome_completo", "modalidade": "Convenio", "convenio": "Porto Seguro Saúde"})
+        msg2 = "Para completar seu cadastro, por favor informe seu NOME COMPLETO:"
+    
+    enviar_whatsapp(phone, {"type": "text", "text": {"body": msg2}}, numero_id=numero_id)
+    registrar_historico(phone, "robo", "texto", msg2)
     print("[PORTO-THREAD] Concluido para " + phone, file=sys.stderr)
 
 def iniciar_verificacao_porto_background(phone, cpf, numero_id):
