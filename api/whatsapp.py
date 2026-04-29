@@ -885,6 +885,59 @@ def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
         return {"erro": str(e)}
 
 # ==========================================
+# PORTO SEGURO — THREAD DE ELEGIBILIDADE EM BACKGROUND
+# Evita timeout do WhatsApp (20s) rodando Playwright em thread separada
+# ==========================================
+def _thread_verificar_porto(phone, cpf, numero_id):
+    import sys
+    print("[PORTO-THREAD] Verificando " + phone, file=sys.stderr)
+    resultado = verificar_elegibilidade_porto_seguro(cpf)
+    
+    if resultado.get("erro"):
+        msg = "Nao consegui verificar sua elegibilidade no Porto Seguro. Nossa recepcao vai confirmar manualmente em breve."
+        update_paciente(phone, {"status": "pausado", "unread": True})
+    elif resultado.get("elegivel"):
+        nome = resultado.get("nome", "")
+        plano = resultado.get("plano", "")
+        validade = resultado.get("validade_carteira", "")
+        linhas = [
+            "Elegibilidade confirmada pelo Porto Seguro!",
+            "",
+            "Beneficiario: " + nome,
+            "Plano: " + plano,
+            "Validade: " + validade,
+            "",
+            "Nossa recepcao vai confirmar os horarios e retorna em breve."
+        ]
+        msg = chr(10).join(linhas)
+        update_paciente(phone, {"status": "pausado", "unread": True, "porto_elegivel": True, "porto_nome": nome, "porto_plano": plano})
+    else:
+        negacao = resultado.get("negacao") or "Plano sem cobertura"
+        linhas = [
+            "Seu plano Porto Seguro nao possui cobertura para fisioterapia neste momento.",
+            "Motivo: " + negacao,
+            "",
+            "Voce pode realizar o atendimento de forma particular. Gostaria de mais informacoes?"
+        ]
+        msg = chr(10).join(linhas)
+        update_paciente(phone, {"status": "pausado", "unread": True, "porto_elegivel": False})
+    
+    enviar_whatsapp(phone, {"type": "text", "text": {"body": msg}}, numero_id=numero_id)
+    registrar_historico(phone, "robo", "texto", msg)
+    print("[PORTO-THREAD] Concluido para " + phone, file=sys.stderr)
+
+def iniciar_verificacao_porto_background(phone, cpf, numero_id):
+    """Dispara a verificação Porto Seguro em background e retorna imediatamente."""
+    import threading
+    t = threading.Thread(
+        target=_thread_verificar_porto,
+        args=(phone, cpf, numero_id),
+        daemon=True
+    )
+    t.start()
+
+
+# ==========================================
 # MENSAGERIA E IA
 # ==========================================
 def chamar_ia_custom(query):
@@ -2268,6 +2321,17 @@ def webhook():
             if not validar_cpf(cpf_limpo):
                 responder_texto(phone, "❌ CPF inválido. Por favor, verifique os números e digite novamente:")
             else:
+                # Porto Seguro / Itaú Saúde — verificar elegibilidade em background
+                conv_atual = info.get("convenio", "")
+                if any(x in conv_atual for x in ["Porto Seguro", "Itaú"]) and PORTO_SEGURO_SENHA:
+                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pendente_feegow"})
+                    responder_texto(phone,
+                        "CPF recebido! ✅ Estou verificando sua elegibilidade junto ao Porto Seguro, "
+                        "aguarde alguns instantes... 😊"
+                    )
+                    iniciar_verificacao_porto_background(phone, cpf_limpo, numero_id)
+                    return jsonify({"status": "porto_verificando"}), 200
+
                 busca = buscar_feegow_por_cpf(cpf_limpo)
                 if busca:
                     # Veterano reconhecido: pula dados pessoais MAS exige documentos do novo agendamento
