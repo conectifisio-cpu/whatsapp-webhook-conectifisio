@@ -360,10 +360,6 @@ def baixar_midia_whatsapp_raw(media_id):
         if res_download.status_code != 200: return None, None
         conteudo = res_download.content
         
-        # [NORMALIZAÇÃO FEEGOW] Pillow DESATIVADO — enviando bytes originais do WhatsApp
-        # Motivo: Pillow no Cloud Run produzia JPEG incompatível com o renderizador do Feegow.
-        # No Vercel (onde funcionava em março/2026) o Pillow se comportava diferente.
-        # Arquivo original do WhatsApp chega em formato que o Feegow aceita nativamente.
         import sys
         if "image" in mime_type:
             if mime_type == "image/jpg": mime_type = "image/jpeg"
@@ -386,20 +382,8 @@ def baixar_midia_whatsapp(media_id):
 # ==========================================
 # FIREBASE STORAGE — Armazenamento de mídia sem limite de 1MB
 # ==========================================
-# O Firestore tem limite de 1MB por campo. Fotos de celular em Base64 podem ter 2-5MB.
-# Solução: Salvar binário no Firebase Storage e guardar apenas a URL no Firestore.
-# O frontend não é afetado (usa media_id via proxy /api/media).
-
 def salvar_midia_storage(phone, tipo_doc, conteudo_bytes, mime_type):
-    """Salva mídia no Firebase Storage e retorna a URL pública de download.
-    Args:
-        phone: telefone do paciente (usado como pasta)
-        tipo_doc: 'carteirinha' ou 'pedido_medico'
-        conteudo_bytes: bytes do arquivo
-        mime_type: tipo MIME (ex: 'image/jpeg', 'application/pdf')
-    Returns:
-        URL de download público ou None em caso de falha
-    """
+    """Salva mídia no Firebase Storage e retorna a URL pública de download."""
     import sys
     if not storage_bucket or not conteudo_bytes:
         print(f"[STORAGE] Bucket indisponível ou conteúdo vazio para {phone}/{tipo_doc}", file=sys.stderr)
@@ -409,7 +393,6 @@ def salvar_midia_storage(phone, tipo_doc, conteudo_bytes, mime_type):
         blob_path = f"pacientes/{phone}/{tipo_doc}.{ext}"
         blob = storage_bucket.blob(blob_path)
         blob.upload_from_string(conteudo_bytes, content_type=mime_type)
-        # Tornar público para leitura (necessário para o integrar_feegow baixar depois)
         blob.make_public()
         url = blob.public_url
         tamanho_kb = len(conteudo_bytes) / 1024
@@ -429,7 +412,6 @@ def baixar_do_storage_como_data_uri(url, mime_type_hint="image/jpeg"):
             print(f"[STORAGE] Falha ao baixar {url}: status={res.status_code}", file=sys.stderr)
             return None
         conteudo = res.content
-        # Detectar mime_type pelo conteúdo ou usar hint
         mime_type = res.headers.get('Content-Type', mime_type_hint)
         if 'jpeg' in mime_type or 'jpg' in mime_type: mime_type = 'image/jpeg'
         elif 'pdf' in mime_type: mime_type = 'application/pdf'
@@ -442,12 +424,7 @@ def baixar_do_storage_como_data_uri(url, mime_type_hint="image/jpeg"):
         return None
 
 def salvar_midia_imediata(phone, tipo_doc, media_id):
-    """Fluxo completo: baixa do WhatsApp → salva no Storage → retorna dados para o Firestore.
-    Retorna dict com campos para merge no Firestore:
-      - {tipo_doc}_storage_url: URL do Storage
-      - {tipo_doc}_b64: Base64 se < 900KB (compatibilidade), senão None
-      - {tipo_doc}_media_id: media_id original
-    """
+    """Fluxo completo: baixa do WhatsApp → salva no Storage → retorna dados para o Firestore."""
     import sys
     conteudo, mime_type = baixar_midia_whatsapp_raw(media_id)
     result = {f"{tipo_doc}_media_id": media_id}
@@ -462,17 +439,15 @@ def salvar_midia_imediata(phone, tipo_doc, media_id):
     tamanho_kb = tamanho_b64 / 1024
     print(f"[MEDIA] {tipo_doc} baixado: {len(conteudo)/1024:.1f} KB raw, {tamanho_kb:.1f} KB Base64", file=sys.stderr)
     
-    # Sempre salvar no Storage (fonte confiável sem limite de tamanho)
     storage_url = salvar_midia_storage(phone, tipo_doc, conteudo, mime_type)
     result[f"{tipo_doc}_storage_url"] = storage_url
     
-    # Se cabe no Firestore (< 900KB em Base64), salvar também para compatibilidade
     if tamanho_b64 < 900_000:
         b64_data = base64.b64encode(conteudo).decode('utf-8')
         result[f"{tipo_doc}_b64"] = f"data:{mime_type};base64,{b64_data}"
         print(f"[MEDIA] {tipo_doc} salvo no Firestore (< 900KB)", file=sys.stderr)
     else:
-        result[f"{tipo_doc}_b64"] = None  # Não salvar no Firestore — muito grande
+        result[f"{tipo_doc}_b64"] = None
         print(f"[MEDIA] {tipo_doc} NÃO salvo no Firestore ({tamanho_kb:.1f} KB > 900KB) — usando Storage", file=sys.stderr)
     
     return result
@@ -531,7 +506,7 @@ def consultar_agenda_feegow(paciente_id):
     return None
 
 def integrar_feegow(phone, info):
-    import sys  # necessário para print(..., file=sys.stderr) em todo o escopo da função
+    import sys
     if not FEEGOW_TOKEN: return {"feegow_status": "Token Ausente"}
     cpf = re.sub(r'\D', '', info.get("cpf", ""))
     feegow_id = info.get("feegow_id")
@@ -560,7 +535,6 @@ def integrar_feegow(phone, info):
         except: pass
 
     elif feegow_id:
-        # Paciente veterano: Atualiza dados (especialmente convênio se mudou)
         try:
             res_pac = requests.get(f"{base_url}/patient/search?paciente_id={feegow_id}&photo=false", headers=get_feegow_headers(), timeout=10)
             pac_nome = info.get("title", "Paciente")
@@ -583,7 +557,6 @@ def integrar_feegow(phone, info):
                 "email1": pac_email
             }
             
-            # Se houver convênio novo, atualiza
             if convenio_id > 0:
                 payload_edit.update({
                     "convenio_id": convenio_id,
@@ -600,10 +573,6 @@ def integrar_feegow(phone, info):
     if feegow_id:
         feegow_id_int = int(feegow_id)
 
-        # Cadeia de prioridade para obter a mídia:
-        # 1. Firebase Storage URL (sem limite de tamanho)
-        # 2. Base64 salvo no Firestore (compatível com imagens < 900KB)
-        # 3. WhatsApp API via media_id (fallback, pode ter expirado)
         cart_storage_url = info.get("carteirinha_storage_url")
         ped_storage_url = info.get("pedido_storage_url")
         b64_cart_salvo = info.get("carteirinha_b64")
@@ -612,13 +581,8 @@ def integrar_feegow(phone, info):
         pedido_id = info.get("pedido_media_id")
 
         def _upload_feegow(feegow_id_int, descricao, storage_url, b64_salvo, media_id_orig):
-            """Faz upload de um arquivo para o prontuário do Feegow.
-            Endpoint confirmado pelo Wix: /patient/upload-base64
-            Payload: { paciente_id, arquivo_descricao, base64_file (data URI completo) }
-            Loga HTTP status + resposta completa para diagnóstico."""
             import sys
 
-            # --- Obter conteúdo binário ---
             conteudo_bytes = None
             mime_type = "image/jpeg"
             fonte = "N/A"
@@ -655,7 +619,6 @@ def integrar_feegow(phone, info):
                 print(f"[FEEGOW-UPLOAD] FALHA TOTAL: nenhuma fonte disponível para {descricao}", file=sys.stderr)
                 return False
 
-            # --- Monta data URI (formato confirmado pelo Wix) ---
             if "jpeg" not in mime_type and "jpg" not in mime_type and "pdf" not in mime_type:
                 mime_type = "image/jpeg"
             b64_puro = base64.b64encode(conteudo_bytes).decode("utf-8")
@@ -667,7 +630,6 @@ def integrar_feegow(phone, info):
                 "User-Agent": "Conectifisio-Integration/1.0"
             }
 
-            # --- Estratégia 1: JSON com base64 (endpoint confirmado pelo Wix) ---
             try:
                 payload_json = {
                     "paciente_id": feegow_id_int,
@@ -686,11 +648,10 @@ def integrar_feegow(phone, info):
                         if res.json().get("success") != False:
                             return True
                     except:
-                        return True  # 200 sem JSON = sucesso
+                        return True
             except Exception as e:
                 print(f"[FEEGOW-UPLOAD] Exceção upload-base64: {e}", file=sys.stderr)
 
-            # --- Estratégia 2: multipart/form-data (fallback) ---
             try:
                 ext = "jpg" if "jpeg" in mime_type else ("pdf" if "pdf" in mime_type else "jpg")
                 nome_arquivo = f"{descricao.replace(' ', '_').replace('(', '').replace(')', '')}.{ext}"
@@ -714,14 +675,12 @@ def integrar_feegow(phone, info):
             print(f"[FEEGOW-UPLOAD] FALHA: todas estratégias falharam para {descricao} (paciente_id={feegow_id_int})", file=sys.stderr)
             return False
 
-        # --- Upload Carteirinha ---
         if cart_storage_url or b64_cart_salvo or carteirinha_id:
             ok = _upload_feegow(feegow_id_int, "Carteirinha (Robô)",
                                 cart_storage_url, b64_cart_salvo, carteirinha_id)
             if ok:
                 fotos_enviadas.append("Carteirinha")
 
-        # --- Upload Pedido Médico ---
         if ped_storage_url or b64_ped_salvo or pedido_id:
             ok = _upload_feegow(feegow_id_int, "Pedido Médico (Robô)",
                                 ped_storage_url, b64_ped_salvo, pedido_id)
@@ -738,16 +697,12 @@ def integrar_feegow(phone, info):
 
 # ==========================================
 # INTEGRAÇÃO PORTO SEGURO — Elegibilidade via Playwright
-# Portal: prestadores.portosaude.com.br
-# Sem captcha — Playwright headless com anti-detecção Imperva
 # ==========================================
 _porto_cache = {"token": None, "ts": 0}
 _PORTO_TOKEN_TTL = 3000  # 50 minutos
 
 def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
-    """Verifica elegibilidade Porto Seguro/Itaú Saúde via portal do prestador.
-    Usa Playwright headless para contornar proteção Imperva reese84.
-    Retorna dict com: elegivel, nome, plano, validade_carteira, negacao, erro"""
+    """Verifica elegibilidade Porto Seguro/Itaú Saúde via portal do prestador."""
     import sys, time, asyncio
     
     if tuss is None:
@@ -762,7 +717,6 @@ def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
     async def _executar():
         import requests as _req
         
-        # Obter token (com cache)
         now = time.time()
         token = _porto_cache.get("token")
         if not token or (now - _porto_cache.get("ts", 0)) > _PORTO_TOKEN_TTL:
@@ -786,13 +740,12 @@ def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
         BASE = "https://wwws.portoseguro.com.br/go-saud-jdig-prestador-api/v1"
         
         try:
-            # Passo 1: Buscar beneficiário por CPF
             r1 = _req.post(f"{BASE}/authorization/health-card",
                 json={"cpf": cpf_limpo, "carteirinha": ""},
                 headers=headers, timeout=15)
             
             if r1.status_code in [401, 403]:
-                _porto_cache["token"] = None  # Token expirado — limpar cache
+                _porto_cache["token"] = None
                 return {"erro": "Token expirado — tente novamente"}
             
             if r1.status_code != 200:
@@ -808,7 +761,6 @@ def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
             plano = card.get("nomePlano", "")
             validade = card.get("validadeCartao", "")
             
-            # Passo 2: Verificar elegibilidade
             r2 = _req.post(
                 f"{BASE}/authorization/{PORTO_SEGURO_CODIGO_PRESTADOR}/elegibility-check",
                 json={"uuid": uuid, "procedimento": tuss, "regime": "2"},
@@ -891,87 +843,101 @@ def verificar_elegibilidade_porto_seguro(cpf_paciente, tuss=None):
         return {"erro": str(e)}
 
 # ==========================================
-# PORTO SEGURO — THREAD DE ELEGIBILIDADE EM BACKGROUND
-# Evita timeout do WhatsApp (20s) rodando Playwright em thread separada
+# PORTO SEGURO — THREAD DE ELEGIBILIDADE EM BACKGROUND (SILENCIOSA)
+#
+# ARQUITETURA v2 (30/04/2026):
+# - Paciente NUNCA é informado sobre resultado da elegibilidade
+# - O bot continua o fluxo normal imediatamente após o CPF
+# - Resultado vai APENAS para o card no Firestore/Kanban:
+#     porto_elegibilidade_badge: "verde" | "vermelho" | "amarelo"
+#     verde  = elegível confirmado
+#     vermelho = inelegível confirmado
+#     amarelo = não foi possível verificar (conferir manualmente)
+# - Os dados da API (nome, plano, validade) enriquecem o cadastro quando disponíveis
+# - Aplica-se como padrão para todos os convênios futuramente
 # ==========================================
 def _thread_verificar_porto(phone, cpf, numero_id):
     """Verifica elegibilidade Porto Seguro em background.
-    Em qualquer caso (elegível, inelegível ou erro) continua o fluxo de cadastro.
-    Marca para conferência do colaborador se houver problema."""
-    import sys, time
-    print("[PORTO-THREAD] Verificando " + phone, file=sys.stderr)
-    resultado = verificar_elegibilidade_porto_seguro(cpf)
     
-    elegivel = resultado.get("elegivel", False)
+    IMPORTANTE: Esta função NÃO envia mensagens ao paciente.
+    O resultado vai APENAS para o card no Kanban (badge colorido).
+    O fluxo do paciente já foi avançado ANTES desta thread ser disparada.
+    """
+    import sys, time
+    print(f"[PORTO-THREAD] Iniciando verificação silenciosa para {phone}", file=sys.stderr)
+
+    resultado = verificar_elegibilidade_porto_seguro(cpf)
+
+    elegivel = resultado.get("elegivel")  # True, False ou None (erro)
     erro = resultado.get("erro")
     negacao = resultado.get("negacao") or ""
-    nome = resultado.get("nome", "")
-    plano = resultado.get("plano", "")
-    validade = resultado.get("validade_carteira", "")
-    num_carteirinha = resultado.get("numeroCartao", "") or ""
-    
+    nome_api = resultado.get("nome", "")
+    plano_api = resultado.get("plano", "")
+    validade_api = resultado.get("validade_carteira", "")
+    num_carteirinha_api = resultado.get("numeroCartao", "") or ""
+
+    # ==========================================
+    # Define badge para o Kanban
+    # ==========================================
     if erro:
-        # Erro de conexão ou autenticação — continua cadastro e marca para conferência
-        msg = (
-            "Nao consegui verificar sua elegibilidade automaticamente. " +
-            "Vamos continuar seu cadastro e nossa recepcao vai confirmar a cobertura antes do atendimento."
-        )
-        update_paciente(phone, {
-            "porto_erro": erro,
-            "porto_conferencia": True
-        })
+        badge = "amarelo"  # Não foi possível verificar — recepção confere manualmente
+        print(f"[PORTO-THREAD] Erro na verificação: {erro} → badge=amarelo", file=sys.stderr)
     elif elegivel:
-        # Elegível — salva dados e informa paciente
-        msg = (
-            "Elegibilidade confirmada pelo Porto Seguro!" + chr(10) + chr(10) +
-            "Nome: " + nome + chr(10) +
-            "Plano: " + plano + chr(10) +
-            "Validade: " + validade
-        )
-        update_paciente(phone, {
-            "title": nome,
-            "plano_porto": plano,
-            "numCarteirinha": num_carteirinha,
-            "validade_carteirinha": validade,
-            "porto_elegivel": True
-        })
+        badge = "verde"    # Elegível confirmado
+        print(f"[PORTO-THREAD] Elegível confirmado → badge=verde", file=sys.stderr)
     else:
-        # Inelegível — informa mas continua o cadastro para conferência manual
-        msg = (
-            "Seu plano Porto Seguro nao possui cobertura ativa no momento." + chr(10) +
-            ("Motivo: " + negacao.strip(",").strip() if negacao.strip(",").strip() else "") + chr(10) + chr(10) +
-            "Vamos continuar seu cadastro e nossa recepcao vai confirmar a situacao antes do atendimento."
-        )
-        update_paciente(phone, {
-            "title": nome,
-            "plano_porto": plano,
-            "numCarteirinha": num_carteirinha,
-            "porto_elegivel": False,
-            "porto_conferencia": True
-        })
+        badge = "vermelho" # Inelegível confirmado
+        print(f"[PORTO-THREAD] Inelegível → badge=vermelho | motivo: {negacao}", file=sys.stderr)
+
+    # ==========================================
+    # Atualiza o card no Firestore — APENAS dados internos
+    # Paciente não recebe nenhuma mensagem aqui
+    # ==========================================
+    campos_firestore = {
+        "porto_elegibilidade_badge": badge,
+        "porto_verificado_em": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00'),
+        "porto_conferencia": badge in ["amarelo", "vermelho"],  # Sinaliza para recepção
+    }
+
+    if erro:
+        campos_firestore["porto_erro"] = erro
     
-    # Envia mensagem de resultado
-    enviar_whatsapp(phone, {"type": "text", "text": {"body": msg}}, numero_id=numero_id)
-    registrar_historico(phone, "robo", "texto", msg)
-    time.sleep(1)
-    
-    # Em qualquer caso — continua fluxo de cadastro
-    # Só falta: data de nascimento e email (nome e carteirinha já vieram da API)
-    if nome:
-        # API retornou nome — pula direto para nascimento
-        update_paciente(phone, {"status": "data_nascimento", "modalidade": "Convenio", "convenio": "Porto Seguro Saúde"})
-        msg2 = "Para completar seu cadastro, qual sua data de nascimento? (Ex: 15/05/1980)"
-    else:
-        # API não retornou nome — coleta nome manualmente
-        update_paciente(phone, {"status": "cadastrando_nome_completo", "modalidade": "Convenio", "convenio": "Porto Seguro Saúde"})
-        msg2 = "Para completar seu cadastro, por favor informe seu NOME COMPLETO:"
-    
-    enviar_whatsapp(phone, {"type": "text", "text": {"body": msg2}}, numero_id=numero_id)
-    registrar_historico(phone, "robo", "texto", msg2)
-    print("[PORTO-THREAD] Concluido para " + phone, file=sys.stderr)
+    if elegivel is not None:
+        campos_firestore["porto_elegivel"] = elegivel
+
+    if negacao:
+        campos_firestore["porto_negacao"] = negacao.strip(",").strip()
+
+    # Enriquece o cadastro com dados vindos da API quando disponíveis
+    if nome_api:
+        campos_firestore["porto_nome_api"] = nome_api
+        # Atualiza o nome do paciente se ainda não tiver sido preenchido manualmente
+        paciente_atual = get_paciente(phone)
+        if not paciente_atual.get("title") or paciente_atual.get("title") == "Paciente Sem Nome":
+            campos_firestore["title"] = nome_api
+
+    if plano_api:
+        campos_firestore["plano_porto"] = plano_api
+
+    if validade_api:
+        campos_firestore["validade_carteirinha"] = validade_api
+
+    if num_carteirinha_api:
+        campos_firestore["numCarteirinha"] = num_carteirinha_api
+
+    update_paciente(phone, campos_firestore)
+
+    print(f"[PORTO-THREAD] Concluído para {phone} — badge={badge}, campos salvos no Firestore", file=sys.stderr)
+
 
 def iniciar_verificacao_porto_background(phone, cpf, numero_id):
-    """Dispara a verificação Porto Seguro em background e retorna imediatamente."""
+    """Dispara a verificação Porto Seguro em background e retorna imediatamente.
+    
+    FLUXO NOVO (silencioso):
+    1. Bot já avançou o estado do paciente para 'data_nascimento' ANTES de chamar esta função
+    2. Esta thread roda em paralelo, sem bloquear o fluxo do paciente
+    3. Resultado vai apenas para o Kanban — paciente não é notificado
+    """
     import threading
     t = threading.Thread(
         target=_thread_verificar_porto,
@@ -979,6 +945,7 @@ def iniciar_verificacao_porto_background(phone, cpf, numero_id):
         daemon=True
     )
     t.start()
+    print(f"[PORTO-BG] Thread de elegibilidade disparada para {phone}", file=sys.stderr)
 
 
 # ==========================================
@@ -1007,7 +974,7 @@ def chamar_ia_custom(query):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "gpt-4o-mini",  # Modelo BASE — não o fine-tuned (conectifisio-v* é para FAQ)
+        "model": "gpt-4o-mini",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": query[:300]}
@@ -1039,9 +1006,7 @@ def chamar_gemini(query):
     return None
 
 def enviar_whatsapp(to, payload_msg, numero_id=None):
-    """Envia mensagem pelo número correto.
-    numero_id: Phone Number ID de onde veio a mensagem (dual-number support).
-    Prioridade: argumento explícito > thread local > variável de ambiente."""
+    """Envia mensagem pelo número correto."""
     pid = numero_id or getattr(_thread_local, "numero_id", None) or PHONE_NUMBER_ID
     url = f"https://graph.facebook.com/v19.0/{pid}/messages"
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
@@ -1100,10 +1065,6 @@ def media_proxy():
 # ==========================================
 # WEBHOOK PRINCIPAL
 # ==========================================
-# ==========================================
-# ENDPOINT: LIGAR/DESLIGAR ROBÔ GLOBALMENTE
-# Botão de emergência do dashboard
-# ==========================================
 @app.route("/api/robo/status", methods=["GET", "POST", "OPTIONS"])
 def robo_status():
     if request.method == "OPTIONS":
@@ -1132,7 +1093,6 @@ def webhook():
     if request.method == "OPTIONS":
         return jsonify({"status": "ok"}), 200
         
-    # --- GET: DASHBOARD ---
     if request.method == "GET":
         if request.args.get("hub.verify_token") == VERIFY_TOKEN: return request.args.get("hub.challenge"), 200
             
@@ -1141,7 +1101,6 @@ def webhook():
                 import time
                 if not db: return jsonify({"error": "Erro DB"}), 500
                 now = time.time()
-                # Usa cache se ainda válido
                 if _patients_cache["data"] is not None and (now - _patients_cache["ts"]) < _CACHE_TTL:
                     return jsonify({"items": _patients_cache["data"], "cached": True}), 200
                 try:
@@ -1164,7 +1123,6 @@ def webhook():
                     return jsonify({"items": patients}), 200
                 except Exception as e_firestore:
                     err_str = str(e_firestore)
-                    # Se cota excedida (429) E temos cache antigo, retorna o cache com aviso
                     if ("429" in err_str or "Quota" in err_str or "RESOURCE_EXHAUSTED" in err_str) and _patients_cache["data"] is not None:
                         return jsonify({"items": _patients_cache["data"], "cached": True, "quota_warning": True}), 200
                     return jsonify({"error": err_str}), 500
@@ -1179,10 +1137,8 @@ def webhook():
                 if not phone:
                     return jsonify({"success": False}), 400
                 update_fields = {}
-                # status_skip=1 permite atualizar só o atendente sem mudar o status
                 if request.args.get("status_skip") != "1" and new_status:
                     update_fields["status"] = new_status
-                # Atendente: salva ou limpa
                 if atendendo_por is not None:
                     if atendendo_por == "":
                         update_fields["atendendo_por"] = None
@@ -1196,10 +1152,6 @@ def webhook():
                 return jsonify({"success": False}), 400
             except Exception as e: return jsonify({"error": str(e)}), 500
 
-        # ==========================================
-        # EXPORTAR HISTÓRICO DE CONVERSAS DA SEMANA
-        # Protegido pelo mesmo token do follow-up
-        # ==========================================
         if request.args.get("action") == "export_historico":
             token_recebido = request.args.get("token", "")
             token_esperado = os.environ.get("FOLLOWUP_SECRET", "conectifisio_followup_2025")
@@ -1210,7 +1162,6 @@ def webhook():
             try:
                 from datetime import timezone as _tz_exp
                 agora = datetime.now(_tz_exp.utc)
-                # Filtro: últimos 7 dias
                 dias = int(request.args.get("dias", 7))
                 desde = agora - timedelta(days=dias)
                 
@@ -1223,7 +1174,6 @@ def webhook():
                     if not historico:
                         continue
                     
-                    # Filtra mensagens da semana
                     msgs_semana = []
                     for msg in historico:
                         try:
@@ -1240,7 +1190,6 @@ def webhook():
                     if not msgs_semana:
                         continue
                     
-                    # Monta o resumo da conversa
                     linhas = []
                     for msg in msgs_semana:
                         remetente = msg.get("de", "?")
@@ -1264,10 +1213,8 @@ def webhook():
                         "conversa": chr(10).join(linhas)
                     })
                 
-                # Ordena por total de mensagens (mais ativas primeiro)
                 conversas.sort(key=lambda x: x["total_msgs"], reverse=True)
                 
-                # Formato texto legível
                 saida = []
                 saida.append(f"=== HISTÓRICO DE CONVERSAS — ÚLTIMOS {dias} DIAS ===")
                 saida.append(f"Total de pacientes com atividade: {len(conversas)}")
@@ -1294,11 +1241,6 @@ def webhook():
                 import traceback as _tb
                 return jsonify({"error": str(e), "trace": _tb.format_exc()}), 500
                 
-        # ==========================================
-        # FOLLOW-UP AUTOMÁTICO — 3 TOQUES
-        # Chamado pelo cron-job.org a cada hora
-        # Protegido por token secreto
-        # ==========================================
         if request.args.get("action") == "run_followup":
             token_recebido = request.args.get("token", "")
             token_esperado = os.environ.get("FOLLOWUP_SECRET", "conectifisio_followup_2025")
@@ -1311,29 +1253,21 @@ def webhook():
                 from datetime import timezone as _tz
                 agora = datetime.now(_tz.utc)
 
-                # ==========================================
-                # HORÁRIO COMERCIAL (Brasília = UTC-3)
-                # Seg-Sáb 8h-21h. Domingo sempre pula para segunda 8h
-                # ==========================================
                 def dentro_horario_comercial(dt_utc):
                     dt_brt = dt_utc - timedelta(hours=3)
-                    dia_semana = dt_brt.weekday()  # 0=seg, 6=dom
+                    dia_semana = dt_brt.weekday()
                     hora = dt_brt.hour
-                    if dia_semana == 6: return False  # Domingo nunca
+                    if dia_semana == 6: return False
                     return 8 <= hora < 21
 
                 def proximo_slot_comercial(dt_utc):
-                    """Retorna o datetime do próximo slot comercial (8h do próximo dia útil)"""
                     dt_brt = dt_utc - timedelta(hours=3)
-                    # Tenta amanhã primeiro
                     proximo = dt_brt.replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
-                    # Pula domingo
                     if proximo.weekday() == 6:
                         proximo += timedelta(days=1)
                     return proximo
 
                 def pode_enviar(last_dt, minutos_necessarios):
-                    """Verifica se passou o tempo necessário E está no horário comercial."""
                     agora_brt = agora - timedelta(hours=3)
                     minutos_passados = (agora - last_dt).total_seconds() / 60
                     if minutos_passados < minutos_necessarios:
@@ -1353,7 +1287,6 @@ def webhook():
                         return last_raw if last_raw.tzinfo else last_raw.replace(tzinfo=_tz2.utc)
                     return datetime.fromisoformat(str(last_raw).replace("Z", "+00:00")).replace(tzinfo=_tz2.utc)
 
-                # Statuses elegíveis
                 STATUSES_CONVENIO = [
                     "nome_convenio", "num_carteirinha", "foto_carteirinha",
                     "foto_pedido_medico", "cadastrando_nome_completo",
@@ -1395,12 +1328,10 @@ def webhook():
                     origem_p = p.get("origem", "")
                     toque_atual = p.get("followup_toque", 0)
 
-                    # Pula protegidos
                     if status_p in STATUSES_PROTEGIDOS:
                         ignorados.append(phone_p)
                         continue
 
-                    # Determina o tipo do lead
                     eh_convenio = (status_p in STATUSES_CONVENIO and modalidade_p == "Convenio") or (status_p in STATUSES_CONVENIO and modalidade_p not in ["Particular"])
                     eh_pilates = status_p in STATUSES_PILATES or servico_p == "Pilates Studio" or origem_p == "instagram_pilates"
                     eh_particular = modalidade_p == "Particular" and not eh_pilates
@@ -1409,7 +1340,6 @@ def webhook():
                         ignorados.append(phone_p)
                         continue
 
-                    # Parse do timestamp
                     last_raw = p.get("lastPatientInteraction") or p.get("lastInteraction")
                     if not last_raw:
                         ignorados.append(phone_p)
@@ -1423,9 +1353,6 @@ def webhook():
 
                     minutos_inativo = (agora - last_dt).total_seconds() / 60
 
-                    # ==========================================
-                    # CONVÊNIO — 30min, 60min, 90min → encerra
-                    # ==========================================
                     if eh_convenio and not eh_pilates:
                         if toque_atual == 0 and pode_enviar(last_dt, 30):
                             msg = (f"Oi {nome_p}! 😊 Percebi que você ficou a um passo de concluir o seu cadastro pelo convênio. "
@@ -1454,15 +1381,11 @@ def webhook():
                                 {"followup_toque": 3, "followup_enviado_em": agora.isoformat()}, merge=True)
                             enviados.append({"phone": phone_p, "toque": "convenio_t3"})
 
-                        elif toque_atual == 3 and pode_enviar(last_dt, 105):  # 90 + 15min
-                            # Encerra silenciosamente
+                        elif toque_atual == 3 and pode_enviar(last_dt, 105):
                             db.collection("PatientsKanban").document(phone_p).set(
                                 {"status": "arquivado", "motivo_encerramento": "followup_convenio_sem_resposta"}, merge=True)
                             enviados.append({"phone": phone_p, "toque": "convenio_arquivado"})
 
-                    # ==========================================
-                    # PILATES — 30min, 60min, 90min → fica na fila (atendimento_humano)
-                    # ==========================================
                     elif eh_pilates:
                         if toque_atual == 0 and pode_enviar(last_dt, 30):
                             msg = (f"Oi {nome_p}! 🧘‍♀️ Você estava tão perto de garantir sua vaga no Pilates Estúdio! "
@@ -1493,9 +1416,6 @@ def webhook():
                                  "motivo_fila": "followup_pilates_sem_resposta"}, merge=True)
                             enviados.append({"phone": phone_p, "toque": "pilates_t3_fila"})
 
-                    # ==========================================
-                    # PARTICULAR — 30min, 60min, 90min → fica na fila (atendimento_humano)
-                    # ==========================================
                     elif eh_particular:
                         if toque_atual == 0 and pode_enviar(last_dt, 30):
                             msg = (f"Oi {nome_p}! 😊 Você estava quase finalizando seu agendamento particular. "
@@ -1537,15 +1457,11 @@ def webhook():
             except Exception as e:
                 return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
 
-                # ==========================================
-        # ENVIO SEMIAUTOMÁTICO DE RECOMENDAÇÕES
-        # Chamado pelo dashboard ao Finalizar ou Arquivar
-        # ==========================================
         if request.args.get("action") == "send_recomendacao":
             try:
                 phone_p = request.args.get("phone", "")
                 nome_p  = request.args.get("nome", "paciente")
-                data_p  = request.args.get("data", "")   # formato livre, ex: "25/03 às 14:30"
+                data_p  = request.args.get("data", "")
                 unidade_p = request.args.get("unidade", "Ipiranga")
 
                 if not phone_p:
@@ -1554,7 +1470,6 @@ def webhook():
                 info_unidade = UNIDADES.get(unidade_p, UNIDADES["Ipiranga"])
                 link_maps = info_unidade["maps"]
 
-                # Monta a mensagem personalizada
                 if data_p:
                     msg_recomendacao = (
                         f"Tudo certo para o seu atendimento, {nome_p}! ✅\n"
@@ -1575,11 +1490,9 @@ def webhook():
                         "Até breve! Se precisar de algo, é só chamar. 😊"
                     )
 
-                # Envia mensagem de recomendação
                 responder_texto(phone_p, msg_recomendacao)
                 import time as _t2
                 _t2.sleep(1)
-                # Envia link do Maps
                 responder_texto(phone_p, f"📍 Como chegar à nossa unidade {unidade_p}:\n{link_maps}")
 
                 return jsonify({"ok": True, "enviado": True}), 200
@@ -1592,7 +1505,6 @@ def webhook():
     data = request.get_json()
     if not data or "entry" not in data: return jsonify({"status": "ok"}), 200
     
-    # Verificar se robô está ligado globalmente (botão de emergência)
     if db:
         try:
             config_doc = db.collection("Config").document("global").get()
@@ -1609,19 +1521,13 @@ def webhook():
         message = val["messages"][0]
         phone = message["from"]
         msg_type = message.get("type")
-        # Captura o Phone Number ID de quem recebeu a mensagem (suporte dual-number)
-        # Permite responder sempre pelo mesmo número em que o paciente escreveu
         numero_id = val.get("metadata", {}).get("phone_number_id") or PHONE_NUMBER_ID
-        _thread_local.numero_id = numero_id  # disponível para todas as funções de envio
+        _thread_local.numero_id = numero_id
         import sys; print(f"[DUAL-NUM] Mensagem recebida no número ID: {numero_id}", file=sys.stderr)
         
         info = get_paciente(phone)
         status_atual = info.get("status", "triagem") if info else "triagem"
 
-        # ==========================================
-        # 🛡️ ESCUDOS DE PROTEÇÃO DINÂMICA
-        # ==========================================
-        # 1. Escudo Anti-Áudio
         if msg_type in ["audio", "voice"]:
             if status_atual == "triagem":
                 responder_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Como este é o nosso primeiro contato, por favor, digite um simples 'Olá' para eu te mostrar as opções de atendimento!")
@@ -1629,7 +1535,6 @@ def webhook():
                 responder_texto(phone, "Ainda não consigo ouvir áudios por aqui 🎧. Para não interrompermos o seu agendamento, por favor, responda com um texto curto ou clique nos botões acima.")
             return jsonify({"status": "audio_bloqueado"}), 200
             
-        # 2. Escudo Lixo (Figurinhas, Ligações)
         if msg_type not in ["text", "interactive", "image", "document"]:
             return jsonify({"status": "tipo_ignorado"}), 200
 
@@ -1645,29 +1550,20 @@ def webhook():
             tem_anexo = True
             media_id = message.get(msg_type, {}).get("id")
 
-        # Salva o histórico do paciente (com media_id para exibir miniatura no Dashboard)
         if tem_anexo and media_id:
             registrar_historico(phone, "paciente", "anexo", msg_recebida, media_id=media_id)
         else:
             registrar_historico(phone, "paciente", "texto" if not tem_anexo else "anexo", msg_recebida)
 
-        # ==========================================
-        # 🔄 RESET DO FOLLOW-UP: Paciente respondeu, zera o contador
-        # Também atualiza lastPatientInteraction (usado pelo lembrete de cadastro)
-        # ==========================================
-        agora_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')  # UTC explícito
+        agora_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
         db.collection("PatientsKanban").document(phone).set(
             {"lastPatientInteraction": agora_iso,
              "numero_id": numero_id,
              **(({"followup_toque": 0, "followup_retomado_em": agora_iso}) if info.get("followup_toque", 0) > 0 else {})},
             merge=True)
 
-        # ==========================================
-        # 🚨 O BOTÃO DE PÂNICO (TRANSBORDO HUMANO)
-        # ==========================================
         msg_limpa = msg_recebida.lower()
 
-        # Detecção antecipada de cortesia (usada abaixo no FAQ e na lógica de estados)
         _cortesias_early = ["obrigad", "obg", "ok", "valeu", "certo", "tá bom", "perfeito", "beleza", "show", "combinado", "agradeço", "ótimo", "otimo", "maravilh", "excelente", "muito bom", "legal", "entendi", "entendido", "claro"]
         _emojis_early = ["👍", "🙏", "❤️", "👏", "😊", "🥰", "💙", "💚", "🤝", "✅"]
         is_cortesia = len(msg_limpa) <= 35 and (
@@ -1675,15 +1571,11 @@ def webhook():
             any(char in msg_limpa for char in _emojis_early)
         )
 
-        # ==========================================
-        # 📸 DETECÇÃO DE LEAD INSTAGRAM (Pilates)
-        # Mensagem automática configurada no anúncio Meta
-        # ==========================================
         palavras_insta = ["interesse", "informações", "informacoes", "pilates"]
         eh_lead_instagram = (
             msg_type == "text" and
             sum(1 for p in palavras_insta if p in msg_limpa) >= 2 and
-            not info.get("origem")  # Só na primeira mensagem
+            not info.get("origem")
         )
         if eh_lead_instagram:
             import sys as _sys_insta
@@ -1708,21 +1600,10 @@ def webhook():
             responder_texto(phone, "Entendido! Pausei o meu sistema automático e já avisei a nossa equipa. 🚨 Em instantes um atendente humano vai assumir esta conversa para te ajudar!")
             return jsonify({"status": "pedido_ajuda"}), 200
 
-        # ==========================================
-        # 🧠 CONSULTA AO FAQ (INTELIGÊNCIA DE DADOS REAIS)
-        # SOMENTE para pacientes fora do fluxo (triagem, finalizado, pausado, atendimento_humano)
-        # Nunca interrompe um fluxo ativo de agendamento
-        # ==========================================
-        # ==========================================
-        # 🎫 DETECÇÃO DE TOKEN DE CONVÊNIO
-        # Sequência numérica de 6-10 dígitos = token do convênio
-        # Salva no Firebase e notifica a recepção
-        # ==========================================
         import re as _re_token
         _token_match = _re_token.fullmatch(r'[0-9]{6,10}', msg_limpa.strip())
         _tem_palavra_token = any(w in msg_limpa for w in ["token", "tokem", "tokken", "código", "codigo", "autorização", "autorizacao"])
         
-        # Não interceptar como token quando o bot está esperando dados numéricos legítimos
         _status_espera_numero = status_atual in [
             "data_nascimento", "cpf", "num_carteirinha",
             "pilates_part_cpf", "pilates_part_nasc",
@@ -1731,7 +1612,6 @@ def webhook():
         ]
         
         if not _status_espera_numero and (_token_match or (_tem_palavra_token and any(c.isdigit() for c in msg_recebida))):
-            # Extrair o número do token
             _numeros = _re_token.findall(r'[0-9]{6,10}', msg_recebida)
             _token_valor = _numeros[0] if _numeros else msg_recebida.strip()
             
@@ -1748,16 +1628,6 @@ def webhook():
             responder_texto(phone, f"Token *{_token_valor}* recebido! ✅ Nossa recepção já foi notificada e vai registrar a autorização. 😊")
             return jsonify({"status": "token_registrado"}), 200
 
-        # ==========================================
-        # 🧠 FAQ COM IA — ATIVO (conectifisio-v2)
-        # Responde dúvidas de pacientes fora do fluxo de agendamento.
-        # Quando encaminha para recepção, muda status para pausado
-        # para o card aparecer no kanban.
-        # ==========================================
-        # ==========================================
-        # INTERCEPTAÇÃO DE PERÍODO APÓS FAQ
-        # Se FAQ perguntou período e paciente respondeu — bot assume ANTES do FAQ ser chamado
-        # ==========================================
         _periodos = ["manhã", "manha", "tarde", "noite", "de manhã", "de manha", "de tarde", "de noite", "pela manhã", "pela tarde", "pela noite"]
         if info.get("faq_encaminhou") and msg_limpa.strip() in _periodos:
             import sys
@@ -1780,15 +1650,9 @@ def webhook():
                 import sys
                 print(f"[FAQ] Respondendo: '{resposta_faq[:60]}'", file=sys.stderr)
                 responder_texto(phone, resposta_faq)
-                # ==========================================
-                # PASSAGEM DE BASTÃO INTELIGENTE
-                # FAQ → Bot ou FAQ → Colaborador
-                # ==========================================
                 if "vou encaminhar" in resposta_faq.lower():
                     import sys
                     if "manhã, tarde ou noite" in resposta_faq.lower():
-                        # Paciente quer agendar — bot assume e pergunta período com botões
-                        # O bot vai mostrar botões [Manhã] [Tarde] [Noite] de forma estruturada
                         update_paciente(phone, {
                             "status": "triagem",
                             "ultima_mensagem_paciente": msg_recebida,
@@ -1796,8 +1660,6 @@ def webhook():
                         })
                         print(f"[FAQ→BOT] Iniciando fluxo de cadastro para {phone}", file=sys.stderr)
                     else:
-                        # Encaminhamento administrativo (declaração, relatório, token, etc)
-                        # Colaborador assume via kanban
                         update_paciente(phone, {
                             "status": "pausado",
                             "ultima_mensagem_paciente": msg_recebida,
@@ -1807,9 +1669,6 @@ def webhook():
                         print(f"[FAQ→HUMANO] Encaminhou para recepção: {msg_recebida[:50]}", file=sys.stderr)
                 return jsonify({"status": "faq_respondido"}), 200
 
-        # ==========================================
-        # 🚀 A MÁQUINA DO TEMPO (INTERCEPTAÇÃO GLOBAL)
-        # ==========================================
         if msg_recebida in ["Particular", "Convênio"]:
             update_paciente(phone, {"modalidade": msg_recebida})
             if msg_recebida == "Particular":
@@ -1826,20 +1685,17 @@ def webhook():
                 enviar_lista(phone, "Entendido! Selecione o seu plano de saúde para validarmos a cobertura:", "Ver Convênios", secoes)
                 return jsonify({"status": "time_travel_convenio"}), 200
 
-        # 🛑 RESET GERAL
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             update_paciente(phone, {"status": "escolhendo_unidade", "cellphone": phone, "servico": "", "modalidade": ""})
             enviar_botoes(phone, "Atendimento reiniciado. 🔄\n\nEm qual unidade deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reset"}), 200
 
-        # --- BUSCA FEEGOW PELO TELEFONE ---
         if not info.get("feegow_id"):
             busca_tel = buscar_feegow_por_telefone(phone)
             if busca_tel:
                 info.update({"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
                 update_paciente(phone, {"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
             else:
-                # Se não está no Feegow, verifica se está no histórico de 8.000 contatos
                 doc_hist = db.collection("historico_contatos").document(phone).get()
                 if doc_hist.exists:
                     info.update({"is_historico": True})
@@ -1851,9 +1707,7 @@ def webhook():
 
         status = info.get("status", "triagem")
 
-        # MUTE / ARQUIVADO
         if status == "pausado":
-            # Se FAQ encaminhou e paciente respondeu com período — retoma fluxo
             if info.get("faq_encaminhou") and msg_limpa in ["manhã", "tarde", "noite", "de manhã", "de tarde", "de noite", "pela manhã", "pela tarde", "pela noite"]:
                 import sys
                 print(f"[FAQ→BOT] Paciente respondeu período '{msg_recebida}' — iniciando fluxo", file=sys.stderr)
@@ -1871,10 +1725,8 @@ def webhook():
             return jsonify({"status": "bot_silenciado"}), 200
             
         if status == "arquivado":
-            # Se for cortesia (agradecimento, emoji) após arquivamento — ignora silenciosamente
             if is_cortesia:
                 return jsonify({"status": "cortesia_arquivado_ignorada"}), 200
-            # Se for mensagem real — reativa o fluxo
             update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
             enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reativacao_arquivado"}), 200
@@ -1892,27 +1744,23 @@ def webhook():
         if not modalidade and convenio: modalidade = "Convênio"
         elif not modalidade and servico in ["Recovery", "Liberação Miofascial"]: modalidade = "Particular"
 
-        # Cortesia: responde e encerra (is_cortesia já definido acima)
         if is_cortesia and status in ["finalizado", "atendimento_humano", "pendente_feegow", "agendando"]:
             responder_texto(phone, "Por nada! 😊 Nossa equipe já recebeu seus dados e confirmará tudo em instantes. Qualquer dúvida, é só chamar!")
             return jsonify({"status": "courtesy_ignored"}), 200
 
         if status in ["finalizado", "atendimento_humano"]:
-            # Janela de Silêncio: Se finalizado há menos de 30 min e for mensagem curta, ignora
             last_upd = info.get("lastUpdate")
             if last_upd and status == "finalizado":
                 try:
                     dt_last = datetime.fromisoformat(last_upd.replace("Z", "+00:00"))
-                    if (datetime.now(timezone.utc) - dt_last).total_seconds() < 1800: # 30 min
-                        if len(msg_limpa.split()) <= 2: # "Ok obrigado", "Valeu", etc
+                    if (datetime.now(timezone.utc) - dt_last).total_seconds() < 1800:
+                        if len(msg_limpa.split()) <= 2:
                             return jsonify({"status": "silence_window_ignored"}), 200
                 except: pass
 
             enviar_botoes(phone, "Olá! Nossa equipe precisa de mais um tempinho para a resolução da sua solicitação, mas já avisei que você entrou em contato novamente! 😊\n\nSe quiser reiniciar o atendimento, clique abaixo:", [{"id": "menu_ini", "title": "Menu Inicial"}])
             return jsonify({"status": "aguardando_equipe"}), 200
             
-        # Escudo de saudação — só ativa se for APENAS saudação (sem conteúdo adicional)
-        # "Boa noite" → escudo ativa | "Boa noite, vocês atendem Amil?" → FAQ atua
         _saudacoes = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite"]
         _eh_so_saudacao = any(msg_limpa.strip() == w or msg_limpa.strip() == w + "!" or msg_limpa.strip() == w + "." for w in _saudacoes)
         if _eh_so_saudacao and status not in ["triagem", "escolhendo_unidade"]:
@@ -1926,11 +1774,7 @@ def webhook():
         # ==========================================
         # LÓGICA DE ESTADOS
         # ==========================================
-        # ==========================================
-        # 📸 FLUXO INSTAGRAM PILATES
-        # ==========================================
         if status == "instagram_pilates_q1":
-            # Resposta à pergunta "Já praticou Pilates antes?"
             update_paciente(phone, {
                 "status": "instagram_pilates_q2",
                 "instagram_resp_q1": msg_recebida,
@@ -1940,7 +1784,6 @@ def webhook():
             return jsonify({"status": "instagram_q1_respondida"}), 200
 
         elif status == "instagram_pilates_q2":
-            # Resposta à pergunta "Qual seu objetivo?"
             nome_lead = info.get("title", "").split()[0] if info.get("title") else ""
             saudacao = f"Perfeito{', ' + nome_lead if nome_lead else ''}! 💙 " if nome_lead else "Perfeito! 💙 "
             update_paciente(phone, {
@@ -1956,10 +1799,6 @@ def webhook():
             return jsonify({"status": "instagram_lead_qualificado"}), 200
 
         if status == "triagem":
-            # ==========================================
-            # FAQ ENCAMINHOU — inicia fluxo direto
-            # O FAQ já explicou o serviço, bot pergunta a unidade
-            # ==========================================
             if info.get("faq_encaminhou"):
                 update_paciente(phone, {
                     "status": "escolhendo_unidade",
@@ -2001,15 +1840,10 @@ def webhook():
                     responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
 
         elif status == "cadastrando_nome":
-            # Exigir Nome e Sobrenome com pelo menos 2 chars cada
             partes_nome = [p for p in msg_limpa.split() if len(p) >= 2]
             if len(partes_nome) < 2 or msg_recebida.isdigit():
                 responder_texto(phone, "❌ Por favor, digite seu NOME E SOBRENOME completos para o cadastro:")
             else:
-                # ==========================================
-                # DETECÇÃO DE TERCEIRO AGENDANDO PARA OUTRO
-                # Ex: "Meu nome é Bianca, mas estou agendando para o meu marido Luís"
-                # ==========================================
                 frases_terceiro = [
                     "estou agendando para", "estou marcando para", "estou ligando para",
                     "sou a mãe de", "sou o pai de", "sou a esposa de", "sou o marido de",
@@ -2021,7 +1855,6 @@ def webhook():
                 eh_terceiro = any(frase in msg_limpa for frase in frases_terceiro)
 
                 if eh_terceiro:
-                    # Salva o nome de quem está contatando e sinaliza que é terceiro
                     update_paciente(phone, {"title": msg_recebida, "agendado_por_terceiro": True, "status": "confirmando_paciente_real"})
                     responder_texto(phone, f"Entendido! 😊 Fico feliz em ajudar.\n\nPara garantirmos que o cadastro fique correto no sistema, por favor me informe o *NOME COMPLETO do paciente* que será atendido (conforme documento):")
                 else:
@@ -2030,13 +1863,12 @@ def webhook():
                     enviar_lista(phone, f"Prazer, {msg_recebida}! 😊\n\nPara direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", secoes)
 
         elif status == "confirmando_paciente_real":
-            # Terceiro informou o nome do paciente real
             if len(msg_limpa) < 2 or msg_recebida.isdigit():
                 responder_texto(phone, "❌ Por favor, digite o nome completo do paciente.")
             else:
                 nome_responsavel = info.get("title", "")
                 update_paciente(phone, {"title": msg_recebida, "nome_responsavel": nome_responsavel, "status": "escolhendo_especialidade"})
-                secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
+                secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
                 enviar_lista(phone, f"Perfeito! Cadastro em nome de *{msg_recebida}*. ✅\n\nQual serviço o paciente procura hoje?", "Ver Serviços", secoes)
 
         elif status == "menu_veterano":
@@ -2046,13 +1878,11 @@ def webhook():
                 enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Serviços", secoes)
             
             elif "Nova Guia" in msg_recebida or "Tratamento" in msg_recebida:
-                # Nova Pergunta para Veteranos: Queixa
                 update_paciente(phone, {"status": "cadastrando_queixa_veterano"})
                 responder_texto(phone, "Entendido! Vamos organizar sua nova guia. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
             
             elif "Reagendar" in msg_recebida:
                 sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
-                # Correção do Limbo: Garante que o paciente não desaparece se não tiver modalidade
                 mod_salva = info.get("modalidade") if info.get("modalidade") else "Particular"
                 update_paciente(phone, {"status": "agendando", "modalidade": mod_salva})
                 botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
@@ -2063,7 +1893,6 @@ def webhook():
             
             elif "Secretaria" in msg_recebida or "📁" in msg_recebida:
                 update_paciente(phone, {"status": "menu_secretaria"})
-                # Funcionalidade 2: Botão Enviar Exames/Resultados
                 secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s5", "title": "📁 Enviar Exames/Resultados"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
 
@@ -2093,7 +1922,6 @@ def webhook():
 
         elif status == "enviando_exames":
             if tem_anexo:
-                # Salva no Storage imediatamente (media_id expira em ~5 min)
                 media_data = salvar_midia_imediata(phone, "exame", media_id) if media_id else {}
                 update_fields = {
                     "status": "atendimento_humano",
@@ -2102,7 +1930,6 @@ def webhook():
                 }
                 update_fields.update(media_data)
                 update_paciente(phone, update_fields)
-                # Tenta enviar ao prontuário do Feegow se já tiver feegow_id
                 if info.get("feegow_id") and media_data.get("exame_storage_url"):
                     import sys
                     try:
@@ -2181,9 +2008,6 @@ def webhook():
                 secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
                 enviar_lista(phone, "Sem problemas! Mantemos o seu atendimento na unidade **Ipiranga**. Qual outro serviço você procura hoje?", "Ver Serviços", secoes)
 
-        # ==========================================
-        # FAST-TRACK PILATES (Fluxo Ultra Rápido)
-        # ==========================================
         elif status.startswith("pilates_"):
             if status == "pilates_modalidade":
                 if "Voltar" in msg_recebida:
@@ -2282,7 +2106,6 @@ def webhook():
                     update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
                     responder_texto(phone, "Cadastro concluído! 🎉 Nossa equipe vai confirmar o seu horário de Pilates e logo retorna. 👩‍⚕️")
 
-            # Fluxo Caixa: Exige Documento
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
                 else:
@@ -2373,7 +2196,6 @@ def webhook():
 
         elif status == "nome_convenio":
             convenio_selecionado = msg_recebida
-            # Valida se o convênio veio da lista oficial
             CONVENIOS_VALIDOS = ["Saúde Petrobras", "Mediservice", "Cassi", "Geap Saúde", "Amil",
                                   "Bradesco Saúde", "Porto Seguro Saúde", "Prevent Senior", "Saúde Caixa"]
             CONVENIOS_NAO_ATENDIDOS = ["Unimed", "Sulamerica", "SulAmérica", "Hapvida", "NotreDame", "Notre Dame", "Golden Cross", "Apivida"]
@@ -2415,26 +2237,38 @@ def webhook():
             if not validar_cpf(cpf_limpo):
                 responder_texto(phone, "❌ CPF inválido. Por favor, verifique os números e digite novamente:")
             else:
-                # Porto Seguro / Itaú Saúde — verificar elegibilidade em background
                 conv_atual = info.get("convenio", "")
-                if any(x in conv_atual for x in ["Porto Seguro", "Itaú"]) and PORTO_SEGURO_SENHA:
-                    update_paciente(phone, {"cpf": cpf_limpo, "status": "pendente_feegow"})
-                    responder_texto(phone,
-                        "CPF recebido! ✅ Estou verificando sua elegibilidade junto ao Porto Seguro, "
-                        "aguarde alguns instantes... 😊"
-                    )
-                    iniciar_verificacao_porto_background(phone, cpf_limpo, numero_id)
-                    return jsonify({"status": "porto_verificando"}), 200
 
+                # ==========================================
+                # PORTO SEGURO — ELEGIBILIDADE SILENCIOSA
+                #
+                # MUDANÇA ARQUITETURAL (30/04/2026):
+                # 1. Salva o CPF e avança IMEDIATAMENTE para data de nascimento
+                # 2. Thread de elegibilidade roda em paralelo (silenciosa)
+                # 3. Resultado vai APENAS para o card no Kanban (badge verde/vermelho/amarelo)
+                # 4. Paciente nunca sabe se conseguimos ou não verificar a elegibilidade
+                # ==========================================
+                if any(x in conv_atual for x in ["Porto Seguro", "Itaú"]) and PORTO_SEGURO_SENHA:
+                    # Salva CPF e avança o estado ANTES de disparar a thread
+                    update_paciente(phone, {
+                        "cpf": cpf_limpo,
+                        "status": "data_nascimento",
+                        "porto_elegibilidade_badge": "amarelo",  # Badge inicial: aguardando verificação
+                        "porto_verificando": True
+                    })
+                    # Resposta natural — sem mencionar elegibilidade
+                    responder_texto(phone, "CPF recebido! ✅ Para completarmos sua ficha clínica, qual sua data de nascimento? (Ex: 15/05/1980)")
+                    # Thread dispara em background — não bloqueia o fluxo
+                    iniciar_verificacao_porto_background(phone, cpf_limpo, numero_id)
+                    return jsonify({"status": "cpf_recebido_porto_verificando"}), 200
+
+                # Outros convênios / Particular — fluxo padrão
                 busca = buscar_feegow_por_cpf(cpf_limpo)
                 if busca:
-                    # Veterano reconhecido: pula dados pessoais MAS exige documentos do novo agendamento
                     if modalidade == "Particular":
-                        # Particular veterano: vai direto para agenda (sem documentos)
                         update_paciente(phone, {"cpf": cpf_limpo, "title": busca['nome'], "feegow_id": busca['id'], "status": "agendando"})
                         enviar_botoes(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨\n\nPulei as etapas de e-mail e nascimento. Qual o melhor período para você?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                     else:
-                        # Convênio veterano: pula dados pessoais mas EXIGE carteirinha e pedido médico
                         update_paciente(phone, {"cpf": cpf_limpo, "title": busca['nome'], "feegow_id": busca['id'], "status": "num_carteirinha"})
                         responder_texto(phone, f"Reconheci seu cadastro, {busca['nome']}! ✨\n\nPulei as etapas de e-mail e nascimento. Para atualizarmos o seu cadastro, qual o NÚMERO DA SUA CARTEIRINHA? (Apenas números)")
                 else:
@@ -2464,7 +2298,6 @@ def webhook():
 
         elif status == "num_carteirinha":
             num_limpo = re.sub(r'\D', '', msg_recebida)
-            # Detectar mensagens de espera — pausar bot em vez de dar erro
             _espera = ["momento", "aguarda", "agora não", "depois", "vou pegar", "não tenho", "nao tenho", "vou ver", "preciso ver"]
             if any(e in msg_limpa for e in _espera) and len(num_limpo) < 4:
                 update_paciente(phone, {"status": "pausado", "unread": True, "ultima_mensagem_paciente": msg_recebida})
@@ -2478,8 +2311,6 @@ def webhook():
         elif status == "foto_carteirinha":
             if not tem_anexo: responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
             else:
-                # Baixa do WhatsApp IMEDIATAMENTE e salva no Firebase Storage
-                # (media_id expira em ~5 min, Storage não tem limite de 1MB)
                 media_data = salvar_midia_imediata(phone, "carteirinha", media_id) if media_id else {}
                 update_fields = {
                     "status": "foto_pedido_medico",
@@ -2490,7 +2321,6 @@ def webhook():
                 responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a FOTO DO SEU PEDIDO MÉDICO.")
 
         elif status == "foto_pedido_medico":
-            # Aceitar links de pedido médico digital (memed, etc.)
             _links_pedido = ["memed.com.br", "drconnect", "bula.fiocruz", "receita", "http", "https"]
             _tem_link_pedido = any(lp in msg_limpa for lp in _links_pedido) and not tem_anexo
             if _tem_link_pedido:
@@ -2498,7 +2328,6 @@ def webhook():
                 enviar_botoes(phone, "Pedido médico digital recebido! 🎉\n\nQual o melhor período para verificarmos a sua vaga?", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
             elif not tem_anexo: responder_texto(phone, "❌ Por favor, envie a foto do seu Pedido Médico.")
             else:
-                # Baixa do WhatsApp IMEDIATAMENTE e salva no Firebase Storage
                 media_data = salvar_midia_imediata(phone, "pedido", media_id) if media_id else {}
                 update_fields = {
                     "status": "agendando",
@@ -2511,13 +2340,8 @@ def webhook():
         elif status == "agendando":
             if msg_recebida in ["Manhã", "Tarde", "Noite"]:
                 info["periodo"] = msg_recebida
-                # Bug Fix: Garantir que modalidade está correta antes de definir a coluna destino
-                # Se o paciente tem convênio salvo mas modalidade vazia, força "Convênio"
-                # Se tem fotos de carteirinha/pedido, também é Convênio
                 if not modalidade and (info.get("convenio") or info.get("carteirinha_media_id")):
                     modalidade = "Convênio"
-                # Convênio vai para 'pendente_feegow' para aparecer na coluna correta do Kanban
-                # Particular vai para 'finalizado' (sem necessidade de validação)
                 novo_status = "pendente_feegow" if modalidade == "Convênio" else "finalizado"
                 update_data = {"periodo": msg_recebida, "status": novo_status, "modalidade": modalidade}
                 
@@ -2535,8 +2359,6 @@ def webhook():
                                    f"Em instantes voltaremos com as opções exatas para confirmarmos o seu horário. Fique de olho por aqui! ✨")
                 
                 responder_texto(phone, texto_final)
-                # Recomendações e endereço são enviados MANUALMENTE pelo colaborador
-                # após confirmar o agendamento (fluxo semiautomaticó)
             else:
                 enviar_botoes(phone, "Por favor, escolha o período:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
 
@@ -2561,15 +2383,9 @@ def chat_manual():
 
         if not phone: return jsonify({"success": False, "error": "Falta telefone"}), 400
 
-        # ========================================================
-        # 1. SEM GAMBIARRA DE NÚMEROS: Busca a fonte da verdade
-        # ========================================================
         paciente_info = get_paciente(phone) or {}
-        
-        # Pega o ID exato pelo qual o paciente iniciou a conversa (salvo pelo Webhook)
         pid = paciente_info.get("numero_id")
 
-        # Fallback estrito: se o paciente for antigo e não tiver 'numero_id' salvo
         if not pid:
             unidade = str(paciente_info.get("unit", "")).lower()
             if "ipiranga" in unidade:
@@ -2580,26 +2396,18 @@ def chat_manual():
         url = f"https://graph.facebook.com/v19.0/{pid}/messages"
         headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
 
-        # ========================================================
-        # 2. SEM GAMBIARRA DE REDE: Tratamento profissional de falhas
-        # ========================================================
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
         
-        # Cria uma sessão que se reconecta automaticamente caso o Google Cloud "pisque"
         session = requests.Session()
         retries = Retry(total=3, backoff_factor=0.5, status_forcelist=[ 500, 502, 503, 504 ])
         session.mount('https://', HTTPAdapter(max_retries=retries))
 
-        # ========================================================
-        # 3. ENVIO LIMPO E DIRETO
-        # ========================================================
         if file_b64:
             b64_data = file_b64.split(",")[1] if "," in file_b64 else file_b64
             file_bytes = base64.b64decode(b64_data)
             url_media = f"https://graph.facebook.com/v19.0/{pid}/media"
             
-            # Faz o upload
             res_m = session.post(url_media, headers={"Authorization": f"Bearer {WHATSAPP_TOKEN}"}, files={'file': (file_name, file_bytes, mime_type)}, data={'messaging_product': 'whatsapp'}, timeout=15)
             m_id = res_m.json().get("id")
             
@@ -2610,17 +2418,12 @@ def chat_manual():
             payload = {"messaging_product": "whatsapp", "to": phone, "type": msg_type, msg_type: {"id": m_id}}
             if message_text: payload[msg_type]["caption"] = message_text
             
-            # Envia o anexo
             res = session.post(url, json=payload, headers=headers, timeout=15)
             
         else:
-            # Envia texto simples
             payload = {"messaging_product": "whatsapp", "to": phone, "type": "text", "text": {"body": message_text}}
             res = session.post(url, json=payload, headers=headers, timeout=15)
 
-        # ========================================================
-        # 4. VALIDAÇÃO DE SUCESSO
-        # ========================================================
         if res.status_code == 200:
             registrar_historico(phone, "clinica", "texto" if not file_b64 else "anexo", message_text or "[Arquivo]")
             update_paciente(phone, {"status": "pausado", "unread": False, "robo_ligado": False})
@@ -2636,6 +2439,5 @@ def chat_manual():
         return jsonify({"success": False, "error": f"Erro de conexão/servidor: {str(e)}"}), 500
 
 if __name__ == "__main__":
-    # Cloud Run define PORT=8080 automaticamente. Fallback para 5000 em desenvolvimento local.
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
