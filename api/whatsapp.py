@@ -1841,8 +1841,8 @@ def webhook():
 
         elif status == "cadastrando_nome":
             partes_nome = [p for p in msg_limpa.split() if len(p) >= 2]
-            if len(partes_nome) < 2 or msg_recebida.isdigit():
-                responder_texto(phone, "❌ Por favor, digite seu NOME E SOBRENOME completos para o cadastro:")
+            if len(partes_nome) < 1 or msg_recebida.isdigit() or len(msg_recebida.strip()) < 2:
+                responder_texto(phone, "❌ Por favor, me informe como você gostaria de ser chamado(a):")
             else:
                 frases_terceiro = [
                     "estou agendando para", "estou marcando para", "estou ligando para",
@@ -1858,9 +1858,10 @@ def webhook():
                     update_paciente(phone, {"title": msg_recebida, "agendado_por_terceiro": True, "status": "confirmando_paciente_real"})
                     responder_texto(phone, f"Entendido! 😊 Fico feliz em ajudar.\n\nPara garantirmos que o cadastro fique correto no sistema, por favor me informe o *NOME COMPLETO do paciente* que será atendido (conforme documento):")
                 else:
-                    update_paciente(phone, {"title": msg_recebida, "status": "escolhendo_especialidade"})
+                    primeiro_nome = msg_recebida.strip().split()[0].capitalize()
+                    update_paciente(phone, {"title": msg_recebida, "primeiro_nome": primeiro_nome, "status": "escolhendo_especialidade"})
                     secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
-                    enviar_lista(phone, f"Prazer, {msg_recebida}! 😊\n\nPara direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", secoes)
+                    enviar_lista(phone, f"Prazer, {primeiro_nome}! 😊\n\nPara direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", secoes)
 
         elif status == "confirmando_paciente_real":
             if len(msg_limpa) < 2 or msg_recebida.isdigit():
@@ -2171,7 +2172,12 @@ def webhook():
                     enviar_botoes(phone, f"{acolhimento}\n\nComo você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
                     update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, f"{acolhimento}\n\nPara iniciarmos seu cadastro, por favor digite seu NOME COMPLETO (conforme documento):")
+                    primeiro_nome = info.get("primeiro_nome", "")
+                    if primeiro_nome:
+                        msg_nome = f"Para iniciarmos seu cadastro, {primeiro_nome} — preciso do seu nome completo conforme documento:"
+                    else:
+                        msg_nome = "Para iniciarmos seu cadastro, qual seu nome completo conforme documento?"
+                    responder_texto(phone, f"{acolhimento}\n\n{msg_nome}")
             else:
                 update_paciente(phone, {"queixa": msg_recebida, "queixa_ia": acolhimento, "status": "modalidade"})
                 conv_salvo = info.get("convenio", "")
@@ -2192,7 +2198,12 @@ def webhook():
                     enviar_botoes(phone, "Perfeito! Como você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
                     update_paciente(phone, {"modalidade": "Particular", "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
+                    primeiro_nome = info.get("primeiro_nome", "")
+                    if primeiro_nome:
+                        msg_nome = f"Perfeito! Para finalizar o cadastro, {primeiro_nome} — preciso do seu nome completo conforme documento:"
+                    else:
+                        msg_nome = "Perfeito! Para seu cadastro, qual seu nome completo conforme documento?"
+                    responder_texto(phone, msg_nome)
 
         elif status == "nome_convenio":
             convenio_selecionado = msg_recebida
@@ -2213,7 +2224,12 @@ def webhook():
                     responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nComo você já é nosso paciente, pulei o preenchimento de CPF e E-mail! Para atualizarmos o seu cadastro, qual o NÚMERO DA SUA NOVA CARTEIRINHA? (Apenas números)")
                 else:
                     update_paciente(phone, {"convenio": convenio_selecionado, "status": "cadastrando_nome_completo"})
-                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\nAgora, digite seu NOME COMPLETO (conforme documento):")
+                    primeiro_nome = info.get("primeiro_nome", "")
+                    if primeiro_nome:
+                        msg_nome = f"Para o cadastro, {primeiro_nome} — precisamos do seu nome completo conforme documento. Pode digitar?"
+                    else:
+                        msg_nome = "Para o cadastro, qual seu nome completo conforme documento?"
+                    responder_texto(phone, f"Anotado: {convenio_selecionado}! ✅\n\n{msg_nome}")
 
         elif status == "cobertura_recusada":
             if "Particular" in msg_recebida:
