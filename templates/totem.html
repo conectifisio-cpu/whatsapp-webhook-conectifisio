@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autoatendimento - Conectifisio</title>
+    <style>
+        /* Estilos limpos e modernos para o tablet */
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; user-select: none; }
+        .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; max-width: 500px; width: 100%; }
+        h1 { color: #2c3e50; margin-bottom: 10px; font-size: 32px; }
+        p { color: #7f8c8d; margin-bottom: 30px; font-size: 20px; }
+        
+        .display-cpf { font-size: 36px; letter-spacing: 5px; padding: 15px; background: #ecf0f1; border-radius: 8px; min-height: 50px; margin-bottom: 20px; color: #34495e; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+        
+        .teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 25px; }
+        .btn-tecla { background: #ffffff; border: 2px solid #bdc3c7; border-radius: 12px; font-size: 32px; padding: 25px; cursor: pointer; color: #2c3e50; transition: 0.1s; font-weight: bold; }
+        .btn-tecla:active { background: #bdc3c7; transform: scale(0.95); }
+        .btn-acao { background: #e74c3c; color: white; border: none; }
+        .btn-acao:active { background: #c0392b; }
+        
+        .btn-confirmar { background: #27ae60; color: white; font-size: 26px; padding: 20px; width: 100%; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        .btn-confirmar:active { background: #2ecc71; transform: scale(0.98); }
+        
+        #mensagem { margin-top: 25px; font-size: 22px; font-weight: bold; min-height: 35px; }
+        .sucesso { color: #27ae60; }
+        .erro { color: #e74c3c; }
+        .carregando { color: #f39c12; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Você pode trocar esse h1 por uma imagem da logo da clínica depois -->
+        <h1>Conectifisio</h1>
+        <p>Digite seu CPF para confirmar sua chegada</p>
+
+        <div id="display" class="display-cpf"></div>
+
+        <div class="teclado">
+            <button class="btn-tecla" onclick="addNumero(1)">1</button>
+            <button class="btn-tecla" onclick="addNumero(2)">2</button>
+            <button class="btn-tecla" onclick="addNumero(3)">3</button>
+            <button class="btn-tecla" onclick="addNumero(4)">4</button>
+            <button class="btn-tecla" onclick="addNumero(5)">5</button>
+            <button class="btn-tecla" onclick="addNumero(6)">6</button>
+            <button class="btn-tecla" onclick="addNumero(7)">7</button>
+            <button class="btn-tecla" onclick="addNumero(8)">8</button>
+            <button class="btn-tecla" onclick="addNumero(9)">9</button>
+            <button class="btn-tecla btn-acao" onclick="limpar()">C</button>
+            <button class="btn-tecla" onclick="addNumero(0)">0</button>
+            <button class="btn-tecla btn-acao" onclick="apagar()">&larr;</button>
+        </div>
+
+        <button class="btn-confirmar" onclick="fazerCheckin()">CONFIRMAR CHEGADA</button>
+
+        <div id="mensagem"></div>
+    </div>
+
+    <script>
+        let cpfAtual = '';
+        const display = document.getElementById('display');
+        const mensagem = document.getElementById('mensagem');
+
+        function atualizarDisplay() {
+            display.innerText = cpfAtual;
+        }
+
+        function addNumero(num) {
+            if (cpfAtual.length < 11) {
+                cpfAtual += num;
+                atualizarDisplay();
+            }
+        }
+
+        function limpar() {
+            cpfAtual = '';
+            atualizarDisplay();
+            mensagem.innerText = '';
+        }
+
+        function apagar() {
+            cpfAtual = cpfAtual.slice(0, -1);
+            atualizarDisplay();
+        }
+
+        async function fazerCheckin() {
+            if (cpfAtual.length !== 11) {
+                mostrarMensagem('Digite o CPF completo (11 números).', 'erro');
+                return;
+            }
+
+            mostrarMensagem('Consultando agenda...', 'carregando');
+
+            try {
+                // Chama a rota que criamos no backend em Python
+                const response = await fetch('/api/totem/checkin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cpf: cpfAtual })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    mostrarMensagem(data.mensagem, 'sucesso');
+                    setTimeout(limpar, 6000); // Limpa a tela automaticamente após 6 segundos para o próximo paciente
+                } else {
+                    mostrarMensagem(data.erro, 'erro');
+                }
+            } catch (error) {
+                mostrarMensagem('Erro de conexão com o servidor.', 'erro');
+            }
+        }
+
+        function mostrarMensagem(texto, classe) {
+            mensagem.innerText = texto;
+            mensagem.className = classe;
+        }
+    </script>
+</body>
+</html>
