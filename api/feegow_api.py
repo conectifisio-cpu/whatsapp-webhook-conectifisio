@@ -1,18 +1,19 @@
 import requests
-import os  # <-- Adicionamos essa biblioteca para ler variáveis de ambiente
+import os
 from datetime import datetime
 
 # =====================================================================
 # Configurações da API Feegow
 # =====================================================================
 BASE_URL = "https://api.feegow.com/v1/api"
-
-# Agora o Python vai puxar o token direto do painel que você configurou!
 API_TOKEN = os.environ.get("FEEGOW_TOKEN")
 
+# Cabeçalhos atualizados com a recomendação de segurança da Feegow
 HEADERS = {
     "x-access-token": API_TOKEN,
-    "Content-Type": "application/json"
+    "token": API_TOKEN,
+    "Content-Type": "application/json",
+    "User-Agent": "Integracao-Conectifisio/1.0 (contato@ictusfisioterapia.com.br)"
 }
 
 def buscar_agendamento_hoje_por_cpf(cpf_limpo):
@@ -74,7 +75,9 @@ def buscar_agendamento_hoje_por_cpf(cpf_limpo):
         }
 
     except requests.exceptions.RequestException as e:
-        print(f"Erro de conexão: {e}")
+        # Captura o ID do Cloudflare para mandar para o suporte se precisar
+        cf_ray = e.response.headers.get('cf-ray') if e.response else "N/A"
+        print(f"Erro Feegow (CF-RAY: {cf_ray}): {e}")
         return {"erro": "Falha de comunicação com o servidor da clínica."}
 
 def confirmar_checkin_totem(agendamento_id):
@@ -100,5 +103,7 @@ def confirmar_checkin_totem(agendamento_id):
             return {"sucesso": False, "erro": "Não foi possível atualizar o status na recepção."}
             
     except requests.exceptions.RequestException as e:
-        print(f"Erro na requisição de atualização: {e}")
+        # Captura o ID do Cloudflare aqui também
+        cf_ray = e.response.headers.get('cf-ray') if e.response else "N/A"
+        print(f"Erro na requisição de atualização (CF-RAY: {cf_ray}): {e}")
         return {"sucesso": False, "erro": "Erro ao confirmar a presença no sistema."}
