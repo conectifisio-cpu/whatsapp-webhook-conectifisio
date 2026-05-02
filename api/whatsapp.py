@@ -16,11 +16,11 @@ except ImportError:
 from flask import Flask, request, jsonify, send_from_directory, render_template
 import firebase_admin
 from firebase_admin import credentials, firestore, storage as fb_storage
-
+from totem import totem_bp
 # Configura o Flask para encontrar templates e static a partir da raiz do projeto
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 app = Flask(__name__, template_folder=os.path.join(_ROOT_DIR, 'templates'), static_folder=os.path.join(_ROOT_DIR, 'static'))
-
+app.register_blueprint(totem_bp)
 @app.after_request
 def add_cors_headers(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
