@@ -1,11 +1,21 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, render_template
 
 # Importando as funções do arquivo que você acabou de criar!
-# Como estamos na pasta raiz chamando a pasta api, usamos api.feegow_api
 from api.feegow_api import buscar_agendamento_hoje_por_cpf, confirmar_checkin_totem
 
 totem_bp = Blueprint('totem', __name__)
 
+# ==========================================================
+# ROTA 1: Exibe a tela visual do tablet (O HTML)
+# ==========================================================
+@totem_bp.route('/totem', methods=['GET'])
+def pagina_totem():
+    return render_template('totem.html')
+
+
+# ==========================================================
+# ROTA 2: Recebe o CPF e processa o check-in na Feegow
+# ==========================================================
 @totem_bp.route('/api/totem/checkin', methods=['POST'])
 def processar_checkin():
     dados = request.get_json()
@@ -14,7 +24,7 @@ def processar_checkin():
     if not cpf_bruto:
         return jsonify({"erro": "CPF não informado."}), 400
 
-    # Limpa os pontos e traços do CPF (ex: 123.456.789-00 vira 12345678900)
+    # Limpa os pontos e traços do CPF
     cpf_limpo = ''.join(filter(str.isdigit, str(cpf_bruto)))
 
     # 1. Busca o agendamento de hoje
