@@ -1,11 +1,14 @@
 import requests
+import os  # <-- Adicionamos essa biblioteca para ler variáveis de ambiente
 from datetime import datetime
 
 # =====================================================================
 # Configurações da API Feegow
 # =====================================================================
 BASE_URL = "https://api.feegow.com/v1/api"
-API_TOKEN = "COLOQUE_SEU_TOKEN_AQUI"
+
+# Agora o Python vai puxar o token direto do painel que você configurou!
+API_TOKEN = os.environ.get("FEEGOW_TOKEN")
 
 HEADERS = {
     "x-access-token": API_TOKEN,
