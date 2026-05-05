@@ -1133,6 +1133,20 @@ def webhook():
                     return jsonify({"error": err_str}), 500
             except Exception as e: return jsonify({"error": str(e)}), 500
 
+        if request.args.get("action") == "get_historico":
+            try:
+                phone = request.args.get("phone")
+                if not phone or not db:
+                    return jsonify({"error": "phone obrigatório"}), 400
+                doc = db.collection("PatientsKanban").document(phone).get()
+                if not doc.exists:
+                    return jsonify({"historico": [], "found": False}), 200
+                data = doc.to_dict()
+                historico = data.get("historico", [])
+                return jsonify({"historico": historico, "found": True}), 200
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         if request.args.get("action") == "update_status":
             try:
                 phone = request.args.get("phone")
