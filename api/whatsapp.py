@@ -1109,6 +1109,11 @@ def webhook():
                     for doc in docs:
                         data = doc.to_dict()
                         data["id"] = doc.id
+                        # Remove historico do payload do kanban — reduz resposta de MB para KB
+                        # O historico completo só é carregado quando a recepção abre um card específico
+                        data.pop("historico", None)
+                        data.pop("carteirinha_b64", None)
+                        data.pop("pedido_b64", None)
                         if "lastInteraction" in data and data["lastInteraction"]:
                             try:
                                 ts = data["lastInteraction"]
