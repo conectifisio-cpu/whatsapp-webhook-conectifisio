@@ -1677,7 +1677,9 @@ def webhook():
                 if info.get("feegow_id"):
                     enviar_botoes(phone, "Perfeito! Como você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
                 else:
-                    responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
+                    primeiro_nome = info.get("primeiro_nome", "")
+                    msg_nome = f"Perfeito! Para finalizar o cadastro, {primeiro_nome} — preciso do seu nome completo conforme documento:" if primeiro_nome else "Perfeito! Para seu cadastro, qual seu nome completo conforme documento?"
+                    responder_texto(phone, msg_nome)
                 return jsonify({"status": "time_travel_particular"}), 200
             elif msg_recebida == "Convênio":
                 update_paciente(phone, {"status": "nome_convenio"})
@@ -2235,7 +2237,10 @@ def webhook():
             if "Particular" in msg_recebida:
                 update_paciente(phone, {"modalidade": "Particular", "status": "agendando" if is_veteran else "cadastrando_nome_completo"})
                 if is_veteran: enviar_botoes(phone, "Perfeito! Mudamos para Particular. Qual o melhor período para você? ☀️ ⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
-                else: responder_texto(phone, "Perfeito! Para seu cadastro particular, digite seu NOME COMPLETO (conforme documento):")
+                else:
+                    primeiro_nome = info.get("primeiro_nome", "")
+                    msg_nome = f"Perfeito! Para finalizar o cadastro, {primeiro_nome} — preciso do seu nome completo conforme documento:" if primeiro_nome else "Perfeito! Para seu cadastro, qual seu nome completo conforme documento?"
+                    responder_texto(phone, msg_nome)
             else:
                 update_paciente(phone, {"status": "escolhendo_especialidade"})
                 secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}]}]
