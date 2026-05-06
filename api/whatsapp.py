@@ -47,7 +47,27 @@ PORTO_SEGURO_CPF = os.environ.get("PORTO_SEGURO_CPF", "25052258852")
 PORTO_SEGURO_SENHA = os.environ.get("PORTO_SEGURO_SENHA", "")
 PORTO_SEGURO_CODIGO_PRESTADOR = "512560"
 PORTO_SEGURO_TUSS_FISIO = "25090089"
+# ==========================================
+# 🛡️ VALIDAÇÃO DE INICIALIZAÇÃO
+# ==========================================
+import sys as _sys_init
 
+_MODELO_ESPERADO_SUFIXO = "conectifisio-v7"
+
+def _validar_configuracao():
+    alertas = []
+    if _MODELO_ESPERADO_SUFIXO not in OPENAI_FAQ_MODEL:
+        alertas.append(f"⚠️  OPENAI_FAQ_MODEL desatualizado! Atual: {OPENAI_FAQ_MODEL} | Esperado: deve conter '{_MODELO_ESPERADO_SUFIXO}'")
+    for nome, valor in {"WHATSAPP_TOKEN": WHATSAPP_TOKEN, "OPENAI_API_KEY": OPENAI_API_KEY, "FEEGOW_TOKEN": FEEGOW_TOKEN}.items():
+        if not valor:
+            alertas.append(f"❌  {nome} está VAZIA")
+    if alertas:
+        for a in alertas:
+            _sys_init.stderr.write("🚨 " + a + "\n")
+    else:
+        _sys_init.stderr.write(f"✅ Config OK — modelo={OPENAI_FAQ_MODEL.split(':')[-1]}\n")
+
+_validar_configuracao()
 # ==========================================
 # INICIALIZAÇÃO DO FIREBASE
 # ==========================================
