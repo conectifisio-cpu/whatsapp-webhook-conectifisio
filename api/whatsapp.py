@@ -1153,6 +1153,8 @@ def webhook():
                 new_status = request.args.get("status")
                 atendendo_por = request.args.get("atendendo_por", None)
                 atendendo_em = request.args.get("atendendo_em", None)
+                finalizado_por = request.args.get("finalizado_por", None)
+                finalizado_em = request.args.get("finalizado_em", None)
                 if not phone:
                     return jsonify({"success": False}), 400
                 update_fields = {}
@@ -1165,6 +1167,9 @@ def webhook():
                     else:
                         update_fields["atendendo_por"] = atendendo_por
                         update_fields["atendendo_em"] = atendendo_em or firestore.SERVER_TIMESTAMP
+                if finalizado_por:
+                    update_fields["finalizado_por"] = finalizado_por
+                    update_fields["finalizado_em"] = finalizado_em or datetime.utcnow().strftime('%d/%m/%Y %H:%M')
                 if update_fields:
                     db.collection("PatientsKanban").document(phone).set(update_fields, merge=True)
                     return jsonify({"success": True}), 200
