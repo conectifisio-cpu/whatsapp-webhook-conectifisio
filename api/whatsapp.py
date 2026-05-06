@@ -1757,6 +1757,15 @@ def webhook():
         if status == "arquivado":
             if is_cortesia:
                 return jsonify({"status": "cortesia_arquivado_ignorada"}), 200
+            # CIRURGIA 1 (fix): veterano vai direto ao menu, sem pedir unidade
+            if is_veteran:
+                nome_salvo = info.get("title", "Paciente").split()[0]
+                unidade_salva = info.get("unit", "")
+                update_paciente(phone, {"status": "menu_veterano", "servico": "", "modalidade": ""})
+                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                unid_txt = f" (unidade {unidade_salva})" if unidade_salva else ""
+                enviar_lista(phone, f"Olá, {nome_salvo}! ✨ Que bom ter você de volta{unid_txt}. Como posso te ajudar hoje?", "Ver Opções", secoes)
+                return jsonify({"status": "veterano_reativacao_direto"}), 200
             update_paciente(phone, {"status": "escolhendo_unidade", "servico": "", "modalidade": ""})
             enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reativacao_arquivado"}), 200
