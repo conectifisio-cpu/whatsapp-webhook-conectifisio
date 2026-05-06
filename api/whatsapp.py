@@ -1667,7 +1667,7 @@ def webhook():
             )
             return jsonify({"status": "faq_periodo_capturado"}), 200
 
-        STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "atendimento_humano", "pausado", "arquivado"]
+        STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "atendimento_humano", "pausado", "arquivado", "menu_veterano", "agendando", "cadastrando_queixa_veterano"]
         if msg_type == "text" and len(msg_limpa) > 3 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
             resposta_faq = consultar_faq(msg_recebida)
             if resposta_faq and resposta_faq.upper() != "NENHUMA":
@@ -1676,7 +1676,11 @@ def webhook():
                 responder_texto(phone, resposta_faq)
                 if "vou encaminhar" in resposta_faq.lower():
                     import sys
-                    if "manhã, tarde ou noite" in resposta_faq.lower():
+                    # CIRURGIA 2: veterano não é redirecionado — mantém contexto
+                    if is_veteran and status_atual in ["menu_veterano", "agendando", "cadastrando_queixa_veterano"]:
+                        update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida})
+                        print(f"[FAQ→VETERANO] Respondeu FAQ sem resetar estado: {status_atual}", file=sys.stderr)
+                    elif "manhã, tarde ou noite" in resposta_faq.lower():
                         update_paciente(phone, {
                             "status": "triagem",
                             "ultima_mensagem_paciente": msg_recebida,
@@ -1826,15 +1830,29 @@ def webhook():
 
         if status == "triagem":
             if info.get("faq_encaminhou"):
-                update_paciente(phone, {
-                    "status": "escolhendo_unidade",
-                    "faq_encaminhou": False
-                })
+                # CIRURGIA 1: veterano volta direto ao menu, sem pedir unidade
+                if is_veteran:
+                    nome_salvo = info.get("title", "Paciente").split()[0]
+                    update_paciente(phone, {"status": "menu_veterano", "faq_encaminhou": False})
+                    secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                    enviar_lista(phone, f"Olá, {nome_salvo}! 😊 Como posso te ajudar?", "Ver Opções", secoes)
+                    return jsonify({"status": "veterano_faq_para_menu"}), 200
+                update_paciente(phone, {"status": "escolhendo_unidade", "faq_encaminhou": False})
                 enviar_botoes(phone,
                     "Para iniciarmos seu atendimento, em qual unidade você deseja ser atendido? 😊",
                     [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
                 )
                 return jsonify({"status": "faq_para_fluxo"}), 200
+
+            # CIRURGIA 1: veterano pula seleção de unidade — vai direto ao menu
+            if is_veteran:
+                nome_salvo = info.get("title", "Paciente").split()[0]
+                unidade_salva = info.get("unit", "")
+                update_paciente(phone, {"status": "menu_veterano"})
+                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                unid_txt = f" (unidade {unidade_salva})" if unidade_salva else ""
+                enviar_lista(phone, f"Olá, {nome_salvo}! ✨ Que bom ter você de volta{unid_txt}. Como posso te ajudar hoje?", "Ver Opções", secoes)
+                return jsonify({"status": "veterano_menu_direto"}), 200
 
             update_paciente(phone, {"status": "escolhendo_unidade"})
             if info.get("is_historico"):
@@ -1909,19 +1927,35 @@ def webhook():
                 responder_texto(phone, "Entendido! Vamos organizar sua nova guia. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
             
             elif "Reagendar" in msg_recebida:
+                # CIRURGIA 3: status próprio para reagendamento — não mistura com novo agendamento
                 sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
-                mod_salva = info.get("modalidade") if info.get("modalidade") else "Particular"
-                update_paciente(phone, {"status": "agendando", "modalidade": mod_salva})
-                botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}]
+                update_paciente(phone, {"status": "reagendando"})
+                botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}]
                 if sessoes and len(sessoes) > 0:
-                    enviar_botoes(phone, f"Localizei suas próximas sessões:\n\n{chr(10).join(sessoes[:5])}\n\nPara qual período você gostaria de reagendar o seu atendimento? ☀️ ⛅", botoes)
+                    enviar_botoes(phone, f"Localizei suas próximas sessões:\n\n{chr(10).join(sessoes[:5])}\n\nQual o melhor período para remarcar? ☀️ ⛅ 🌙", botoes)
                 else:
-                    enviar_botoes(phone, "Não encontrei agendamentos futuros próximos no sistema. Mas não se preocupe, vamos organizar isso agora! 😊\n\nQual o melhor período para você? ☀️ ⛅", botoes)
+                    enviar_botoes(phone, "Vamos organizar seu reagendamento! 😊\n\nQual o melhor período para você? ☀️ ⛅ 🌙", botoes)
             
             elif "Secretaria" in msg_recebida or "📁" in msg_recebida:
                 update_paciente(phone, {"status": "menu_secretaria"})
                 secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s5", "title": "📁 Enviar Exames/Resultados"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
+
+        elif status == "reagendando":
+            # CIRURGIA 3: captura período e encaminha com contexto completo
+            periodos_validos = ["Manhã", "Tarde", "Noite"]
+            periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "").strip()
+            if periodo_limpo not in periodos_validos:
+                enviar_botoes(phone, "Por favor, escolha o período:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}])
+            else:
+                nome_salvo = info.get("title", "Paciente").split()[0]
+                update_paciente(phone, {
+                    "status": "atendimento_humano",
+                    "periodo": periodo_limpo,
+                    "queixa": f"[REAGENDAMENTO]: prefere período da {periodo_limpo}",
+                    "unread": True
+                })
+                responder_texto(phone, f"Período da {periodo_limpo} anotado! ✅\n\nNossa equipe já foi notificada e vai confirmar o novo horário em instantes. Aguarde! 😊")
 
         elif status == "cadastrando_queixa_veterano":
             acolhimento = chamar_ia_custom(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
