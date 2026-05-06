@@ -788,6 +788,7 @@
         const API_GET = `${BACKEND_URL}/api/whatsapp?action=get_patients`;
         const API_UPDATE = `${BACKEND_URL}/api/whatsapp?action=update_status`;
         const API_CHAT = `${BACKEND_URL}/api/chat/send`;
+        const API_HISTORICO = `${BACKEND_URL}/api/whatsapp?action=get_historico`;
         
         let allPatients = [];
         let activeChats = [];
@@ -1208,11 +1209,8 @@
             if (isFirstLoad) {
                 patientsList.forEach(p => {
                     knownPatientIds.add(p.id);
-                    // Conta mensagens iniciais
-                    if (p.historico) {
-                        const userMsgs = p.historico.filter(m => m.de === 'paciente' || m.de === 'cliente').length;
-                        lastMessageCounts[p.id] = userMsgs;
-                    }
+                    // Inicializa referência com timestamp (histórico não vem no get_patients)
+                    lastMessageCounts[p.id] = p.lastPatientInteraction || p.lastInteraction || '';
                     const slaTime = p.humanInteractionAt || p.lastInteraction;
                     const waitMins = slaTime ? Math.floor((new Date() - new Date(slaTime))/60000) : 0;
                     if (waitMins >= 10) alertedSlaIds.add(p.id);
@@ -1234,23 +1232,31 @@
                     addNotification('novo_atendimento', `👤 Novo atendimento: ${p.title || 'Paciente'}`, p.id);
                 }
 
-                // Verifica nova mensagem de paciente existente
-                if (p.historico) {
-                    const currentUserMsgs = p.historico.filter(m => m.de === 'paciente' || m.de === 'cliente').length;
-                    const previousMsgs = lastMessageCounts[p.id] || 0;
-                    
-                    if (currentUserMsgs > previousMsgs) {
-                        p.hasNewMessage = true; // Flag para piscar o card
+                // Verifica nova mensagem usando lastPatientInteraction (histórico não vem no get_patients)
+                const lastInt = p.lastPatientInteraction || p.lastInteraction || '';
+                const prevInt = lastMessageCounts[p.id] || '';
+                if (lastInt && lastInt !== prevInt) {
+                    if (prevInt) { // não notifica no primeiro load
+                        p.hasNewMessage = true;
                         if (!activeChats.includes(p.id)) {
                             showToast(`Nova mensagem de ${p.title || 'Paciente'}`, 'info');
                             hasNew = true;
-                            // Notificação no sino apenas para pacientes em intervenção humana
                             if (['pausado', 'atendimento_humano'].includes(p.status)) {
                                 addNotification('nova_mensagem', `💬 ${p.title || 'Paciente'} enviou uma mensagem`, p.id);
                             }
+                        } else {
+                            // Chat aberto: recarrega histórico via API
+                            fetch(`${API_HISTORICO}&phone=${p.id}`)
+                                .then(r => r.json())
+                                .then(data => {
+                                    if (data.historico && data.historico.length > 0) {
+                                        p.historico = data.historico;
+                                        updateChatMessagesHTML(p.id);
+                                    }
+                                }).catch(() => {});
                         }
-                        lastMessageCounts[p.id] = currentUserMsgs;
                     }
+                    lastMessageCounts[p.id] = lastInt;
                 }
 
                 const slaTime2 = p.humanInteractionAt || p.lastInteraction;
@@ -1430,6 +1436,8 @@
                 allPatients.forEach(p => {
                     const oldP = oldPatients.find(op => op.id === p.id);
                     if (oldP && oldP.hasNewMessage) p.hasNewMessage = true;
+                    // Preserva histórico já carregado — get_patients não retorna mais
+                    if (oldP && oldP.historico && oldP.historico.length > 0) p.historico = oldP.historico;
                 });
                 
                 checkNotifications(allPatients);
@@ -1948,23 +1956,36 @@
         function openChat(patientId) {
             const container = document.getElementById('floating-chats-container');
             if(container) container.style.display = 'flex';
-            
-            // Remove a flag de nova mensagem ao abrir o chat
+
             const p = allPatients.find(x => x.id === patientId);
             if (p) p.hasNewMessage = false;
-            
+
             if (activeChats.includes(patientId)) {
                 minimizedChats.delete(patientId);
                 renderChatWindows();
                 return;
             }
             if (activeChats.length >= 3) {
-                activeChats.shift(); 
+                activeChats.shift();
             }
             activeChats.push(patientId);
             minimizedChats.delete(patientId);
+
+            // Carrega histórico via API dedicada (get_patients não retorna mais histórico)
+            if (p && (!p.historico || p.historico.length === 0)) {
+                fetch(`${API_HISTORICO}&phone=${patientId}`)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.historico && data.historico.length > 0) {
+                            p.historico = data.historico;
+                            updateChatMessagesHTML(patientId);
+                        }
+                    })
+                    .catch(() => {});
+            }
+
             renderChatWindows();
-            renderUI(); // Atualiza a UI para remover o piscar
+            renderUI();
         }
 
         function closeChat(patientId) {
