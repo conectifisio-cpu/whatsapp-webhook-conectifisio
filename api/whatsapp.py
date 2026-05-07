@@ -310,7 +310,7 @@ def get_feegow_headers():
     return {
         "Content-Type": "application/json", 
         "x-access-token": FEEGOW_TOKEN,
-        "User-Agent": "Conectifisio-Integration/1.0"
+        "User-Agent": "Integracao-Conectifisio/1.0 (contato@ictusfisioterapia.com.br)"
     }
 
 def formatar_data_feegow(data_br):
@@ -482,12 +482,17 @@ def buscar_feegow_por_cpf(cpf):
     return None
 
 def consultar_agenda_feegow(paciente_id):
-    if not FEEGOW_TOKEN or not paciente_id: return None
+    import sys
+    if not FEEGOW_TOKEN or not paciente_id:
+        print(f"[FEEGOW-AGENDA] Abortando: token={bool(FEEGOW_TOKEN)} paciente_id={paciente_id}", file=sys.stderr)
+        return None
     hoje = datetime.now()
     futuro = hoje + timedelta(days=90)
     url = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={paciente_id}&data_start={hoje.strftime('%d-%m-%Y')}&data_end={futuro.strftime('%d-%m-%Y')}"
+    print(f"[FEEGOW-AGENDA] Consultando: paciente_id={paciente_id} url={url}", file=sys.stderr)
     try:
         res = requests.get(url, headers=get_feegow_headers(), timeout=10)
+        print(f"[FEEGOW-AGENDA] HTTP {res.status_code} | resp={res.text[:300]}", file=sys.stderr)
         if res.status_code == 200:
             dados = res.json()
             if dados.get("success") != False and dados.get("content"):
@@ -501,8 +506,14 @@ def consultar_agenda_feegow(paciente_id):
                             hora = str(a.get("horario") or a.get("hora", ""))[:5]
                             parts = data_raw.split('-')
                             if len(parts) == 3: sessoes.append(f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {proc}")
+                print(f"[FEEGOW-AGENDA] {len(sessoes)} sessão(ões) encontrada(s)", file=sys.stderr)
                 return sessoes
-    except: pass
+            else:
+                print(f"[FEEGOW-AGENDA] Sem agendamentos ou success=False: {dados}", file=sys.stderr)
+        else:
+            print(f"[FEEGOW-AGENDA] Erro HTTP {res.status_code}: {res.text[:200]}", file=sys.stderr)
+    except Exception as e:
+        print(f"[FEEGOW-AGENDA] Exceção: {e}", file=sys.stderr)
     return None
 
 def integrar_feegow(phone, info):
