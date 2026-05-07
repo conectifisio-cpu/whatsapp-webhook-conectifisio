@@ -501,10 +501,16 @@ def consultar_agenda_feegow(paciente_id):
                     status_nome = str(a.get("status_nome", a.get("status", ""))).lower()
                     if "cancelado" not in status_nome and "falta" not in status_nome:
                         data_raw = str(a.get("data", "")).split("T")[0]
-                        if data_raw >= hoje.strftime('%Y-%m-%d'):
+                        # Feegow retorna data em DD-MM-YYYY — converter para YYYY-MM-DD para comparação
+                        if re.match(r'^\d{2}-\d{2}-\d{4}$', data_raw):
+                            partes = data_raw.split('-')
+                            data_iso = f"{partes[2]}-{partes[1]}-{partes[0]}"
+                        else:
+                            data_iso = data_raw
+                        if data_iso >= hoje.strftime('%Y-%m-%d'):
                             proc = a.get("procedimento_nome") or (a.get("procedimento", {}).get("nome") if isinstance(a.get("procedimento"), dict) else "Sessão")
                             hora = str(a.get("horario") or a.get("hora", ""))[:5]
-                            parts = data_raw.split('-')
+                            parts = data_iso.split('-')
                             if len(parts) == 3: sessoes.append(f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {proc}")
                 print(f"[FEEGOW-AGENDA] {len(sessoes)} sessão(ões) encontrada(s)", file=sys.stderr)
                 return sessoes
