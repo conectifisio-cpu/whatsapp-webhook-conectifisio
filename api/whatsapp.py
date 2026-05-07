@@ -236,7 +236,7 @@ def _busca_por_ia(mensagem, faq_data):
     payload = {
         "model": OPENAI_FAQ_MODEL,  # Usa o modelo FAQ específico (conectifisio-v2)
         "messages": [
-            {"role": "system", "content": "Você é o assistente virtual da ConectiFisio. Responda SOMENTE com base no seu treinamento. NUNCA invente coberturas de convênios, procedimentos, horários ou informações que não foram explicitamente treinadas. Se não tiver certeza absoluta da resposta, responda SOMENTE com a palavra NENHUMA. É preferível responder NENHUMA do que inventar uma resposta errada. Se a mensagem não for uma dúvida sobre a clínica, responda SOMENTE com a palavra NENHUMA."},
+            {"role": "system", "content": "Você é o assistente virtual da ConectiFisio, clínica de fisioterapia em São Paulo. Seu tom é acolhedor, empático e humano — celebre conquistas do paciente como gravidez, cirurgia bem-sucedida, etc. PORÉM: jamais invente coberturas de convênios, procedimentos, horários ou informações clínicas que não foram treinadas. Se não tiver certeza absoluta de um dado clínico ou de convênio, responda SOMENTE com a palavra NENHUMA. É preferível responder NENHUMA do que inventar uma informação errada. Se a mensagem não for uma dúvida sobre a clínica, responda SOMENTE com a palavra NENHUMA."},
             {"role": "user", "content": prompt[:3000]}
         ],
         "max_tokens": 800,
@@ -1674,6 +1674,15 @@ def webhook():
                 import sys
                 print(f"[FAQ] Respondendo: '{resposta_faq[:60]}'", file=sys.stderr)
                 responder_texto(phone, resposta_faq)
+                # Se paciente estava arquivado, reativa no Kanban
+                if status_atual == "arquivado":
+                    update_paciente(phone, {
+                        "status": "pausado",
+                        "unread": True,
+                        "ultima_mensagem_paciente": msg_recebida,
+                        "faq_encaminhou": True
+                    })
+                    return jsonify({"status": "faq_arquivado_reativado"}), 200
                 if "vou encaminhar" in resposta_faq.lower():
                     import sys
                     # CIRURGIA 2: veterano não é redirecionado — mantém contexto
