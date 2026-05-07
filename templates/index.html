@@ -1986,13 +1986,46 @@
 
             renderChatWindows();
             renderUI();
-        }
+            startChatPolling(patientId);
 
         function closeChat(patientId) {
             activeChats = activeChats.filter(id => id !== patientId);
             minimizedChats.delete(patientId);
             delete pendingFiles[patientId];
+            stopChatPolling(patientId);
             renderChatWindows();
+        }
+
+        // ==========================================
+        // POLLING DO CHAT ABERTO (5s por paciente)
+        // ==========================================
+        const _chatPollingIntervals = {};
+
+        function startChatPolling(patientId) {
+            if (_chatPollingIntervals[patientId]) return; // já rodando
+            _chatPollingIntervals[patientId] = setInterval(async () => {
+                if (!activeChats.includes(patientId) || minimizedChats.has(patientId)) return;
+                try {
+                    const res = await fetch(`${API_HISTORICO}&phone=${patientId}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (!data.historico || data.historico.length === 0) return;
+                    const p = allPatients.find(x => x.id === patientId);
+                    if (!p) return;
+                    const oldLen = (p.historico || []).length;
+                    if (data.historico.length !== oldLen) {
+                        p.historico = data.historico;
+                        updateChatMessagesHTML(patientId);
+                    }
+                } catch(e) {}
+            }, 5000);
+        }
+
+        function stopChatPolling(patientId) {
+            if (_chatPollingIntervals[patientId]) {
+                clearInterval(_chatPollingIntervals[patientId]);
+                delete _chatPollingIntervals[patientId];
+            }
         }
 
         function toggleMinimizeChat(patientId) {
@@ -2542,6 +2575,15 @@
                     delete pendingFiles[id];
                     clearReply(id);
                     renderChatWindows();
+                    // Recarrega histórico imediatamente para mostrar a msg enviada
+                    const p = allPatients.find(x => x.id === id);
+                    if (p) {
+                        fetch(`${API_HISTORICO}&phone=${id}`)
+                            .then(r => r.json())
+                            .then(data => {
+                                if (data.historico) { p.historico = data.historico; updateChatMessagesHTML(id); }
+                            }).catch(() => {});
+                    }
                     fetchData(); 
                 } else { 
                     const errorData = await res.json();
