@@ -265,7 +265,7 @@ def consultar_faq(mensagem):
     import sys
     msg_limpa = mensagem.lower().strip()
     faq_data = _carregar_faq()
-    match_ia = _busca_por_ia(mensagem, [])
+    match_ia = _busca_por_ia(mensagem, faq_data)
     if match_ia:
         print("[FAQ-IA] Respondendo via modelo v7", file=sys.stderr)
     return match_ia
