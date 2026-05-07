@@ -1765,7 +1765,7 @@ def webhook():
             
         if status == "arquivado":
             # CIRURGIA 1 (fix): veterano vai direto ao menu, sem pedir unidade
-            if is_veteran:
+            if info.get("feegow_id"):
                 nome_salvo = info.get("title", "Paciente").split()[0]
                 unidade_salva = info.get("unit", "")
                 update_paciente(phone, {"status": "menu_veterano", "servico": "", "modalidade": ""})
