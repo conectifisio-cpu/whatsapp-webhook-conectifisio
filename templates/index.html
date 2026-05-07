@@ -1987,6 +1987,7 @@
             renderChatWindows();
             renderUI();
             startChatPolling(patientId);
+        }
 
         function closeChat(patientId) {
             activeChats = activeChats.filter(id => id !== patientId);
