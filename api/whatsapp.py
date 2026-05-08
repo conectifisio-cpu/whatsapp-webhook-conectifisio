@@ -482,12 +482,26 @@ def buscar_feegow_por_cpf(cpf):
     return None
 
 # Mapa de equipamentos Feegow → unidade e serviço
+# local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},
-    5: {"unidade": "São Caetano", "servico": "Acupuntura"},
-    4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},
-    6: {"unidade": "Ipiranga",    "servico": "Acupuntura"},
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado)
+    # Os demais serão preenchidos após Dr. Issa confirmar os IDs
 }
+
+def _nome_para_servico(nome_equipamento):
+    """Converte nome do equipamento Feegow para serviço legível."""
+    nome = str(nome_equipamento).lower()
+    if "acupuntura" in nome: return "Acupuntura"
+    if "cinesio" in nome or "fisio" in nome: return "Fisioterapia"
+    if "pilates" in nome: return "Pilates"
+    return None
+
+def _nome_para_unidade(nome_equipamento):
+    """Extrai unidade do nome do equipamento Feegow."""
+    nome = str(nome_equipamento).lower()
+    if "ipiranga" in nome: return "Ipiranga"
+    if "scs" in nome or "são caetano" in nome or "santa paula" in nome: return "São Caetano"
+    return None
 
 def consultar_agenda_feegow(paciente_id, retornar_raw=False):
     """Consulta agenda do paciente no Feegow.
@@ -551,45 +565,68 @@ def consultar_agenda_feegow(paciente_id, retornar_raw=False):
     return None
 
 def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso, data_fim_iso):
-    """Consulta horarios disponiveis. Datas em formato YYYY-MM-DD."""
+    """Consulta horarios disponiveis para equipamento. Tenta tipo E (equipamento) e L (local)."""
     import sys
     if not FEEGOW_TOKEN: return []
-    params = {
-        "tipo": "P",
-        "data_start": data_inicio_iso,
-        "data_end": data_fim_iso,
-        "procedimento_id": procedimento_id,
-        "local_id": local_id
-    }
     url = "https://api.feegow.com/v1/api/appoints/available-schedule-v2"
-    print(f"[FEEGOW-DISP] GET disponibilidade: {params}", file=sys.stderr)
-    try:
-        res = requests.get(url, params=params, headers=get_feegow_headers(), timeout=10)
-        print(f"[FEEGOW-DISP] HTTP {res.status_code} | resp={res.text[:400]}", file=sys.stderr)
-        if res.status_code == 200:
-            dados = res.json()
-            if dados.get("success") != False and dados.get("content"):
-                slots = []
-                for prof_id, datas in dados["content"].items():
-                    if isinstance(datas, dict):
-                        for data_str, horarios in datas.items():
-                            if isinstance(horarios, list):
-                                for h in horarios:
-                                    hora = str(h)[:5]
-                                    try:
-                                        if re.match(r'^\d{4}-\d{2}-\d{2}$', data_str):
-                                            p = data_str.split('-')
-                                            data_br = f"{p[2]}/{p[1]}/{p[0]}"
-                                        else:
-                                            data_br = data_str
-                                    except:
-                                        data_br = data_str
-                                    slots.append({"data": data_str, "data_br": data_br, "hora": hora, "label": f"🗓️ *{data_br} às {hora}*"})
-                slots.sort(key=lambda x: (x["data"], x["hora"]))
-                print(f"[FEEGOW-DISP] {len(slots)} horário(s) encontrado(s)", file=sys.stderr)
-                return slots
-    except Exception as e:
-        print(f"[FEEGOW-DISP] Exceção: {e}", file=sys.stderr)
+
+    def _extrair_slots(dados):
+        slots = []
+        content = dados.get("content", {})
+        if not content: return slots
+        # Estrutura: {id: {data: [horarios]}} ou {data: [horarios]}
+        for chave, valor in content.items():
+            if isinstance(valor, dict):
+                for data_str, horarios in valor.items():
+                    if isinstance(horarios, list):
+                        for h in horarios:
+                            _add_slot(slots, data_str, str(h)[:5])
+            elif isinstance(valor, list):
+                _add_slot(slots, chave, str(valor[0])[:5] if valor else "")
+        slots.sort(key=lambda x: (x["data"], x["hora"]))
+        return slots
+
+    def _add_slot(slots, data_str, hora):
+        try:
+            if re.match(r'^\d{4}-\d{2}-\d{2}$', data_str):
+                p = data_str.split('-')
+                data_br = f"{p[2]}/{p[1]}/{p[0]}"
+                data_iso = data_str
+            elif re.match(r'^\d{2}-\d{2}-\d{4}$', data_str):
+                p = data_str.split('-')
+                data_iso = f"{p[2]}-{p[1]}-{p[0]}"
+                data_br = f"{p[0]}/{p[1]}/{p[2]}"
+            else:
+                data_iso = data_str; data_br = data_str
+            if hora:
+                slots.append({"data": data_iso, "data_br": data_br, "hora": hora, "label": f"🗓️ *{data_br} às {hora}*"})
+        except: pass
+
+    # Tenta diferentes combinações de tipo (E=Equipamento, L=Local, P=Profissional)
+    for tipo in ["E", "L", "P"]:
+        params = {
+            "tipo": tipo,
+            "data_start": data_inicio_iso,
+            "data_end": data_fim_iso,
+            "local_id": local_id
+        }
+        if procedimento_id:
+            params["procedimento_id"] = procedimento_id
+        print(f"[FEEGOW-DISP] GET tipo={tipo} local_id={local_id} {data_inicio_iso}→{data_fim_iso}", file=sys.stderr)
+        try:
+            res = requests.get(url, params=params, headers=get_feegow_headers(), timeout=10)
+            print(f"[FEEGOW-DISP] HTTP {res.status_code} | resp={res.text[:400]}", file=sys.stderr)
+            if res.status_code == 200:
+                dados = res.json()
+                if dados.get("success") != False and dados.get("content"):
+                    slots = _extrair_slots(dados)
+                    if slots:
+                        print(f"[FEEGOW-DISP] {len(slots)} horário(s) via tipo={tipo}", file=sys.stderr)
+                        return slots
+        except Exception as e:
+            print(f"[FEEGOW-DISP] Exceção tipo={tipo}: {e}", file=sys.stderr)
+
+    print(f"[FEEGOW-DISP] Nenhum horário encontrado para local_id={local_id}", file=sys.stderr)
     return []
 
 def dias_uteis_a_partir(data_inicio, qtd_dias):
