@@ -523,20 +523,32 @@ def consultar_agenda_feegow(paciente_id):
     return None
 
 def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio, data_fim):
-    """Consulta horários disponíveis no equipamento/local para reagendamento."""
+    """Consulta horarios disponiveis no equipamento/local para reagendamento.
+    data_inicio e data_fim aceitam YYYY-MM-DD ou DD-MM-YYYY — normaliza internamente.
+    """
     import sys
     if not FEEGOW_TOKEN: return []
-    url = "https://api.feegow.com/v1/api/appoints/available-schedule-v2"
-    payload = {
+
+    def _para_iso(d):
+        s = str(d)
+        if re.match(r"^\d{2}-\d{2}-\d{4}$", s):
+            p = s.split("-"); return f"{p[2]}-{p[1]}-{p[0]}"
+        return s
+
+    data_inicio_iso = _para_iso(data_inicio)
+    data_fim_iso = _para_iso(data_fim)
+
+    params = {
         "tipo": "P",
-        "data_start": data_inicio,
-        "data_end": data_fim,
+        "data_start": data_inicio_iso,
+        "data_end": data_fim_iso,
         "procedimento_id": procedimento_id,
         "local_id": local_id
     }
-    print(f"[FEEGOW-DISP] Consultando disponibilidade: {payload}", file=sys.stderr)
+    url = "https://api.feegow.com/v1/api/appoints/available-schedule-v2"
+    print(f"[FEEGOW-DISP] GET disponibilidade: {params}", file=sys.stderr)
     try:
-        res = requests.post(url, json=payload, headers=get_feegow_headers(), timeout=10)
+        res = requests.get(url, params=params, headers=get_feegow_headers(), timeout=10)
         print(f"[FEEGOW-DISP] HTTP {res.status_code} | resp={res.text[:400]}", file=sys.stderr)
         if res.status_code == 200:
             dados = res.json()
@@ -2146,7 +2158,7 @@ def webhook():
             fim1 = dias_uteis_a_partir(hoje, 3)
             update_paciente(phone, {"status": "escolhendo_horario_reagendamento", "reagendamento_hora_preferida": hora_preferida, "reagendamento_local_id": local_id, "reagendamento_procedimento_id": procedimento_id})
             responder_texto(phone, "Buscando horários disponíveis... ⏳")
-            slots = consultar_disponibilidade_feegow(local_id, procedimento_id, hoje.strftime('%d-%m-%Y'), fim1.strftime('%d-%m-%Y'))
+            slots = consultar_disponibilidade_feegow(local_id, procedimento_id, hoje.strftime('%Y-%m-%d'), fim1.strftime('%Y-%m-%d'))
             proximos = encontrar_horarios_proximos(slots, hora_preferida, qtd=2)
             if proximos:
                 opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
@@ -2156,7 +2168,7 @@ def webhook():
                 enviar_botoes(phone, f"Horários disponíveis próximos às {hora_preferida}:\n\n{opcoes_txt}\n\nQual prefere?", botoes_sl)
             else:
                 ini2 = dias_uteis_a_partir(hoje, 4); fim2 = dias_uteis_a_partir(hoje, 5)
-                slots2 = consultar_disponibilidade_feegow(local_id, procedimento_id, ini2.strftime('%d-%m-%Y'), fim2.strftime('%d-%m-%Y'))
+                slots2 = consultar_disponibilidade_feegow(local_id, procedimento_id, ini2.strftime('%Y-%m-%d'), fim2.strftime('%Y-%m-%d'))
                 proximos2 = encontrar_horarios_proximos(slots2, hora_preferida, qtd=2)
                 if proximos2:
                     opcoes_txt2 = "\n".join([f"• {s['label']}" for s in proximos2])
@@ -2176,7 +2188,7 @@ def webhook():
                 proc_id = info.get("reagendamento_procedimento_id", 9)
                 hora_pref = info.get("reagendamento_hora_preferida", "08:00")
                 ini = dias_uteis_a_partir(hoje, 6); fim = dias_uteis_a_partir(hoje, 10)
-                slots = consultar_disponibilidade_feegow(local_id, proc_id, ini.strftime('%d-%m-%Y'), fim.strftime('%d-%m-%Y'))
+                slots = consultar_disponibilidade_feegow(local_id, proc_id, ini.strftime('%Y-%m-%d'), fim.strftime('%Y-%m-%d'))
                 proximos = encontrar_horarios_proximos(slots, hora_pref, qtd=2)
                 if proximos:
                     opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
