@@ -522,7 +522,108 @@ def consultar_agenda_feegow(paciente_id):
         print(f"[FEEGOW-AGENDA] Exceção: {e}", file=sys.stderr)
     return None
 
-def integrar_feegow(phone, info):
+def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio, data_fim):
+    """Consulta horarios disponiveis no equipamento/local para reagendamento.
+    data_inicio e data_fim aceitam YYYY-MM-DD ou DD-MM-YYYY — normaliza internamente.
+    """
+    import sys
+    if not FEEGOW_TOKEN: return []
+
+    def _para_iso(d):
+        s = str(d)
+        if re.match(r"^\d{2}-\d{2}-\d{4}$", s):
+            p = s.split("-"); return f"{p[2]}-{p[1]}-{p[0]}"
+        return s
+
+    data_inicio_iso = _para_iso(data_inicio)
+    data_fim_iso = _para_iso(data_fim)
+
+    params = {
+        "tipo": "P",
+        "data_start": data_inicio_iso,
+        "data_end": data_fim_iso,
+        "procedimento_id": procedimento_id,
+        "local_id": local_id
+    }
+    url = "https://api.feegow.com/v1/api/appoints/available-schedule-v2"
+    print(f"[FEEGOW-DISP] GET disponibilidade: {params}", file=sys.stderr)
+    try:
+        res = requests.get(url, params=params, headers=get_feegow_headers(), timeout=10)
+        print(f"[FEEGOW-DISP] HTTP {res.status_code} | resp={res.text[:400]}", file=sys.stderr)
+        if res.status_code == 200:
+            dados = res.json()
+            if dados.get("success") != False and dados.get("content"):
+                slots = []
+                for prof_id, datas in dados["content"].items():
+                    if isinstance(datas, dict):
+                        for data_str, horarios in datas.items():
+                            if isinstance(horarios, list):
+                                for h in horarios:
+                                    hora = str(h)[:5]
+                                    # Converter data para formato legível
+                                    try:
+                                        if re.match(r'^\d{4}-\d{2}-\d{2}$', data_str):
+                                            p = data_str.split('-')
+                                            data_br = f"{p[2]}/{p[1]}/{p[0]}"
+                                        else:
+                                            data_br = data_str
+                                    except:
+                                        data_br = data_str
+                                    slots.append({
+                                        "data": data_str,
+                                        "data_br": data_br,
+                                        "hora": hora,
+                                        "label": f"🗓️ *{data_br} às {hora}*"
+                                    })
+                # Ordena por data e hora
+                slots.sort(key=lambda x: (x["data"], x["hora"]))
+                print(f"[FEEGOW-DISP] {len(slots)} horário(s) disponível(is)", file=sys.stderr)
+                return slots
+    except Exception as e:
+        print(f"[FEEGOW-DISP] Exceção: {e}", file=sys.stderr)
+    return []
+
+def dias_uteis_a_partir(data_inicio, qtd_dias):
+    """Retorna data_fim considerando apenas dias úteis (seg-sab)."""
+    atual = data_inicio
+    contados = 0
+    while contados < qtd_dias:
+        atual += timedelta(days=1)
+        if atual.weekday() != 6:  # 6 = domingo
+            contados += 1
+    return atual
+
+def encontrar_horarios_proximos(slots, hora_preferida, qtd=2):
+    """Dado um horário preferido (ex: '14:00'), retorna os 2 mais próximos."""
+    if not slots: return []
+    try:
+        h_pref = datetime.strptime(hora_preferida, "%H:%M")
+    except:
+        return slots[:qtd]
+    def diff_minutos(slot):
+        try:
+            h_slot = datetime.strptime(slot["hora"], "%H:%M")
+            return abs((h_slot - h_pref).total_seconds())
+        except:
+            return 999999
+    return sorted(slots, key=diff_minutos)[:qtd]
+
+def confirmar_presenca_feegow(agendamento_id):
+    """Confirma presença do paciente no Feegow via statusUpdate."""
+    import sys
+    if not FEEGOW_TOKEN or not agendamento_id: return False
+    # Status 2 = Confirmado
+    url = f"https://api.feegow.com/v1/api/appoints/statusUpdate"
+    payload = {"agendamento_id": int(agendamento_id), "status_id": 2}
+    try:
+        res = requests.post(url, json=payload, headers=get_feegow_headers(), timeout=10)
+        print(f"[FEEGOW-CONFIRM] HTTP {res.status_code} | {res.text[:200]}", file=sys.stderr)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"[FEEGOW-CONFIRM] Exceção: {e}", file=sys.stderr)
+        return False
+
+
     import sys
     if not FEEGOW_TOKEN: return {"feegow_status": "Token Ausente"}
     cpf = re.sub(r'\D', '', info.get("cpf", ""))
@@ -1960,35 +2061,163 @@ def webhook():
                 responder_texto(phone, "Entendido! Vamos organizar sua nova guia. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
             
             elif "Reagendar" in msg_recebida:
-                # CIRURGIA 3: status próprio para reagendamento — não mistura com novo agendamento
-                sessoes = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
-                update_paciente(phone, {"status": "reagendando"})
-                botoes = [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}]
-                if sessoes and len(sessoes) > 0:
-                    enviar_botoes(phone, f"Localizei suas próximas sessões:\n\n{chr(10).join(sessoes[:5])}\n\nQual o melhor período para remarcar? ☀️ ⛅ 🌙", botoes)
+                sessoes_raw = consultar_agenda_feegow(info.get("feegow_id")) if info.get("feegow_id") else None
+                update_paciente(phone, {"status": "gestao_agenda"})
+                if sessoes_raw and len(sessoes_raw) > 0:
+                    secoes_gestao = [{"title": "O que deseja fazer?", "rows": [
+                        {"id": "ga_consultar", "title": "📋 Ver minha agenda"},
+                        {"id": "ga_confirmar", "title": "✅ Confirmar presença"},
+                        {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"},
+                        {"id": "ga_cancelar",  "title": "❌ Cancelar sessão"}
+                    ]}]
+                    enviar_lista(phone, f"Localizei suas próximas sessões:\n\n{chr(10).join(sessoes_raw[:5])}\n\nO que deseja fazer?", "Ver Opções", secoes_gestao)
                 else:
-                    enviar_botoes(phone, "Vamos organizar seu reagendamento! 😊\n\nQual o melhor período para você? ☀️ ⛅ 🌙", botoes)
+                    enviar_botoes(phone, "Não encontrei sessões futuras agendadas. 😊\n\nDeseja falar com nossa equipe?", [{"id": "ga_secretaria", "title": "📁 Falar com equipe"}, {"id": "menu_ini", "title": "⬅️ Voltar ao Menu"}])
             
             elif "Secretaria" in msg_recebida or "📁" in msg_recebida:
                 update_paciente(phone, {"status": "menu_secretaria"})
                 secoes = [{"title": "Serviços de Secretaria", "rows": [{"id": "s1", "title": "Declaração de Horas"}, {"id": "s2", "title": "Relatório Fisio"}, {"id": "s3", "title": "Atualização Cadastral"}, {"id": "s5", "title": "📁 Enviar Exames/Resultados"}, {"id": "s4", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Acesso à Secretaria. O que você precisa solicitar?", "Ver Serviços", secoes)
 
-        elif status == "reagendando":
-            # CIRURGIA 3: captura período e encaminha com contexto completo
-            periodos_validos = ["Manhã", "Tarde", "Noite"]
-            periodo_limpo = msg_recebida.replace("☀️ ", "").replace("⛅ ", "").replace("🌙 ", "").strip()
-            if periodo_limpo not in periodos_validos:
-                enviar_botoes(phone, "Por favor, escolha o período:", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}, {"id": "t3", "title": "Noite"}])
+        elif status == "gestao_agenda":
+            import sys
+            if msg_recebida in ["ga_consultar", "📋 Ver minha agenda", "Ver minha agenda"]:
+                sessoes_v = consultar_agenda_feegow(info.get("feegow_id"))
+                if sessoes_v:
+                    responder_texto(phone, f"📋 Sua agenda:\n\n{chr(10).join(sessoes_v[:10])}\n\nQualquer dúvida, é só chamar! 😊")
+                else:
+                    responder_texto(phone, "Não encontrei sessões futuras agendadas no momento.")
+                update_paciente(phone, {"status": "menu_veterano"})
+                return jsonify({"status": "agenda_consultada"}), 200
+
+            elif msg_recebida in ["ga_confirmar", "✅ Confirmar presença", "Confirmar presença"]:
+                hoje_str = datetime.now().strftime('%d-%m-%Y')
+                futuro_str = (datetime.now() + timedelta(days=90)).strftime('%d-%m-%Y')
+                url_ag = f"https://api.feegow.com/v1/api/appoints/search?paciente_id={info.get('feegow_id')}&data_start={hoje_str}&data_end={futuro_str}"
+                agendamento_id = None
+                data_proxima = hora_proxima = "--"
+                try:
+                    res_ag = requests.get(url_ag, headers=get_feegow_headers(), timeout=10)
+                    if res_ag.status_code == 200:
+                        dados_ag = res_ag.json()
+                        if dados_ag.get("content"):
+                            for a in dados_ag["content"]:
+                                sn = str(a.get("status_nome", "")).lower()
+                                if "cancelado" not in sn and "falta" not in sn:
+                                    agendamento_id = a.get("agendamento_id")
+                                    dr = str(a.get("data", "")).split("T")[0]
+                                    if re.match(r'^\d{2}-\d{2}-\d{4}$', dr):
+                                        pp = dr.split('-'); data_proxima = f"{pp[2]}/{pp[1]}/{pp[0]}"
+                                    else: data_proxima = dr
+                                    hora_proxima = str(a.get("horario", ""))[:5]
+                                    break
+                except Exception as e:
+                    print(f"[GESTAO-CONFIRM] Erro: {e}", file=sys.stderr)
+                if agendamento_id:
+                    ok = confirmar_presenca_feegow(agendamento_id)
+                    if ok:
+                        update_paciente(phone, {"status": "menu_veterano", "confirmou_presenca": True})
+                        responder_texto(phone, f"✅ Presença confirmada para *{data_proxima} às {hora_proxima}*!\n\nTe esperamos! Lembre-se de chegar 10 minutinhos antes. 😊")
+                    else:
+                        update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[CONFIRMAÇÃO]: Paciente tentou confirmar presença"})
+                        responder_texto(phone, "Não consegui confirmar automaticamente. Nossa equipe já foi notificada! 😊")
+                else:
+                    responder_texto(phone, "Não encontrei agendamento para confirmar. Nossa equipe pode te ajudar! 😊")
+                    update_paciente(phone, {"status": "menu_veterano"})
+                return jsonify({"status": "confirmacao_processada"}), 200
+
+            elif msg_recebida in ["ga_reagendar", "🔄 Reagendar sessão", "Reagendar sessão"]:
+                update_paciente(phone, {"status": "reagendando_preferencia"})
+                responder_texto(phone, "Para encontrarmos o melhor horário, me diga: qual dia e horário você prefere? 😊\n\n_Exemplo: quinta às 14h_")
+                return jsonify({"status": "reagendar_iniciado"}), 200
+
+            elif msg_recebida in ["ga_cancelar", "❌ Cancelar sessão", "Cancelar sessão"]:
+                update_paciente(phone, {"status": "cancelando_sessao"})
+                enviar_botoes(phone, "Entendido. Como deseja prosseguir?", [{"id": "cancel_apenas", "title": "Apenas cancelar"}, {"id": "cancel_reagendar", "title": "Cancelar e reagendar"}])
+                return jsonify({"status": "cancelamento_iniciado"}), 200
+
             else:
-                nome_salvo = info.get("title", "Paciente").split()[0]
-                update_paciente(phone, {
-                    "status": "atendimento_humano",
-                    "periodo": periodo_limpo,
-                    "queixa": f"[REAGENDAMENTO]: prefere período da {periodo_limpo}",
-                    "unread": True
-                })
-                responder_texto(phone, f"Período da {periodo_limpo} anotado! ✅\n\nNossa equipe já foi notificada e vai confirmar o novo horário em instantes. Aguarde! 😊")
+                secoes_g = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}]}]
+                enviar_lista(phone, "Por favor, escolha uma das opções:", "Ver Opções", secoes_g)
+
+        elif status == "reagendando_preferencia":
+            import sys, re as _re_hora
+            hora_match = _re_hora.search(r'(\d{1,2})[\s:h]?(\d{0,2})', msg_recebida)
+            hora_preferida = "08:00"
+            if hora_match:
+                h = hora_match.group(1).zfill(2)
+                m = hora_match.group(2).zfill(2) if hora_match.group(2) else "00"
+                hora_preferida = f"{h}:{m}"
+            unidade_pac = info.get("unit", "São Caetano")
+            servico_pac = info.get("servico", "")
+            LOCAIS = {"São Caetano": {"acu": 5, "fisio": 2}, "Ipiranga": {"acu": 6, "fisio": 4}}
+            unidade_map = LOCAIS.get(unidade_pac, LOCAIS["São Caetano"])
+            local_id = unidade_map["acu"] if "acupuntura" in servico_pac.lower() else unidade_map["fisio"]
+            procedimento_id = info.get("feegow_procedimento_id", 9)
+            hoje = datetime.now()
+            fim1 = dias_uteis_a_partir(hoje, 3)
+            update_paciente(phone, {"status": "escolhendo_horario_reagendamento", "reagendamento_hora_preferida": hora_preferida, "reagendamento_local_id": local_id, "reagendamento_procedimento_id": procedimento_id})
+            responder_texto(phone, "Buscando horários disponíveis... ⏳")
+            slots = consultar_disponibilidade_feegow(local_id, procedimento_id, hoje.strftime('%Y-%m-%d'), fim1.strftime('%Y-%m-%d'))
+            proximos = encontrar_horarios_proximos(slots, hora_preferida, qtd=2)
+            if proximos:
+                opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
+                update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos]})
+                botoes_sl = [{"id": f"slot_{i}", "title": s["label"][:20]} for i, s in enumerate(proximos)]
+                botoes_sl.append({"id": "slot_outro", "title": "Ver outros horários"})
+                enviar_botoes(phone, f"Horários disponíveis próximos às {hora_preferida}:\n\n{opcoes_txt}\n\nQual prefere?", botoes_sl)
+            else:
+                ini2 = dias_uteis_a_partir(hoje, 4); fim2 = dias_uteis_a_partir(hoje, 5)
+                slots2 = consultar_disponibilidade_feegow(local_id, procedimento_id, ini2.strftime('%Y-%m-%d'), fim2.strftime('%Y-%m-%d'))
+                proximos2 = encontrar_horarios_proximos(slots2, hora_preferida, qtd=2)
+                if proximos2:
+                    opcoes_txt2 = "\n".join([f"• {s['label']}" for s in proximos2])
+                    update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos2]})
+                    botoes_sl2 = [{"id": f"slot_{i}", "title": s["label"][:20]} for i, s in enumerate(proximos2)]
+                    botoes_sl2.append({"id": "slot_outro", "title": "Outros horários"})
+                    enviar_botoes(phone, f"Não encontrei nos próximos 3 dias, mas há disponibilidade em:\n\n{opcoes_txt2}\n\nQual prefere?", botoes_sl2)
+                else:
+                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": f"[REAGENDAMENTO]: sem disponibilidade automática. Preferência: {hora_preferida}"})
+                    responder_texto(phone, "Não encontrei horários disponíveis automaticamente. Nossa equipe já foi notificada e vai entrar em contato! 💙")
+
+        elif status == "escolhendo_horario_reagendamento":
+            opcoes = info.get("reagendamento_opcoes", [])
+            if msg_recebida in ["slot_outro", "Outros horários", "Ver outros horários"]:
+                hoje = datetime.now()
+                local_id = info.get("reagendamento_local_id", 2)
+                proc_id = info.get("reagendamento_procedimento_id", 9)
+                hora_pref = info.get("reagendamento_hora_preferida", "08:00")
+                ini = dias_uteis_a_partir(hoje, 6); fim = dias_uteis_a_partir(hoje, 10)
+                slots = consultar_disponibilidade_feegow(local_id, proc_id, ini.strftime('%Y-%m-%d'), fim.strftime('%Y-%m-%d'))
+                proximos = encontrar_horarios_proximos(slots, hora_pref, qtd=2)
+                if proximos:
+                    opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
+                    update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos]})
+                    botoes_sl = [{"id": f"slot_{i}", "title": s["label"][:20]} for i, s in enumerate(proximos)]
+                    enviar_botoes(phone, f"Horários disponíveis na próxima semana:\n\n{opcoes_txt}\n\nQual prefere?", botoes_sl)
+                else:
+                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": f"[REAGENDAMENTO]: sem disponibilidade estendida. Pref: {hora_pref}"})
+                    responder_texto(phone, "Nossa equipe vai entrar em contato para encontrar o melhor horário! 💙")
+            elif msg_recebida.startswith("slot_") and msg_recebida.replace("slot_", "").isdigit():
+                idx = int(msg_recebida.replace("slot_", ""))
+                if idx < len(opcoes):
+                    slot = opcoes[idx]
+                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": f"[REAGENDAMENTO]: solicitou {slot['label']}. Recepção: executar no Feegow e notificar.", "reagendamento_solicitado": slot})
+                    responder_texto(phone, f"Perfeito! Solicitei o reagendamento para *{slot['label']}*. ✅\n\nNossa equipe vai confirmar em instantes! 😊")
+            else:
+                botoes_back = [{"id": f"slot_{i}", "title": o['label'][:20]} for i, o in enumerate(opcoes)]
+                if botoes_back: botoes_back.append({"id": "slot_outro", "title": "Outros horários"})
+                if botoes_back: enviar_botoes(phone, "Por favor, escolha uma das opções:", botoes_back)
+
+        elif status == "cancelando_sessao":
+            if "cancel_apenas" in msg_recebida or "apenas" in msg_recebida.lower():
+                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[CANCELAMENTO]: Paciente solicitou cancelamento. Recepção: cancelar no Feegow com justificativa."})
+                responder_texto(phone, "Cancelamento registrado! ✅\n\nNossa equipe vai processar e te confirmar em instantes. Se mudar de ideia, é só nos chamar! 💙")
+            elif "cancel_reagendar" in msg_recebida or "reagendar" in msg_recebida.lower():
+                update_paciente(phone, {"status": "reagendando_preferencia", "queixa": "[CANCELAR E REAGENDAR]"})
+                responder_texto(phone, "Vamos cancelar e já encontrar um novo horário! 😊\n\nQual dia e horário você prefere?\n\n_Exemplo: quinta às 14h_")
+            else:
+                enviar_botoes(phone, "O que deseja fazer?", [{"id": "cancel_apenas", "title": "Apenas cancelar"}, {"id": "cancel_reagendar", "title": "Cancelar e reagendar"}])
 
         elif status == "cadastrando_queixa_veterano":
             acolhimento = chamar_ia_custom(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
