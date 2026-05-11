@@ -108,15 +108,24 @@ def confirmar_checkin_totem(agendamento_id):
         print(f"Erro na requisição de atualização (CF-RAY: {cf_ray}): {e}")
         return {"sucesso": False, "erro": "Erro ao confirmar a presença no sistema."}
 
-
 # =====================================================================
-# FUNÇÕES EXCLUSIVAS DO TOTEM DE AUTOATENDIMENTO (ONDAS DE CHOQUE)
+# FUNÇÕES DO TOTEM DE AUTOATENDIMENTO (ONDAS DE CHOQUE)
 # =====================================================================
 
 def buscar_agendamento_hoje_por_cpf(cpf_limpo):
-    url_paciente = f"{BASE_URL}/patient/list"
+    import os
+    token = os.environ.get("FEEGOW_TOKEN")
+    
+    headers_totem = {
+        "x-access-token": token,
+        "token": token,
+        "Content-Type": "application/json",
+        "User-Agent": "Conectifisio-Totem/1.0"
+    }
+    
+    url_paciente = "https://api.feegow.com/v1/api/patient/list"
     try:
-        response_paciente = requests.get(url_paciente, headers=HEADERS, params={"cpf": cpf_limpo})
+        response_paciente = requests.get(url_paciente, headers=headers_totem, params={"cpf": cpf_limpo})
         response_paciente.raise_for_status()
         dados_paciente = response_paciente.json()
         
@@ -128,16 +137,16 @@ def buscar_agendamento_hoje_por_cpf(cpf_limpo):
         nome_paciente = paciente.get("nome") or paciente.get("name", "Paciente")
 
         hoje = datetime.now().strftime("%Y-%m-%d")
-        url_agenda = f"{BASE_URL}/appoints/search"
+        url_agenda = "https://api.feegow.com/v1/api/appoints/search"
         
         params_agenda = {
             "data_start": hoje,
             "data_end": hoje,
             "paciente_id": paciente_id,
-            "resource_id": "2"  
+            "resource_id": "2"  # Filtro da máquina de Ondas de Choque
         }
         
-        response_agenda = requests.get(url_agenda, headers=HEADERS, params=params_agenda)
+        response_agenda = requests.get(url_agenda, headers=headers_totem, params=params_agenda)
         response_agenda.raise_for_status()
         dados_agenda = response_agenda.json()
         
@@ -157,11 +166,20 @@ def buscar_agendamento_hoje_por_cpf(cpf_limpo):
         }
 
     except requests.exceptions.RequestException as e:
-        cf_ray = e.response.headers.get('cf-ray') if e.response else "N/A"
-        return {"erro": f"Falha de comunicação com o sistema (CF-RAY: {cf_ray})."}
+        return {"erro": "Falha de comunicação com o sistema."}
 
 def confirmar_checkin_totem(agendamento_id):
-    url_atualizar_status = f"{BASE_URL}/appoints/statusUpdate"
+    import os
+    token = os.environ.get("FEEGOW_TOKEN")
+    
+    headers_totem = {
+        "x-access-token": token,
+        "token": token,
+        "Content-Type": "application/json",
+        "User-Agent": "Conectifisio-Totem/1.0"
+    }
+    
+    url_atualizar_status = "https://api.feegow.com/v1/api/appoints/statusUpdate"
     payload_status = {
         "AgendamentoID": agendamento_id,
         "StatusID": "4", 
@@ -169,7 +187,7 @@ def confirmar_checkin_totem(agendamento_id):
     }
     
     try:
-        response = requests.post(url_atualizar_status, json=payload_status, headers=HEADERS)
+        response = requests.post(url_atualizar_status, json=payload_status, headers=headers_totem)
         response.raise_for_status()
         dados = response.json()
         
