@@ -107,3 +107,76 @@ def confirmar_checkin_totem(agendamento_id):
         cf_ray = e.response.headers.get('cf-ray') if e.response else "N/A"
         print(f"Erro na requisição de atualização (CF-RAY: {cf_ray}): {e}")
         return {"sucesso": False, "erro": "Erro ao confirmar a presença no sistema."}
+
+
+# =====================================================================
+# FUNÇÕES EXCLUSIVAS DO TOTEM DE AUTOATENDIMENTO (ONDAS DE CHOQUE)
+# =====================================================================
+
+def buscar_agendamento_hoje_por_cpf(cpf_limpo):
+    url_paciente = f"{BASE_URL}/patient/list"
+    try:
+        response_paciente = requests.get(url_paciente, headers=HEADERS, params={"cpf": cpf_limpo})
+        response_paciente.raise_for_status()
+        dados_paciente = response_paciente.json()
+        
+        if not dados_paciente.get("success") or not dados_paciente.get("content"):
+            return {"erro": "CPF não localizado. Por favor, dirija-se à recepção."}
+            
+        paciente = dados_paciente["content"][0]
+        paciente_id = paciente.get("id") or paciente.get("patient_id")
+        nome_paciente = paciente.get("nome") or paciente.get("name", "Paciente")
+
+        hoje = datetime.now().strftime("%Y-%m-%d")
+        url_agenda = f"{BASE_URL}/appoints/search"
+        
+        params_agenda = {
+            "data_start": hoje,
+            "data_end": hoje,
+            "paciente_id": paciente_id,
+            "resource_id": "2"  
+        }
+        
+        response_agenda = requests.get(url_agenda, headers=HEADERS, params=params_agenda)
+        response_agenda.raise_for_status()
+        dados_agenda = response_agenda.json()
+        
+        if not dados_agenda.get("success") or not dados_agenda.get("content"):
+            primeiro_nome = nome_paciente.split()[0]
+            return {"erro": f"Olá {primeiro_nome}, não localizamos sessão de Ondas de Choque para hoje."}
+            
+        agendamento = dados_agenda["content"][0]
+        convenio_nome = agendamento.get("convenio", "Particular")
+        
+        return {
+            "sucesso": True,
+            "agendamento_id": agendamento["agendamento_id"],
+            "paciente": nome_paciente,
+            "convenio": convenio_nome,
+            "horario": agendamento.get("horario") or agendamento.get("hora", "00:00")
+        }
+
+    except requests.exceptions.RequestException as e:
+        cf_ray = e.response.headers.get('cf-ray') if e.response else "N/A"
+        return {"erro": f"Falha de comunicação com o sistema (CF-RAY: {cf_ray})."}
+
+def confirmar_checkin_totem(agendamento_id):
+    url_atualizar_status = f"{BASE_URL}/appoints/statusUpdate"
+    payload_status = {
+        "AgendamentoID": agendamento_id,
+        "StatusID": "4", 
+        "Obs": "Check-in via Totem Autoatendimento (Equipamento 2)"
+    }
+    
+    try:
+        response = requests.post(url_atualizar_status, json=payload_status, headers=HEADERS)
+        response.raise_for_status()
+        dados = response.json()
+        
+        if dados.get("success"):
+            return {"sucesso": True, "mensagem": "Status atualizado."}
+        else:
+            return {"sucesso": False, "erro": "Falha ao atualizar recepção."}
+            
+    except requests.exceptions.RequestException:
+        return {"sucesso": False, "erro": "Erro de conexão ao confirmar presença."}
