@@ -15,15 +15,11 @@ def pagina_totem():
     """Renderiza a interface visual para o tablet"""
     return render_template('totem.html')
 
-@totem_bp.route('/api/totem/checkin', methods=['POST'])
-def processar_checkin():
-    # 1. Segurança: Bloqueio por IP
-    ip_origem = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
+ip_origem = request.headers.get('X-Forwarded-For', request.remote_addr).split(',')[0].strip()
     
-    # Se for testar fora da clínica, comente as duas linhas abaixo:
-    if ip_origem != IP_ESTATICO_CLINICA:
-        logging.warning(f"Tentativa de check-in bloqueada. IP: {ip_origem}")
-        return jsonify({"erro": "Acesso permitido apenas pelo totem da clínica."}), 403
+    # if ip_origem != IP_ESTATICO_CLINICA:
+    #     logging.warning(f"Tentativa de check-in bloqueada. IP: {ip_origem}")
+    #     return jsonify({"erro": "Acesso permitido apenas pelo totem da clínica."}), 403
 
     dados = request.get_json()
     cpf_bruto = dados.get('cpf')
