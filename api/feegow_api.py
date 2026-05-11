@@ -109,7 +109,7 @@ def confirmar_checkin_totem(agendamento_id):
         return {"sucesso": False, "erro": "Erro ao confirmar a presença no sistema."}
 
 # =====================================================================
-# FUNÇÕES DO TOTEM DE AUTOATENDIMENTO (ONDAS DE CHOQUE)
+# FUNÇÕES DO TOTEM DE AUTOATENDIMENTO (CINESIOTERAPIA - SCS)
 # =====================================================================
 
 def buscar_agendamento_hoje_por_cpf(cpf_limpo):
@@ -143,7 +143,7 @@ def buscar_agendamento_hoje_por_cpf(cpf_limpo):
             "data_start": hoje,
             "data_end": hoje,
             "paciente_id": paciente_id,
-            "resource_id": "2"  # Filtro da máquina de Ondas de Choque
+            "resource_id": "2"  # Filtro da agenda de Cinesioterapia - SCS
         }
         
         response_agenda = requests.get(url_agenda, headers=headers_totem, params=params_agenda)
@@ -152,7 +152,7 @@ def buscar_agendamento_hoje_por_cpf(cpf_limpo):
         
         if not dados_agenda.get("success") or not dados_agenda.get("content"):
             primeiro_nome = nome_paciente.split()[0]
-            return {"erro": f"Olá {primeiro_nome}, não localizamos sessão de Ondas de Choque para hoje."}
+            return {"erro": f"Olá {primeiro_nome}, não localizamos sessão de Cinesioterapia para hoje."}
             
         agendamento = dados_agenda["content"][0]
         convenio_nome = agendamento.get("convenio", "Particular")
@@ -183,7 +183,7 @@ def confirmar_checkin_totem(agendamento_id):
     payload_status = {
         "AgendamentoID": agendamento_id,
         "StatusID": "4", 
-        "Obs": "Check-in via Totem Autoatendimento (Equipamento 2)"
+        "Obs": "Check-in via Totem Autoatendimento (Cinesioterapia - SCS)"
     }
     
     try:
