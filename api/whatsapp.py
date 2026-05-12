@@ -1419,6 +1419,13 @@ def webhook():
                 if finalizado_por:
                     update_fields["finalizado_por"] = finalizado_por
                     update_fields["finalizado_em"] = finalizado_em or datetime.utcnow().strftime('%d/%m/%Y %H:%M')
+                append_raw = request.args.get("historico_atendentes_append", "")
+                if append_raw:
+                    try:
+                        import json as _jj
+                        entrada_ap = _jj.loads(append_raw)
+                        update_fields["historico_atendentes"] = firestore.ArrayUnion([entrada_ap])
+                    except: pass
                 if update_fields:
                     db.collection("PatientsKanban").document(phone).set(update_fields, merge=True)
                     return jsonify({"success": True}), 200
@@ -1737,7 +1744,7 @@ def webhook():
                 q = request.args.get("q","").strip().lower()
                 if not q or len(q) < 2: return jsonify({"results":[]}), 200
                 if not db: return jsonify({"results":[]}), 200
-                docs = db.collection("Pacientes").where("status","==","arquivado").stream()
+                docs = db.collection("PatientsKanban").where("status","==","arquivado").stream()
                 results = []
                 for doc in docs:
                     d = doc.to_dict()
