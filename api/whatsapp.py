@@ -767,19 +767,21 @@ def dias_uteis_a_partir(data_inicio, qtd_dias):
     return atual
 
 def encontrar_horarios_proximos(slots, hora_preferida, qtd=2):
-    """Retorna os qtd slots mais próximos do horário preferido (antes ou depois)."""
+    """Retorna os qtd slots mais próximos — prioriza data mais próxima,
+    desempata por proximidade de horário preferido."""
     if not slots: return []
     try:
         h_pref = datetime.strptime(hora_preferida, "%H:%M")
     except:
-        return slots[:qtd]
-    def diff_seg(slot):
+        return sorted(slots, key=lambda x: (x["data"], x["hora"]))[:qtd]
+    def sort_key(slot):
         try:
             h_slot = datetime.strptime(slot["hora"], "%H:%M")
-            return abs((h_slot - h_pref).total_seconds())
+            diff_hora = abs((h_slot - h_pref).total_seconds())
         except:
-            return 999999
-    return sorted(slots, key=diff_seg)[:qtd]
+            diff_hora = 999999
+        return (slot["data"], diff_hora)
+    return sorted(slots, key=sort_key)[:qtd]
 
 def confirmar_presenca_feegow(agendamento_id):
     """Confirma presença no Feegow — StatusID=4 (Aguardando)."""
@@ -2554,19 +2556,26 @@ def webhook():
             local_id = info.get("agenda_local_id") or 2
             proc_id = info.get("agenda_procedimento_id") or 9
             hoje = datetime.now()
-            # Busca datas ocupadas da série para evitar conflito
-            serie_datas = set(a.get("data","") for a in info.get("agenda_agendamentos", []))
-            # Determina janela de busca (máx 7 dias úteis)
+            agendamentos_serie = info.get("agenda_agendamentos", [])
+
+            # Determina horário preferido
             hora_preferida = pref.get("hora_especifica") or "08:00"
             if pref.get("periodo") == "tarde": hora_preferida = "14:00"
             elif pref.get("periodo") == "manha": hora_preferida = "08:00"
-            # Data alvo
-            data_ini = hoje
+
+            # Data alvo — com correção de mês passado
+            data_ini = hoje + timedelta(days=1)  # mínimo amanhã
             if pref.get("data_especifica"):
                 try:
                     parts = pref["data_especifica"].split("/")
-                    data_ini = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-                    if data_ini < hoje: data_ini = hoje
+                    data_cand = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+                    if data_cand.date() < hoje.date():
+                        # Mês passado → tenta mesmo dia no mês atual
+                        try:
+                            data_cand = data_cand.replace(month=hoje.month, year=hoje.year)
+                        except: pass
+                    if data_cand.date() >= hoje.date():
+                        data_ini = data_cand
                 except: pass
             elif pref.get("dia_semana"):
                 dias_map2 = {"segunda": 0, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4}
@@ -2576,16 +2585,40 @@ def webhook():
                         cand = hoje + timedelta(days=i)
                         if cand.weekday() == alvo_wd:
                             data_ini = cand; break
-            data_fim = dias_uteis_a_partir(data_ini, 7)
+
+            data_fim = dias_uteis_a_partir(data_ini, 14)  # janela de 14 dias úteis
+
+            # Monta mapa de conflitos: data → lista de horários já agendados
+            def _tem_conflito(slot_data, slot_hora, agendamentos):
+                """Retorna True se o slot conflita com agendamentos existentes.
+                Regras: mesmo dia mesmo serviço OU mesmo dia horário com diff < 30min."""
+                try:
+                    sh = datetime.strptime(slot_hora, "%H:%M")
+                except: return False
+                for ag in agendamentos:
+                    if ag.get("data") != slot_data: continue
+                    try:
+                        ah = datetime.strptime(ag.get("hora",""), "%H:%M")
+                        diff_min = abs((sh - ah).total_seconds()) / 60
+                        if diff_min < 30:
+                            return True
+                    except: continue
+                return False
+
             update_paciente(phone, {"status": "escolhendo_horario_reagendamento", "reagendamento_hora_preferida": hora_preferida})
             responder_texto(phone, "Buscando horários disponíveis... ⏳")
             slots_all = consultar_disponibilidade_feegow(local_id, proc_id, data_ini.strftime('%Y-%m-%d'), data_fim.strftime('%Y-%m-%d'))
-            # Remove slots que conflitam com série existente
-            slots_ok = [s for s in slots_all if s.get("data") not in serie_datas]
+
+            # Filtra conflitos com agenda existente
+            slots_ok = [s for s in slots_all if not _tem_conflito(s.get("data",""), s.get("hora",""), agendamentos_serie)]
             proximos = encontrar_horarios_proximos(slots_ok, hora_preferida, qtd=2)
             if proximos:
                 opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
-                update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos]})
+                update_paciente(phone, {
+                    "reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos],
+                    "reagendamento_slots_cache": slots_ok,
+                    "reagendamento_slots_vistos": [s["label"] for s in proximos]
+                })
                 rows_sl = [{"id": f"slot_{i}", "title": f"{s['data_br']} às {s['hora']}"} for i, s in enumerate(proximos[:8])]
                 rows_sl.append({"id": "slot_outro", "title": "🔄 Ver outros horários"})
                 rows_sl.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
@@ -2593,33 +2626,61 @@ def webhook():
                 enviar_lista(phone, f"Horários disponíveis mais próximos:\n\n{opcoes_txt}\n\nQual prefere?", "Ver Horários", [{"title": "Selecione", "rows": rows_sl}])
             else:
                 ag_sel = info.get("agenda_sessao_selecionada", {})
-                queixa_rp = f"[REAGENDAMENTO]: sem disponibilidade em 7 dias úteis. Preferência: {msg_recebida}. Sessão original: {ag_sel.get('data_br','')}"
-                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": queixa_rp})
-                responder_texto(phone, "Não encontrei horários disponíveis nas próximas semanas sem conflito com sua agenda.\n\nNossa equipe vai entrar em contato para encontrar o melhor horário! 💙")
+                nome_rp = info.get("title", "Paciente").split()[0]
+                # Verifica se o problema é conflito (tem slots mas todos filtrados)
+                tem_slots_brutos = len(slots_all) > 0
+                if tem_slots_brutos:
+                    # Conflito detectado — tem slots mas todos conflitam com agenda
+                    conflitos = []
+                    for ag in agendamentos_serie:
+                        conflitos.append(f"{ag.get('data_br','')} às {ag.get('hora','')} ({ag.get('servico','')})")
+                    conflitos_txt = "\n".join([f"• {c}" for c in conflitos[:3]])
+                    queixa_conf = f"[REAGENDAMENTO CONFLITO]: {nome_rp} solicitou horário que conflita com agenda existente. Sessão original: {ag_sel.get('data_br','')} às {ag_sel.get('hora','')}. Preferência: {msg_recebida}."
+                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": queixa_conf})
+                    responder_texto(phone,
+                        f"Atenção, {nome_rp}! ⚠️ O horário solicitado conflita com sessões já agendadas:\n\n{conflitos_txt}\n\n"
+                        f"Vou encaminhar para nossa recepção encontrar o melhor horário sem conflito. 💙"
+                    )
+                else:
+                    queixa_rp = f"[REAGENDAMENTO]: sem disponibilidade. Preferência: {msg_recebida}. Sessão original: {ag_sel.get('data_br','')}"
+                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": queixa_rp})
+                    responder_texto(phone, f"Não encontrei horários disponíveis no período solicitado, {nome_rp}. Nossa equipe vai entrar em contato para encontrar o melhor horário! 💙")
 
         elif status == "escolhendo_horario_reagendamento":
             opcoes = info.get("reagendamento_opcoes", [])
-            if msg_recebida in ["slot_outro", "Outros horários", "Ver outros horários", "Outro horário"]:
-                hoje = datetime.now()
-                local_id = info.get("agenda_local_id") or 2
-                proc_id = info.get("agenda_procedimento_id") or 9
+            if msg_recebida in ["slot_outro", "Outros horários", "Ver outros horários", "Outro horário", "🔄 Ver outros horários"]:
                 hora_pref = info.get("reagendamento_hora_preferida", "08:00")
-                serie_datas2 = set(a.get("data","") for a in info.get("agenda_agendamentos", []))
-                ini = dias_uteis_a_partir(hoje, 4)
-                fim = dias_uteis_a_partir(hoje, 7)
-                slots = consultar_disponibilidade_feegow(local_id, proc_id, ini.strftime('%Y-%m-%d'), fim.strftime('%Y-%m-%d'))
-                slots_ok2 = [s for s in slots if s.get("data") not in serie_datas2]
-                proximos = encontrar_horarios_proximos(slots_ok2, hora_pref, qtd=2)
-                if proximos:
-                    opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
-                    update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos]})
-                    rows_sl2 = [{"id": f"slot_{i}", "title": f"{s['data_br']} às {s['hora']}"} for i, s in enumerate(proximos[:8])]
+                ag_sel_r = info.get("agenda_sessao_selecionada", {})
+                # Usa slots já em cache — não refaz chamada à API
+                slots_cache = info.get("reagendamento_slots_cache", [])
+                slots_ja_vistos = info.get("reagendamento_slots_vistos", [])
+                # Filtra os que ainda não foram mostrados
+                proximos_outros = [s for s in slots_cache if s.get("label") not in slots_ja_vistos]
+                proximos_outros = encontrar_horarios_proximos(proximos_outros, hora_pref, qtd=5)
+                if proximos_outros:
+                    vistos_novos = slots_ja_vistos + [s["label"] for s in proximos_outros]
+                    update_paciente(phone, {
+                        "reagendamento_opcoes": proximos_outros,
+                        "reagendamento_slots_vistos": vistos_novos
+                    })
+                    opcoes_txt2 = "\n".join([f"• {s['label']}" for s in proximos_outros])
+                    rows_sl2 = [{"id": f"slot_{i}", "title": f"{s['data_br']} às {s['hora']}"} for i, s in enumerate(proximos_outros[:8])]
+                    rows_sl2.append({"id": "slot_recepcao", "title": "👩 Falar com recepção"})
                     rows_sl2.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
-                    enviar_lista(phone, f"Outras opções disponíveis:\n\n{opcoes_txt}\n\nQual prefere?", "Ver Horários", [{"title": "Selecione", "rows": rows_sl2}])
+                    enviar_lista(phone, f"Outras opções disponíveis:\n\n{opcoes_txt2}\n\nQual prefere?", "Ver Horários", [{"title": "Selecione", "rows": rows_sl2}])
                 else:
-                    ag_sel2 = info.get("agenda_sessao_selecionada", {})
-                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": f"[REAGENDAMENTO]: sem disponibilidade em 7 dias. Pref: {hora_pref}. Sessão: {ag_sel2.get('data_br','')}"})
-                    responder_texto(phone, "Nossa equipe vai entrar em contato para encontrar o melhor horário! 💙")
+                    # Sem mais slots — transfere para recepção
+                    nome_r = info.get("title", "Paciente").split()[0]
+                    queixa_sem = f"[REAGENDAMENTO]: {nome_r} não aceitou nenhuma sugestão. Sessão original: {ag_sel_r.get('data_br','')} às {ag_sel_r.get('hora','')}. Preferência: {hora_pref}."
+                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": queixa_sem})
+                    responder_texto(phone, f"Entendido, {nome_r}! Vou passar para nossa equipe encontrar o melhor horário para você. Em breve entraremos em contato! 💙")
+
+            elif msg_recebida in ["slot_recepcao", "👩 Falar com recepção"]:
+                nome_r2 = info.get("title", "Paciente").split()[0]
+                ag_sel_r2 = info.get("agenda_sessao_selecionada", {})
+                queixa_r2 = f"[REAGENDAMENTO]: {nome_r2} pediu para falar com a recepção. Sessão original: {ag_sel_r2.get('data_br','')} às {ag_sel_r2.get('hora','')}."
+                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": queixa_r2})
+                responder_texto(phone, f"Claro, {nome_r2}! Nossa equipe vai entrar em contato para encontrar o melhor horário. 💙")
             elif msg_recebida in ["eh_voltar", "⬅️ Voltar", "Voltar"]:
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_ehv = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}, {"id": "ga_voltar", "title": "⬅️ Voltar ao Menu"}]}]
