@@ -2586,10 +2586,11 @@ def webhook():
             if proximos:
                 opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
                 update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos]})
-                botoes_sl = [{"id": f"slot_{i}", "title": s["label"][:20]} for i, s in enumerate(proximos)]
-                botoes_sl.append({"id": "slot_outro", "title": "Outros horários"})
-                botoes_sl.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
-                enviar_botoes(phone, f"Horários disponíveis mais próximos:\n\n{opcoes_txt}\n\nQual prefere?", botoes_sl)
+                rows_sl = [{"id": f"slot_{i}", "title": f"{s['data_br']} às {s['hora']}"} for i, s in enumerate(proximos[:8])]
+                rows_sl.append({"id": "slot_outro", "title": "🔄 Ver outros horários"})
+                rows_sl.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
+                opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
+                enviar_lista(phone, f"Horários disponíveis mais próximos:\n\n{opcoes_txt}\n\nQual prefere?", "Ver Horários", [{"title": "Selecione", "rows": rows_sl}])
             else:
                 ag_sel = info.get("agenda_sessao_selecionada", {})
                 queixa_rp = f"[REAGENDAMENTO]: sem disponibilidade em 7 dias úteis. Preferência: {msg_recebida}. Sessão original: {ag_sel.get('data_br','')}"
@@ -2612,9 +2613,9 @@ def webhook():
                 if proximos:
                     opcoes_txt = "\n".join([f"• {s['label']}" for s in proximos])
                     update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos]})
-                    botoes_sl = [{"id": f"slot_{i}", "title": s["label"][:20]} for i, s in enumerate(proximos)]
-                    botoes_sl.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
-                    enviar_botoes(phone, f"Outras opções disponíveis:\n\n{opcoes_txt}\n\nQual prefere?", botoes_sl)
+                    rows_sl2 = [{"id": f"slot_{i}", "title": f"{s['data_br']} às {s['hora']}"} for i, s in enumerate(proximos[:8])]
+                    rows_sl2.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
+                    enviar_lista(phone, f"Outras opções disponíveis:\n\n{opcoes_txt}\n\nQual prefere?", "Ver Horários", [{"title": "Selecione", "rows": rows_sl2}])
                 else:
                     ag_sel2 = info.get("agenda_sessao_selecionada", {})
                     update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": f"[REAGENDAMENTO]: sem disponibilidade em 7 dias. Pref: {hora_pref}. Sessão: {ag_sel2.get('data_br','')}"})
@@ -2640,10 +2641,10 @@ def webhook():
                     responder_texto(phone, f"Perfeito! Reservei *{slot['label']}* para você. ✅\n\nNossa equipe vai confirmar o reagendamento em instantes! 😊")
             else:
                 if opcoes:
-                    botoes_back = [{"id": f"slot_{i}", "title": o['label'][:20]} for i, o in enumerate(opcoes)]
-                    botoes_back.append({"id": "slot_outro", "title": "Outros horários"})
-                    botoes_back.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
-                    enviar_botoes(phone, "Por favor, escolha uma das opções:", botoes_back)
+                    rows_back = [{"id": f"slot_{i}", "title": f"{o['data_br']} às {o['hora']}"} for i, o in enumerate(opcoes[:8])]
+                    rows_back.append({"id": "slot_outro", "title": "🔄 Ver outros horários"})
+                    rows_back.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
+                    enviar_lista(phone, "Por favor, escolha uma das opções:", "Ver Horários", [{"title": "Selecione", "rows": rows_back}])
 
         elif status == "cancelando_sessao":
             ag_sel = info.get("agenda_sessao_selecionada", {})
@@ -2761,7 +2762,7 @@ def webhook():
                     proximos_dia = encontrar_horarios_proximos(slots_dia, hora_orig, qtd=3)
                     if proximos_dia:
                         update_paciente(phone, {"reagendamento_opcoes": [{"data": s["data"], "hora": s["hora"], "label": s["label"]} for s in proximos_dia]})
-                        botoes_dia = [{"id": f"slot_{i}", "title": s["label"][:20]} for i, s in enumerate(proximos_dia)]
+                        botoes_dia = [{"id": f"slot_{i}", "title": f"{s['hora']}"[:20]} for i, s in enumerate(proximos_dia)]
                         botoes_dia.append({"id": "slot_outro", "title": "Outro horário"})
                         botoes_dia.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
                         data_br_orig = ag_orig.get("data_br", "")
