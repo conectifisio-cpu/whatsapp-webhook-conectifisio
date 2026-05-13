@@ -618,7 +618,7 @@ def extrair_preferencia_data(texto):
         url_oai = "https://api.openai.com/v1/chat/completions"
         headers_oai = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
         payload_oai = {
-            "model": OPENAI_MODEL,
+            "model": "gpt-4o-mini",  # modelo BASE — fine-tuned não segue instrução JSON
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 80, "temperature": 0
         }
@@ -677,16 +677,34 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
         slots = []
         content = dados.get("content", {})
         if not content: return slots
-        for chave, valor in content.items():
-            if isinstance(valor, dict):
-                for data_str, horarios in valor.items():
-                    if isinstance(horarios, list):
-                        for h in horarios:
-                            _add_slot(slots, data_str, str(h)[:5])
-            elif isinstance(valor, list):
-                _add_slot(slots, chave, str(valor[0])[:5] if valor else "")
-        slots.sort(key=lambda x: (x["data"], x["hora"]))
-        return slots
+        # Estrutura Feegow: {"profissional_id": {"1": {"local_id": {"4": {"2026-05-15": ["07:00:00",...]}}}}}
+        if "profissional_id" in content:
+            for prof_data in content["profissional_id"].values():
+                if isinstance(prof_data, dict):
+                    for loc_data in prof_data.get("local_id", {}).values():
+                        if isinstance(loc_data, dict):
+                            for data_str, horarios in loc_data.items():
+                                if isinstance(horarios, list):
+                                    for h in horarios:
+                                        _add_slot(slots, data_str, str(h)[:5])
+        else:
+            for chave, valor in content.items():
+                if isinstance(valor, dict):
+                    for data_str, horarios in valor.items():
+                        if isinstance(horarios, list):
+                            for h in horarios:
+                                _add_slot(slots, data_str, str(h)[:5])
+                elif isinstance(valor, list):
+                    _add_slot(slots, chave, str(valor[0])[:5] if valor else "")
+        seen = set()
+        unique = []
+        for s in slots:
+            k = (s["data"], s["hora"])
+            if k not in seen:
+                seen.add(k)
+                unique.append(s)
+        unique.sort(key=lambda x: (x["data"], x["hora"]))
+        return unique
 
     def _add_slot(slots, data_str, hora):
         try:
