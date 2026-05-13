@@ -653,16 +653,24 @@ def remarcar_agendamento_feegow(agendamento_id, obs="Remarcado pelo paciente via
         return False
 
 def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso, data_fim_iso):
-    """Consulta horarios disponiveis para equipamento. Tenta tipo E (equipamento) e L (local)."""
+    """Consulta horarios disponiveis no Feegow.
+    Endpoint: appoints/available-schedule
+    Datas em ISO (YYYY-MM-DD) convertidas internamente para DD-MM-YYYY.
+    """
     import sys
     if not FEEGOW_TOKEN: return []
-    url = "https://api.feegow.com/v1/api/appoints/available-schedule-v2"
+    url = "https://api.feegow.com/v1/api/appoints/available-schedule"
+
+    def _fmt(iso):
+        try:
+            p = iso.split('-')
+            return f"{p[2]}-{p[1]}-{p[0]}"  # YYYY-MM-DD → DD-MM-YYYY
+        except: return iso
 
     def _extrair_slots(dados):
         slots = []
         content = dados.get("content", {})
         if not content: return slots
-        # Estrutura: {id: {data: [horarios]}} ou {data: [horarios]}
         for chave, valor in content.items():
             if isinstance(valor, dict):
                 for data_str, horarios in valor.items():
@@ -690,17 +698,20 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
                 slots.append({"data": data_iso, "data_br": data_br, "hora": hora, "label": f"🗓️ *{data_br} às {hora}*"})
         except: pass
 
-    # Tenta diferentes combinações de tipo (E=Equipamento, L=Local, P=Profissional)
-    for tipo in ["E", "L", "P"]:
-        params = {
-            "tipo": tipo,
-            "data_start": data_inicio_iso,
-            "data_end": data_fim_iso,
-            "local_id": local_id
-        }
-        if procedimento_id:
-            params["procedimento_id"] = procedimento_id
-        print(f"[FEEGOW-DISP] GET tipo={tipo} local_id={local_id} {data_inicio_iso}→{data_fim_iso}", file=sys.stderr)
+    data_ini_fmt = _fmt(data_inicio_iso)
+    data_fim_fmt = _fmt(data_fim_iso)
+
+    # Tenta: tipo E (equipamento) com local_id, depois P (profissional) com local_id
+    tentativas = [
+        {"tipo": "E", "local_id": local_id, "data_start": data_ini_fmt, "data_end": data_fim_fmt},
+        {"tipo": "L", "local_id": local_id, "data_start": data_ini_fmt, "data_end": data_fim_fmt},
+    ]
+    if procedimento_id:
+        for t in tentativas:
+            t["procedimento_id"] = procedimento_id
+
+    for params in tentativas:
+        print(f"[FEEGOW-DISP] GET params={params}", file=sys.stderr)
         try:
             res = requests.get(url, params=params, headers=get_feegow_headers(), timeout=10)
             print(f"[FEEGOW-DISP] HTTP {res.status_code} | resp={res.text[:400]}", file=sys.stderr)
@@ -709,12 +720,12 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
                 if dados.get("success") != False and dados.get("content"):
                     slots = _extrair_slots(dados)
                     if slots:
-                        print(f"[FEEGOW-DISP] {len(slots)} horário(s) via tipo={tipo}", file=sys.stderr)
+                        print(f"[FEEGOW-DISP] {len(slots)} horário(s) encontrado(s)", file=sys.stderr)
                         return slots
         except Exception as e:
-            print(f"[FEEGOW-DISP] Exceção tipo={tipo}: {e}", file=sys.stderr)
+            print(f"[FEEGOW-DISP] Exceção: {e}", file=sys.stderr)
 
-    print(f"[FEEGOW-DISP] Nenhum horário encontrado para local_id={local_id}", file=sys.stderr)
+    print(f"[FEEGOW-DISP] Nenhum horário para local_id={local_id}", file=sys.stderr)
     return []
 
 def dias_uteis_a_partir(data_inicio, qtd_dias):
@@ -2595,10 +2606,10 @@ def webhook():
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_csv = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}, {"id": "ga_voltar", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Voltando às opções:", "Ver Opções", _secoes_csv)
-            elif msg_recebida in ["cs_motivo"]:
+            elif msg_recebida in ["cs_motivo", "Sim, informar motivo"]:
                 update_paciente(phone, {"status": "informando_motivo_cancelamento_sessao"})
                 responder_texto(phone, f"Entendido. Por favor, me informe o motivo do cancelamento da sessão de{ref_sessao}:")
-            elif msg_recebida in ["cs_direto"] or "apenas" in msg_recebida.lower() or "cancel_apenas" in msg_recebida:
+            elif msg_recebida in ["cs_direto", "Não, só cancelar"] or "apenas" in msg_recebida.lower():
                 obs_cs = f"Desmarcado pelo paciente via robô. Sessão:{ref_sessao}"
                 ok_cs = cancelar_agendamento_feegow(ag_id_cs, obs=obs_cs) if ag_id_cs else False
                 import sys; print(f"[CANCEL-SESSAO] id={ag_id_cs} ok={ok_cs}", file=sys.stderr)
@@ -2606,10 +2617,10 @@ def webhook():
                 update_paciente(phone, {"status": "menu_veterano", "unread": True, "queixa": f"{tag_cs}: sessão{ref_sessao} cancelada."})
                 enviar_botoes(phone, f"Cancelamento registrado! ✅\n\nGostaria de reagendar para outro horário?",
                     [{"id": "cs_rea", "title": "Sim, reagendar"}, {"id": "cs_nao", "title": "Não, obrigado"}])
-            elif msg_recebida in ["cs_rea"] or "cancel_reagendar" in msg_recebida or "reagendar" in msg_recebida.lower():
+            elif msg_recebida in ["cs_rea", "Sim, reagendar"] or "cancel_reagendar" in msg_recebida or "reagendar" in msg_recebida.lower():
                 update_paciente(phone, {"status": "reagendando_preferencia"})
                 responder_texto(phone, "Vamos encontrar um novo horário! 😊\n\nQual dia e período você prefere?\n\n_Exemplo: quinta de manhã, semana que vem_")
-            elif msg_recebida in ["cs_nao"]:
+            elif msg_recebida in ["cs_nao", "Não, obrigado"]:
                 nome_cs = info.get("title", "Paciente").split()[0]
                 secoes_cs = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Tudo bem! Se precisar de algo, estarei aqui. 😊", "Ver Opções", secoes_cs)
@@ -2719,10 +2730,10 @@ def webhook():
                     [{"id": "rt_horario", "title": "🕐 Mudar horário (mesmo dia)"}, {"id": "rt_dia", "title": "📅 Mudar o dia"}, {"id": "rt_voltar", "title": "⬅️ Voltar"}])
 
         elif status == "cancelando_tratamento":
-            if msg_recebida in ["ct_motivo"] or "motivo" in msg_recebida.lower():
+            if msg_recebida in ["ct_motivo", "Sim, informar motivo"] or "motivo" in msg_recebida.lower():
                 update_paciente(phone, {"status": "informando_motivo_cancelamento_trat"})
                 responder_texto(phone, "Entendido. Por favor, me conte o motivo do cancelamento do tratamento:")
-            elif msg_recebida in ["ct_direto"] or "não" in msg_recebida.lower() or "nao" in msg_recebida.lower():
+            elif msg_recebida in ["ct_direto", "Não, só cancelar"] or "não" in msg_recebida.lower() or "nao" in msg_recebida.lower():
                 ag_prox = (info.get("agenda_agendamentos") or [{}])[0]
                 ag_id_ct = ag_prox.get("agendamento_id")
                 if ag_id_ct:
