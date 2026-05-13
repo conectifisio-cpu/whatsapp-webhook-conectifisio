@@ -484,10 +484,11 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia - SCS
-    4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga
-    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # Acupuntura - SCS
-    6: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura - Ipiranga
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia - SCS (confirmado via API)
+    4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (aguardando confirmação via API)
+    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # Acupuntura - SCS (confirmado via API)
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado via API log)
+    # local_id de Acupuntura Ipiranga ainda não apareceu nos logs — será adicionado quando identificado
 }
 
 def _nome_para_servico(nome_equipamento):
@@ -524,7 +525,7 @@ def consultar_agenda_feegow(paciente_id, retornar_raw=False, historico=False):
     print(f"[FEEGOW-AGENDA] Consultando: paciente_id={paciente_id} historico={historico}", file=sys.stderr)
     try:
         res = requests.get(url, headers=get_feegow_headers(), timeout=10)
-        print(f"[FEEGOW-AGENDA] HTTP {res.status_code} | resp={res.text[:300]}", file=sys.stderr)
+        print(f"[FEEGOW-AGENDA] HTTP {res.status_code} | resp={res.text[:2000]}", file=sys.stderr)
         if res.status_code == 200:
             dados = res.json()
             if dados.get("success") != False and dados.get("content"):
@@ -741,11 +742,11 @@ def encontrar_horarios_proximos(slots, hora_preferida, qtd=2):
     return sorted(slots, key=diff_seg)[:qtd]
 
 def confirmar_presenca_feegow(agendamento_id):
-    """Confirma presença no Feegow — status_id=2."""
+    """Confirma presença no Feegow — StatusID=4 (Aguardando)."""
     import sys
     if not FEEGOW_TOKEN or not agendamento_id: return False
     url = "https://api.feegow.com/v1/api/appoints/statusUpdate"
-    payload = {"agendamento_id": int(agendamento_id), "status_id": 2}
+    payload = {"AgendamentoID": int(agendamento_id), "StatusID": "4", "Obs": "Presença confirmada pelo paciente via robô."}
     try:
         res = requests.post(url, json=payload, headers=get_feegow_headers(), timeout=10)
         print(f"[FEEGOW-CONFIRM] HTTP {res.status_code} | {res.text[:200]}", file=sys.stderr)
