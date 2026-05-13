@@ -532,9 +532,11 @@ def consultar_agenda_feegow(paciente_id, retornar_raw=False, historico=False):
             if dados.get("success") != False and dados.get("content"):
                 sessoes = []
                 agendamentos = []
+                VALID_STATUS_IDS = {1, 2, 4, 15}  # Marcado, Confirmado, Aguardando, Remarcado
                 for a in dados["content"]:
-                    status_nome = str(a.get("status_nome", a.get("status", ""))).lower()
-                    if "cancelado" not in status_nome and "falta" not in status_nome:
+                    status_id_ag = a.get("status_id", 1)
+                    if status_id_ag not in VALID_STATUS_IDS:
+                        continue  # ignora cancelados, desmarcados, faltas
                         data_raw = str(a.get("data", "")).split("T")[0]
                         # Converte DD-MM-YYYY para YYYY-MM-DD para comparação
                         if re.match(r"^\d{2}-\d{2}-\d{4}$", data_raw):
@@ -2617,13 +2619,14 @@ def webhook():
                 update_paciente(phone, {"status": "menu_veterano", "unread": True, "queixa": f"{tag_cs}: sessão{ref_sessao} cancelada."})
                 enviar_botoes(phone, f"Cancelamento registrado! ✅\n\nGostaria de reagendar para outro horário?",
                     [{"id": "cs_rea", "title": "Sim, reagendar"}, {"id": "cs_nao", "title": "Não, obrigado"}])
+                update_paciente(phone, {"status": "pos_cancelamento_sessao"})
             elif msg_recebida in ["cs_rea", "Sim, reagendar"] or "cancel_reagendar" in msg_recebida or "reagendar" in msg_recebida.lower():
                 update_paciente(phone, {"status": "reagendando_preferencia"})
                 responder_texto(phone, "Vamos encontrar um novo horário! 😊\n\nQual dia e período você prefere?\n\n_Exemplo: quinta de manhã, semana que vem_")
             elif msg_recebida in ["cs_nao", "Não, obrigado"]:
                 nome_cs = info.get("title", "Paciente").split()[0]
-                secoes_cs = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
-                enviar_lista(phone, f"Tudo bem! Se precisar de algo, estarei aqui. 😊", "Ver Opções", secoes_cs)
+                update_paciente(phone, {"status": "menu_veterano"})
+                responder_texto(phone, f"Tudo certo, {nome_cs}! ✅ Sua solicitação foi enviada para nossa recepção. Se precisar de algo mais, é só chamar. 😊")
             else:
                 enviar_botoes(phone, f"Como deseja prosseguir com a sessão de{ref_sessao}?",
                     [{"id": "cs_motivo", "title": "Informar motivo"}, {"id": "cs_direto", "title": "Cancelar direto"}, {"id": "cs_rea", "title": "Cancelar e reagendar"}, {"id": "cs_voltar", "title": "⬅️ Voltar"}])
@@ -2637,9 +2640,18 @@ def webhook():
             ok_mcs = cancelar_agendamento_feegow(ag_id_mcs, obs=obs_mcs) if ag_id_mcs else False
             import sys; print(f"[CANCEL-MOTIVO] id={ag_id_mcs} ok={ok_mcs}", file=sys.stderr)
             tag_mcs = "[CANCELAMENTO]" if ok_mcs else "[CANCELAMENTO — confirmar no Feegow]"
-            update_paciente(phone, {"status": "menu_veterano", "unread": True, "queixa": f"{tag_mcs}: sessão{ref_cs}. Motivo: {motivo_cs}"})
+            update_paciente(phone, {"status": "pos_cancelamento_sessao", "unread": True, "queixa": f"{tag_mcs}: sessão{ref_cs}. Motivo: {motivo_cs}"})
             enviar_botoes(phone, f"Cancelamento registrado! ✅\n\nGostaria de reagendar para outro horário?",
                 [{"id": "cs_rea", "title": "Sim, reagendar"}, {"id": "cs_nao", "title": "Não, obrigado"}])
+
+        elif status == "pos_cancelamento_sessao":
+            nome_pcs = info.get("title", "Paciente").split()[0]
+            if msg_recebida in ["cs_rea", "Sim, reagendar"] or "reagendar" in msg_recebida.lower():
+                update_paciente(phone, {"status": "reagendando_preferencia"})
+                responder_texto(phone, f"Vamos encontrar um novo horário para você, {nome_pcs}! 😊\n\nQual dia e período você prefere?\n\n_Exemplo: quinta de manhã, semana que vem_")
+            elif msg_recebida in ["cs_nao", "Não, obrigado"] or "obrigad" in msg_recebida.lower() or "nao" in msg_recebida.lower() or "não" in msg_recebida.lower():
+                update_paciente(phone, {"status": "menu_veterano"})
+                responder_texto(phone, f"Tudo certo, {nome_pcs}! ✅ Sua solicitação foi enviada para nossa recepção. Qualquer dúvida, é só chamar. 😊")
 
         elif status == "aguardando_token_convenio":
             import re as _re_tk
