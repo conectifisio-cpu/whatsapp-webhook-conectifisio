@@ -484,11 +484,12 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia - SCS (confirmado via API)
-    4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (aguardando confirmação via API)
-    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # Acupuntura - SCS (confirmado via API)
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado via API log)
-    # local_id de Acupuntura Ipiranga ainda não apareceu nos logs — será adicionado quando identificado
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia - SCS (confirmado)
+    4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (aguardando confirmação)
+    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado 14/05)
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado 08/05)
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura - Ipiranga (confirmado 14/05 08:00)
+    # local_id Acupuntura SCS: ainda não confirmado nos logs
 }
 
 def _nome_para_servico(nome_equipamento):
@@ -525,7 +526,7 @@ def consultar_agenda_feegow(paciente_id, retornar_raw=False, historico=False):
     print(f"[FEEGOW-AGENDA] Consultando: paciente_id={paciente_id} historico={historico}", file=sys.stderr)
     try:
         res = requests.get(url, headers=get_feegow_headers(), timeout=10)
-        print(f"[FEEGOW-AGENDA] HTTP {res.status_code} | resp={res.text[:2000]}", file=sys.stderr)
+        print(f"[FEEGOW-AGENDA] HTTP {res.status_code} | resp={res.text[:4000]}", file=sys.stderr)
         if res.status_code == 200:
             dados = res.json()
             if dados.get("success") != False and dados.get("content"):
