@@ -615,11 +615,16 @@ def extrair_preferencia_data(texto):
             '"periodo": "manha/tarde ou null", '
             '"hora_especifica": "HH:MM ou null"}'
         )
-        resp = openai_client.chat.completions.create(
-            model=OPENAI_MODEL, messages=[{"role": "user", "content": prompt}],
-            max_tokens=80, temperature=0
-        )
-        return _json.loads(resp.choices[0].message.content.strip())
+        url_oai = "https://api.openai.com/v1/chat/completions"
+        headers_oai = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload_oai = {
+            "model": OPENAI_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 80, "temperature": 0
+        }
+        res_oai = requests.post(url_oai, json=payload_oai, headers=headers_oai, timeout=10)
+        resp_text = res_oai.json().get("choices", [{}])[0].get("message", {}).get("content", "{}").strip()
+        return _json.loads(resp_text)
     except Exception as e:
         import sys
         print(f"[EXTRAIR-DATA] Erro: {e}", file=sys.stderr)
@@ -699,23 +704,14 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
                 slots.append({"data": data_iso, "data_br": data_br, "hora": hora, "label": f"🗓️ *{data_br} às {hora}*"})
         except: pass
 
-    # Mapa local_id → unidade_id e especialidade_id Feegow (confirmados via painel)
-    _LOCAL_TO_UNIDADE_ID = {2: 2, 3: 2, 5: 1, 6: 1, 8: 1, 4: 1}
-    unidade_id = _LOCAL_TO_UNIDADE_ID.get(local_id, 0)
+    data_ini_fmt = _fmt(data_inicio_iso)
+    data_fim_fmt = _fmt(data_fim_iso)
 
-    # Mapa procedimento_id → especialidade_id (confirmado: I=192 Fisio, I=137 Acupuntura)
-    # Acupuntura pode estar registrada dentro da especialidade Fisioterapia no Feegow
-    _PROC_TO_ESP = {
-        42: 192,   # procedimento_id=42 → Fisioterapia (esp_id=192)
-        9:  192,   # procedimento_id=9  → Fisioterapia
-        11: 192,   # procedimento_id=11 → Fisioterapia
-        12: 192,   # procedimento_id=12 → Fisioterapia
-        30: 192,   # procedimento_id=30 → Fisioterapia
-        21: 137,   # procedimento_id=21 → Acupuntura (esp_id=137)
-    }
-    especialidade_id = _PROC_TO_ESP.get(procedimento_id, 192)  # default Fisioterapia
+    # especialidade_id confirmado via painel Feegow: I=192 Fisio, I=137 Acupuntura
+    _PROC_TO_ESP = {42: 192, 9: 192, 11: 192, 12: 192, 30: 192, 21: 137}
+    especialidade_id = _PROC_TO_ESP.get(procedimento_id, 192)
 
-    # tipo=E com especialidade_id — único que funciona (tipo=L tem bug, tipo=E sem esp falha)
+    # tipo=E com especialidade_id — único que funciona (tipo=L tem bug, tipo=E sem esp → 422)
     tentativas = [
         {"tipo": "E", "local_id": local_id, "especialidade_id": especialidade_id, "data_start": data_ini_fmt, "data_end": data_fim_fmt},
         {"tipo": "E", "local_id": local_id, "especialidade_id": 192, "data_start": data_ini_fmt, "data_end": data_fim_fmt},  # fallback fisio
