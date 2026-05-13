@@ -485,11 +485,11 @@ def buscar_feegow_por_cpf(cpf):
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
     2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia - SCS (confirmado)
+    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # Acupuntura - SCS (confirmado 18/05)
     4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (aguardando confirmação)
-    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado 14/05)
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado 08/05)
-    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura - Ipiranga (confirmado 14/05 08:00)
-    # local_id Acupuntura SCS: ainda não confirmado nos logs
+    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado)
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga agenda profissional Ana Paula
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura - Ipiranga (confirmado)
 }
 
 def _nome_para_servico(nome_equipamento):
