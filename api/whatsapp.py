@@ -2631,6 +2631,8 @@ def webhook():
         elif status == "aguardando_token_convenio":
             import re as _re_tk
             nums = _re_tk.findall(r'[0-9]{4,10}', msg_recebida)
+            palavras_saida = ["ok", "obrigado", "obrigada", "valeu", "voltar", "menu", "cancelar", "tchau", "nao", "não"]
+            eh_saida = any(w in msg_limpa for w in palavras_saida) and not nums
             if nums:
                 token_val = nums[0]
                 from firebase_admin import firestore as _fs_tk
@@ -2646,6 +2648,11 @@ def webhook():
                 import time as _t_tk; _t_tk.sleep(1)
                 secoes_tk = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Mais alguma coisa, {nome_tk}?", "Ver Opções", secoes_tk)
+            elif eh_saida:
+                nome_tk2 = info.get("title", "Paciente").split()[0]
+                update_paciente(phone, {"status": "menu_veterano"})
+                secoes_tk2 = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                enviar_lista(phone, f"Como posso te ajudar, {nome_tk2}? 😊", "Ver Opções", secoes_tk2)
             else:
                 responder_texto(phone, "❌ Não reconheci esse código. O token de autorização tem entre 4 e 10 dígitos numéricos.\n\nPode tentar novamente?")
 
