@@ -2568,6 +2568,8 @@ def webhook():
             if pref.get("data_especifica"):
                 try:
                     parts = pref["data_especifica"].split("/")
+                    if len(parts) == 2:  # "18/05" sem ano → assume ano atual
+                        parts.append(str(hoje.year))
                     data_cand = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
                     if data_cand.date() < hoje.date():
                         # Mês passado → tenta mesmo dia no mês atual
