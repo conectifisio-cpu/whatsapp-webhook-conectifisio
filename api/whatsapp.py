@@ -2481,19 +2481,38 @@ def webhook():
 
         elif status == "escolhendo_sessao_cancelamento":
             agendamentos_raw = info.get("agenda_agendamentos", [])
-            if msg_recebida == "ac_voltar":
+            if msg_recebida in ["ac_voltar", "⬅️ Voltar", "Voltar"]:
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_ga3 = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}]}]
                 enviar_lista(phone, "Voltando ao menu de gestão:", "Ver Opções", _secoes_ga3)
-            elif msg_recebida.startswith("ac_") and msg_recebida.replace("ac_", "").isdigit():
-                idx = int(msg_recebida.replace("ac_", ""))
-                if idx < len(agendamentos_raw):
-                    ag_sel = agendamentos_raw[idx]
-                    update_paciente(phone, {"status": "cancelando_sessao", "agenda_sessao_selecionada": ag_sel})
-                    enviar_botoes(phone, f"Sessão de *{ag_sel['data_br']} às {ag_sel['hora']}* selecionada.\n\nComo deseja prosseguir?", [{"id": "cancel_apenas", "title": "Apenas cancelar"}, {"id": "cancel_reagendar", "title": "Cancelar e reagendar"}])
             else:
-                update_paciente(phone, {"status": "cancelando_sessao"})
-                enviar_botoes(phone, "Como deseja prosseguir?", [{"id": "cancel_apenas", "title": "Apenas cancelar"}, {"id": "cancel_reagendar", "title": "Cancelar e reagendar"}])
+                # Tenta achar a sessão: primeiro por ID (ac_N), depois por título
+                ag_sel = None
+                if msg_recebida.startswith("ac_") and msg_recebida.replace("ac_", "").isdigit():
+                    idx = int(msg_recebida.replace("ac_", ""))
+                    if idx < len(agendamentos_raw):
+                        ag_sel = agendamentos_raw[idx]
+                else:
+                    # Busca por título — ex: "Fisioterapia 11:00"
+                    for ag in agendamentos_raw:
+                        titulo_ag = f"{ag.get('servico','')} {ag.get('hora','')}".strip()
+                        if msg_limpa in titulo_ag.lower() or titulo_ag.lower() in msg_limpa:
+                            ag_sel = ag
+                            break
+                if ag_sel:
+                    update_paciente(phone, {"status": "cancelando_sessao", "agenda_sessao_selecionada": ag_sel})
+                    data_br_c = ag_sel.get("data_br", "")
+                    hora_c = ag_sel.get("hora", "")
+                    servico_c = ag_sel.get("servico", "Sessão")
+                    enviar_botoes(phone,
+                        f"Atenção: vou cancelar sua sessão de *{servico_c}* em *{data_br_c} às {hora_c}*.\n\nDeseja informar o motivo?",
+                        [{"id": "cs_motivo", "title": "Sim, informar motivo"}, {"id": "cs_direto", "title": "Não, só cancelar"}, {"id": "cs_voltar", "title": "⬅️ Voltar"}])
+                else:
+                    # Sessão não identificada — mostra a lista novamente
+                    ag_mesmo_dia = agendamentos_raw[:2]
+                    opcoes_c = [{"id": f"ac_{i}", "title": f"{ag['servico']} {ag['hora']}"[:24]} for i, ag in enumerate(ag_mesmo_dia)]
+                    opcoes_c.append({"id": "ac_voltar", "title": "⬅️ Voltar"})
+                    enviar_lista(phone, "Qual sessão deseja cancelar?", "Selecionar", [{"title": "Sessões", "rows": opcoes_c}])
 
         elif status == "reagendando_preferencia":
             import sys
