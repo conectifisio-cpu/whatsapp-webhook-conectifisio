@@ -2624,23 +2624,40 @@ def webhook():
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_ehv = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}, {"id": "ga_voltar", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Voltando às opções:", "Ver Opções", _secoes_ehv)
-            elif msg_recebida.startswith("slot_") and msg_recebida.replace("slot_", "").isdigit():
-                idx = int(msg_recebida.replace("slot_", ""))
-                if idx < len(opcoes):
-                    slot = opcoes[idx]
-                    ag_orig = info.get("agenda_sessao_selecionada", {})
-                    ag_id_orig = ag_orig.get("agendamento_id")
-                    # Marca original como Remarcado no Feegow (StatusID=15)
-                    obs_rem = f"Remarcado pelo paciente via robô. Novo horário solicitado: {slot['label']}. Aguarda confirmação da recepção."
-                    ok_rem = remarcar_agendamento_feegow(ag_id_orig, obs=obs_rem) if ag_id_orig else False
-                    import sys
-                    print(f"[REAGEND] remarcar_feegow id={ag_id_orig} ok={ok_rem}", file=sys.stderr)
-                    tag_rem = "[REAGENDAMENTO RESERVA]" if ok_rem else "[REAGENDAMENTO RESERVA — remarcar no Feegow]"
-                    queixa_r = f"{tag_rem}: {slot['label']}. Sessão original: {ag_orig.get('data_br','')} às {ag_orig.get('hora','')}."
-                    update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": queixa_r, "reagendamento_solicitado": slot})
-                    responder_texto(phone, f"Perfeito! Reservei *{slot['label']}* para você. ✅\n\nNossa equipe vai confirmar o reagendamento em instantes! 😊")
             else:
-                if opcoes:
+                # Tenta casar por ID (slot_N) ou por título ("15/05/2026 às 08:00")
+                slot = None
+                if msg_recebida.startswith("slot_") and msg_recebida.replace("slot_", "").isdigit():
+                    idx = int(msg_recebida.replace("slot_", ""))
+                    slot = opcoes[idx] if idx < len(opcoes) else None
+                else:
+                    # Lista retorna título — casa por data/hora
+                    for o in opcoes:
+                        titulo = f"{o.get('data_br','')} às {o.get('hora','')}"
+                        if msg_recebida == titulo or o.get("hora","") in msg_recebida and o.get("data_br","") in msg_recebida:
+                            slot = o
+                            break
+
+                if slot:
+                    ag_orig = info.get("agenda_sessao_selecionada", {})
+                    nome_pac = info.get("title", "Paciente").split()[0]
+                    queixa_r = (
+                        f"[REAGENDAMENTO]: {nome_pac} escolheu *{slot['label']}*. "
+                        f"Sessão original: {ag_orig.get('data_br','')} às {ag_orig.get('hora','')} "
+                        f"({ag_orig.get('servico','')}) — aguarda confirmação da recepção."
+                    )
+                    update_paciente(phone, {
+                        "status": "atendimento_humano",
+                        "unread": True,
+                        "queixa": queixa_r,
+                        "reagendamento_solicitado": slot
+                    })
+                    responder_texto(phone,
+                        f"Ótimo, {nome_pac}! ✅\n\n"
+                        f"Sua preferência de horário *{slot['label']}* foi registrada.\n\n"
+                        f"Vou informar nossa recepção agora e em breve você receberá a confirmação do reagendamento. 😊"
+                    )
+                elif opcoes:
                     rows_back = [{"id": f"slot_{i}", "title": f"{o['data_br']} às {o['hora']}"} for i, o in enumerate(opcoes[:8])]
                     rows_back.append({"id": "slot_outro", "title": "🔄 Ver outros horários"})
                     rows_back.append({"id": "eh_voltar", "title": "⬅️ Voltar"})
