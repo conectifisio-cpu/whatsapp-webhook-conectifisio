@@ -2609,6 +2609,10 @@ def webhook():
             responder_texto(phone, "Buscando horários disponíveis... ⏳")
             slots_all = consultar_disponibilidade_feegow(local_id, proc_id, data_ini.strftime('%Y-%m-%d'), data_fim.strftime('%Y-%m-%d'))
 
+            # Feegow ignora data_start — filtra manualmente por data >= solicitada
+            data_ini_str = data_ini.strftime('%Y-%m-%d')
+            slots_all = [s for s in slots_all if s.get("data","") >= data_ini_str]
+
             # Filtra conflitos com agenda existente
             slots_ok = [s for s in slots_all if not _tem_conflito(s.get("data",""), s.get("hora",""), agendamentos_serie)]
             proximos = encontrar_horarios_proximos(slots_ok, hora_preferida, qtd=2)
