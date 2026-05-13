@@ -537,37 +537,36 @@ def consultar_agenda_feegow(paciente_id, retornar_raw=False, historico=False):
                     status_id_ag = a.get("status_id", 1)
                     if status_id_ag not in VALID_STATUS_IDS:
                         continue  # ignora cancelados, desmarcados, faltas
-                        data_raw = str(a.get("data", "")).split("T")[0]
-                        # Converte DD-MM-YYYY para YYYY-MM-DD para comparação
-                        if re.match(r"^\d{2}-\d{2}-\d{4}$", data_raw):
-                            partes = data_raw.split("-")
-                            data_iso = f"{partes[2]}-{partes[1]}-{partes[0]}"
-                        else:
-                            data_iso = data_raw
-                        if (not historico and data_iso >= hoje.strftime('%Y-%m-%d')) or \
-                           (historico and data_iso < hoje.strftime('%Y-%m-%d')):
-                            hora = str(a.get("horario") or a.get("hora", ""))[:5]
-                            local_id = a.get("local_id")
-                            # Usa mapa de equipamentos para nome do serviço e unidade
-                            local_info = _LOCAL_ID_MAP.get(local_id, {})
-                            servico_nome = local_info.get("servico") or a.get("procedimento_nome") or "Sessão"
-                            unidade_ag = local_info.get("unidade", "")
-                            parts = data_iso.split("-")
-                            if len(parts) == 3:
-                                label = f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {servico_nome}"
-                                sessoes.append(label)
-                                agendamentos.append({
-                                    "agendamento_id": a.get("agendamento_id"),
-                                    "data": data_iso,
-                                    "data_br": f"{parts[2]}/{parts[1]}/{parts[0]}",
-                                    "hora": hora,
-                                    "local_id": local_id,
-                                    "procedimento_id": a.get("procedimento_id"),
-                                    "profissional_id": a.get("profissional_id"),
-                                    "unidade": unidade_ag,
-                                    "servico": servico_nome,
-                                    "label": label
-                                })
+                    data_raw = str(a.get("data", "")).split("T")[0]
+                    # Converte DD-MM-YYYY para YYYY-MM-DD para comparação
+                    if re.match(r"^\d{2}-\d{2}-\d{4}$", data_raw):
+                        partes = data_raw.split("-")
+                        data_iso = f"{partes[2]}-{partes[1]}-{partes[0]}"
+                    else:
+                        data_iso = data_raw
+                    if (not historico and data_iso >= hoje.strftime('%Y-%m-%d')) or \
+                       (historico and data_iso < hoje.strftime('%Y-%m-%d')):
+                        hora = str(a.get("horario") or a.get("hora", ""))[:5]
+                        local_id = a.get("local_id")
+                        local_info = _LOCAL_ID_MAP.get(local_id, {})
+                        servico_nome = local_info.get("servico") or a.get("procedimento_nome") or "Sessão"
+                        unidade_ag = local_info.get("unidade", "")
+                        parts = data_iso.split("-")
+                        if len(parts) == 3:
+                            label = f"🗓️ *{parts[2]}/{parts[1]}/{parts[0]} às {hora}* - {servico_nome}"
+                            sessoes.append(label)
+                            agendamentos.append({
+                                "agendamento_id": a.get("agendamento_id"),
+                                "data": data_iso,
+                                "data_br": f"{parts[2]}/{parts[1]}/{parts[0]}",
+                                "hora": hora,
+                                "local_id": local_id,
+                                "procedimento_id": a.get("procedimento_id"),
+                                "profissional_id": a.get("profissional_id"),
+                                "unidade": unidade_ag,
+                                "servico": servico_nome,
+                                "label": label
+                            })
                 print(f"[FEEGOW-AGENDA] {len(sessoes)} sessão(ões) encontrada(s)", file=sys.stderr)
                 if historico:
                     agendamentos.sort(key=lambda x: x["data"], reverse=True)
