@@ -2433,30 +2433,40 @@ def webhook():
 
             elif msg_recebida in ["ga_reagendar", "🔄 Reagendar sessão", "Reagendar sessão"]:
                 agendamentos_raw = info.get("agenda_agendamentos", [])
-                # Filtra só o agendamento mais próximo
-                ag_proximo = agendamentos_raw[0] if agendamentos_raw else None
-                # Verifica se há 2 serviços no mesmo dia
-                ag_mesmo_dia = []
-                if ag_proximo:
-                    data_prox = ag_proximo.get("data", "")
-                    ag_mesmo_dia = [a for a in agendamentos_raw if a.get("data") == data_prox]
-                if len(ag_mesmo_dia) > 1:
-                    opcoes_sessoes = [{"id": f"ag_{i}", "title": f"{ag['servico']} {ag['hora']}"[:24]} for i, ag in enumerate(ag_mesmo_dia[:2])]
-                    opcoes_sessoes.append({"id": "ag_ambos", "title": "Reagendar ambos"})
-                    opcoes_sessoes.append({"id": "ag_voltar", "title": "⬅️ Voltar"})
-                    update_paciente(phone, {"status": "escolhendo_sessao_reagendamento"})
-                    enviar_lista(phone, f"Você tem dois atendimentos em *{ag_proximo.get('data_br','')}*. Qual deseja reagendar?", "Ver Sessões", [{"title": "Selecione", "rows": opcoes_sessoes}])
-                elif ag_proximo:
-                    update_paciente(phone, {"status": "reagendando_tipo", "agenda_sessao_selecionada": ag_proximo})
-                    data_br_r = ag_proximo.get("data_br", "")
-                    hora_r = ag_proximo.get("hora", "")
-                    servico_r = ag_proximo.get("servico", "Sessão")
-                    enviar_botoes(phone,
-                        f"Vamos reagendar sua sessão de *{servico_r}* em *{data_br_r} às {hora_r}*.\n\nO que você precisa?",
-                        [{"id": "rt_horario", "title": "🕐 Mudar horário (mesmo dia)"}, {"id": "rt_dia", "title": "📅 Mudar o dia"}, {"id": "rt_voltar", "title": "⬅️ Voltar"}])
-                else:
+                if not agendamentos_raw:
                     responder_texto(phone, "Não encontrei sessões próximas para reagendar. Nossa equipe pode te ajudar! 😊")
                     update_paciente(phone, {"status": "menu_veterano"})
+                    return jsonify({"status": "reagendar_sem_sessoes"}), 200
+
+                # Agrupa por local_id — pega as 2 mais próximas de cada agenda
+                local_id_visto = {}
+                sessoes_exibir = []
+                for ag in agendamentos_raw:
+                    lid = ag.get("local_id")
+                    if lid not in local_id_visto:
+                        local_id_visto[lid] = 0
+                    if local_id_visto[lid] < 2:
+                        sessoes_exibir.append(ag)
+                        local_id_visto[lid] += 1
+
+                tem_mais = len(agendamentos_raw) > len(sessoes_exibir)
+
+                if len(sessoes_exibir) == 1:
+                    # Só uma sessão — vai direto para tipo
+                    ag = sessoes_exibir[0]
+                    update_paciente(phone, {"status": "reagendando_tipo", "agenda_sessao_selecionada": ag, "agenda_local_id": ag["local_id"], "agenda_procedimento_id": ag["procedimento_id"]})
+                    enviar_botoes(phone,
+                        f"Vamos reagendar sua sessão de *{ag['servico']}* em *{ag['data_br']} às {ag['hora']}*.\n\nO que você precisa?",
+                        [{"id": "rt_horario", "title": "🕐 Mudar horário"}, {"id": "rt_dia", "title": "📅 Mudar o dia"}, {"id": "rt_voltar", "title": "⬅️ Voltar"}])
+                else:
+                    # Múltiplas sessões — deixa paciente escolher
+                    rows = [{"id": f"rag_{i}", "title": f"{ag['servico']} {ag['data_br']} {ag['hora']}"[:24]} for i, ag in enumerate(sessoes_exibir)]
+                    if tem_mais:
+                        rows.append({"id": "rag_mais", "title": "📅 Ver mais sessões"})
+                    rows.append({"id": "rag_voltar", "title": "⬅️ Voltar"})
+                    update_paciente(phone, {"status": "escolhendo_sessao_reagendamento", "agenda_agendamentos": agendamentos_raw})
+                    lista_txt = "\n".join([f"• 🗓️ *{ag['data_br']} às {ag['hora']}* - {ag['servico']}" for ag in sessoes_exibir])
+                    enviar_lista(phone, f"Qual sessão deseja reagendar?\n\n{lista_txt}", "Selecionar", [{"title": "Sessões", "rows": rows}])
                 return jsonify({"status": "reagendar_iniciado"}), 200
 
             elif msg_recebida in ["ga_cancelar", "❌ Cancelar sessão", "Cancelar sessão"]:
@@ -2496,19 +2506,37 @@ def webhook():
 
         elif status == "escolhendo_sessao_reagendamento":
             agendamentos_raw = info.get("agenda_agendamentos", [])
-            if msg_recebida == "ag_voltar":
+            if msg_recebida in ["rag_voltar", "ag_voltar", "⬅️ Voltar"]:
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_ga2 = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}]}]
                 enviar_lista(phone, "Voltando ao menu de gestão:", "Ver Opções", _secoes_ga2)
-            elif msg_recebida.startswith("ag_") and msg_recebida.replace("ag_", "").isdigit():
-                idx = int(msg_recebida.replace("ag_", ""))
-                if idx < len(agendamentos_raw):
-                    ag_sel = agendamentos_raw[idx]
-                    update_paciente(phone, {"status": "reagendando_preferencia", "agenda_local_id": ag_sel["local_id"], "agenda_procedimento_id": ag_sel["procedimento_id"], "agenda_sessao_selecionada": ag_sel})
-                    responder_texto(phone, f"Sessão de *{ag_sel['data_br']} às {ag_sel['hora']}* selecionada.\n\nQual dia e horário você prefere para o novo agendamento? 😊\n\n_Exemplo: quinta às 14h_")
+            elif msg_recebida == "rag_mais":
+                nome_rm = info.get("title", "Paciente").split()[0]
+                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[REAGENDAMENTO]: paciente quer reagendar sessões além das próximas."})
+                responder_texto(phone, f"Claro, {nome_rm}! Vou conectar você com nossa recepção para organizar as demais sessões. 💙")
             else:
-                update_paciente(phone, {"status": "reagendando_preferencia"})
-                responder_texto(phone, "Para encontrarmos o melhor horário, me diga: qual dia e horário você prefere? 😊\n\n_Exemplo: quinta às 14h_")
+                # Tenta casar por ID (rag_N ou ag_N) ou por título
+                ag_sel = None
+                for prefix in ["rag_", "ag_"]:
+                    if msg_recebida.startswith(prefix) and msg_recebida.replace(prefix, "").isdigit():
+                        idx = int(msg_recebida.replace(prefix, ""))
+                        if idx < len(agendamentos_raw):
+                            ag_sel = agendamentos_raw[idx]
+                        break
+                if not ag_sel:
+                    # Casa por título
+                    for ag in agendamentos_raw:
+                        titulo = f"{ag.get('servico','')} {ag.get('data_br','')} {ag.get('hora','')}".strip()
+                        if msg_limpa in titulo.lower() or ag.get("data_br","") in msg_recebida:
+                            ag_sel = ag
+                            break
+                if ag_sel:
+                    update_paciente(phone, {"status": "reagendando_tipo", "agenda_sessao_selecionada": ag_sel, "agenda_local_id": ag_sel["local_id"], "agenda_procedimento_id": ag_sel["procedimento_id"]})
+                    enviar_botoes(phone,
+                        f"Vamos reagendar sua sessão de *{ag_sel['servico']}* em *{ag_sel['data_br']} às {ag_sel['hora']}*.\n\nO que você precisa?",
+                        [{"id": "rt_horario", "title": "🕐 Mudar horário"}, {"id": "rt_dia", "title": "📅 Mudar o dia"}, {"id": "rt_voltar", "title": "⬅️ Voltar"}])
+                else:
+                    enviar_lista(phone, "Qual sessão deseja reagendar?", "Selecionar", [{"title": "Sessões", "rows": [{"id": f"rag_{i}", "title": f"{ag['servico']} {ag['data_br']}"[:24]} for i, ag in enumerate(agendamentos_raw[:4])]}])
 
         elif status == "escolhendo_sessao_cancelamento":
             agendamentos_raw = info.get("agenda_agendamentos", [])
