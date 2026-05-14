@@ -484,12 +484,20 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia - SCS (confirmado)
-    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # Acupuntura - SCS (confirmado 18/05)
-    4: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (aguardando confirmação)
-    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga (confirmado)
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia - Ipiranga agenda profissional Ana Paula
-    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura - Ipiranga (confirmado)
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # confirmado via logs
+    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # confirmado via logs
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # confirmado via logs
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # confirmado via logs
+}
+
+# Mapa: local_id do agendamento → local_ids válidos nos slots retornados pela API
+# A API retorna slots de múltiplas agendas; filtramos pelos corretos
+_LOCAL_ID_SLOTS = {
+    8: [6],      # Acupuntura Ipiranga → slots do Box Acupuntura (terça/quinta)
+    5: [2, 3],   # Fisioterapia SCS → slots de Fisioterapia SCS
+    2: [2, 3],
+    6: [4, 6],   # Fisioterapia Ipiranga
+    4: [4, 6],
 }
 
 def _nome_para_servico(nome_equipamento):
@@ -683,12 +691,12 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
         if "profissional_id" in content:
             for prof_data in content["profissional_id"].values():
                 if isinstance(prof_data, dict):
-                    for loc_data in prof_data.get("local_id", {}).values():
+                    for loc_id_str, loc_data in prof_data.get("local_id", {}).items():
                         if isinstance(loc_data, dict):
                             for data_str, horarios in loc_data.items():
                                 if isinstance(horarios, list):
                                     for h in horarios:
-                                        _add_slot(slots, data_str, str(h)[:5])
+                                        _add_slot(slots, data_str, str(h)[:5], int(loc_id_str))
         else:
             for chave, valor in content.items():
                 if isinstance(valor, dict):
@@ -708,7 +716,7 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
         unique.sort(key=lambda x: (x["data"], x["hora"]))
         return unique
 
-    def _add_slot(slots, data_str, hora):
+    def _add_slot(slots, data_str, hora, local_id_slot=None):
         try:
             if re.match(r'^\d{4}-\d{2}-\d{2}$', data_str):
                 p = data_str.split('-')
@@ -721,7 +729,10 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
             else:
                 data_iso = data_str; data_br = data_str
             if hora:
-                slots.append({"data": data_iso, "data_br": data_br, "hora": hora, "label": f"🗓️ *{data_br} às {hora}*"})
+                slot = {"data": data_iso, "data_br": data_br, "hora": hora, "label": f"🗓️ *{data_br} às {hora}*"}
+                if local_id_slot is not None:
+                    slot["local_id"] = local_id_slot
+                slots.append(slot)
         except: pass
 
     data_ini_fmt = _fmt(data_inicio_iso)
@@ -2627,9 +2638,15 @@ def webhook():
             responder_texto(phone, "Buscando horários disponíveis... ⏳")
             slots_all = consultar_disponibilidade_feegow(local_id, proc_id, data_ini.strftime('%Y-%m-%d'), data_fim.strftime('%Y-%m-%d'))
 
-            # Feegow ignora data_start — filtra manualmente por data >= solicitada
+            # Filtra por data >= solicitada (Feegow ignora data_start)
             data_ini_str = data_ini.strftime('%Y-%m-%d')
             slots_all = [s for s in slots_all if s.get("data","") >= data_ini_str]
+
+            # Filtra por local_id correto da grade (evita mostrar slots de outras agendas)
+            local_ids_validos = _LOCAL_ID_SLOTS.get(local_id, [local_id])
+            if any(s.get("local_id") for s in slots_all):
+                slots_all = [s for s in slots_all if s.get("local_id") in local_ids_validos]
+            print(f"[REAGEND-SLOTS] {len(slots_all)} slots após filtro local_id={local_ids_validos}", file=sys.stderr)
 
             # Filtra conflitos com agenda existente
             slots_ok = [s for s in slots_all if not _tem_conflito(s.get("data",""), s.get("hora",""), agendamentos_serie)]
