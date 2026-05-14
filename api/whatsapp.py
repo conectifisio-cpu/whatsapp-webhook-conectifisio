@@ -600,35 +600,37 @@ def _buscar_servico_atual_feegow(paciente_id):
     return None
 
 def extrair_preferencia_data(texto):
-    """Usa IA para extrair preferência de data/período do texto livre do paciente."""
+    """Usa gpt-4o-mini base para extrair data/hora em formato ISO — sem parsing frágil."""
     try:
         import json as _json
         hoje = datetime.now()
-        dias_map = {0: "segunda", 1: "terca", 2: "quarta", 3: "quinta", 4: "sexta"}
+        dias_map = {0: "segunda", 1: "terça", 2: "quarta", 3: "quinta", 4: "sexta", 5: "sábado", 6: "domingo"}
         hoje_nome = dias_map.get(hoje.weekday(), "")
         prompt = (
-            f"Hoje é {hoje.strftime('%d/%m/%Y')} ({hoje_nome}-feira). Atendemos de segunda a sexta. "
-            f"O paciente disse: \"{texto}\"\n"
-            "Extraia preferência de data. Responda APENAS em JSON sem texto extra:\n"
-            '{"data_especifica": "DD/MM/YYYY ou null", '
-            '"dia_semana": "segunda/terca/quarta/quinta/sexta ou null", '
-            '"periodo": "manha/tarde ou null", '
-            '"hora_especifica": "HH:MM ou null"}'
+            f"Atue como extrator de datas. Um paciente de clínica de fisioterapia disse:\n"
+            f"\"{texto}\"\n\n"
+            f"Hoje é {hoje.strftime('%d/%m/%Y')} ({hoje_nome}). Atendemos de segunda a sexta.\n\n"
+            f"Extraia data e hora preferidas. Se relativo ('próxima quinta'), calcule a data real. "
+            f"Se só dia/mês sem ano, assuma {hoje.year}. "
+            f"Responda APENAS em JSON sem texto extra:\n"
+            f'{{"data": "YYYY-MM-DD ou null", "hora": "HH:MM ou null", "periodo": "manha/tarde ou null"}}'
         )
         url_oai = "https://api.openai.com/v1/chat/completions"
         headers_oai = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
         payload_oai = {
-            "model": "gpt-4o-mini",  # modelo BASE — fine-tuned não segue instrução JSON
+            "model": "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 80, "temperature": 0
+            "max_tokens": 60, "temperature": 0
         }
         res_oai = requests.post(url_oai, json=payload_oai, headers=headers_oai, timeout=10)
         resp_text = res_oai.json().get("choices", [{}])[0].get("message", {}).get("content", "{}").strip()
+        import sys
+        print(f"[EXTRAIR-DATA] '{texto[:40]}' → {resp_text}", file=sys.stderr)
         return _json.loads(resp_text)
     except Exception as e:
         import sys
         print(f"[EXTRAIR-DATA] Erro: {e}", file=sys.stderr)
-        return {"data_especifica": None, "dia_semana": None, "periodo": None, "hora_especifica": None}
+        return {"data": None, "hora": None, "periodo": None}
 
 def cancelar_agendamento_feegow(agendamento_id, obs="Desmarcado pelo paciente via robô."):
     """Cancela agendamento no Feegow — StatusID=11 (Desmarcado pelo paciente)."""
@@ -2559,34 +2561,20 @@ def webhook():
             agendamentos_serie = info.get("agenda_agendamentos", [])
 
             # Determina horário preferido
-            hora_preferida = pref.get("hora_especifica") or "08:00"
-            if pref.get("periodo") == "tarde": hora_preferida = "14:00"
-            elif pref.get("periodo") == "manha": hora_preferida = "08:00"
+            hora_preferida = pref.get("hora") or ("14:00" if pref.get("periodo") == "tarde" else "08:00")
 
-            # Data alvo — com correção de mês passado
+            # Data alvo — já em YYYY-MM-DD, sem parsing frágil
             data_ini = hoje + timedelta(days=1)  # mínimo amanhã
-            if pref.get("data_especifica"):
+            if pref.get("data"):
                 try:
-                    parts = pref["data_especifica"].split("/")
-                    if len(parts) == 2:  # "18/05" sem ano → assume ano atual
-                        parts.append(str(hoje.year))
-                    data_cand = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-                    if data_cand.date() < hoje.date():
-                        # Mês passado → tenta mesmo dia no mês atual
-                        try:
-                            data_cand = data_cand.replace(month=hoje.month, year=hoje.year)
-                        except: pass
+                    data_cand = datetime.strptime(pref["data"], "%Y-%m-%d")
                     if data_cand.date() >= hoje.date():
                         data_ini = data_cand
-                except: pass
-            elif pref.get("dia_semana"):
-                dias_map2 = {"segunda": 0, "terca": 1, "quarta": 2, "quinta": 3, "sexta": 4}
-                alvo_wd = dias_map2.get(pref["dia_semana"], -1)
-                if alvo_wd >= 0:
-                    for i in range(1, 8):
-                        cand = hoje + timedelta(days=i)
-                        if cand.weekday() == alvo_wd:
-                            data_ini = cand; break
+                except Exception as e_dp:
+                    print(f"[REAGEND-DATA] Erro parse '{pref.get('data')}': {e_dp}", file=sys.stderr)
+            elif pref.get("periodo") and not pref.get("data"):
+                pass  # sem data específica → usa amanhã
+            print(f"[REAGEND-DATA] data_ini={data_ini.strftime('%d/%m/%Y')} hora_pref={hora_preferida}", file=sys.stderr)
 
             data_fim = dias_uteis_a_partir(data_ini, 14)  # janela de 14 dias úteis
 
