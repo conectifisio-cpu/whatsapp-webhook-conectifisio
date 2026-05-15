@@ -484,20 +484,25 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # confirmado via logs
-    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # confirmado via logs
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # confirmado via logs
-    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # confirmado via logs
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia SCS ✅ confirmado via paciente 2623
+    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia Ipiranga ✅ confirmado 14/05
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia Ipiranga ✅ confirmado 08/05
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura Ipiranga ✅ confirmado 14/05 08:00
+    # Pendente: Acupuntura SCS (local_id desconhecido — aparecerá nos logs quando paciente de SCS agendar)
 }
 
 # Mapa: local_id do agendamento → local_ids válidos nos slots retornados pela API
-# A API retorna slots de múltiplas agendas; filtramos pelos corretos
-_LOCAL_ID_SLOTS = {
-    8: [6],      # Acupuntura Ipiranga → slots do Box Acupuntura (terça/quinta)
-    5: [2, 3],   # Fisioterapia SCS → slots de Fisioterapia SCS
-    2: [2, 3],
-    6: [4, 6],   # Fisioterapia Ipiranga
-    4: [4, 6],
+_PROC_ID_SERVICO = {
+    21: "Acupuntura", 39: "Avaliação", 42: "Fisioterapia",
+    9: "Avaliação", 32: "Avaliação",
+    12: "Fisioterapia", 10: "Fisioterapia", 11: "Fisioterapia",
+    14: "Fisioterapia", 15: "Fisioterapia", 16: "Fisioterapia",
+    17: "Fisioterapia", 18: "Fisioterapia", 22: "Fisioterapia",
+    34: "Fisioterapia", 35: "Fisioterapia", 43: "Fisioterapia",
+    44: "Fisioterapia", 45: "Fisioterapia", 46: "Fisioterapia", 49: "Fisioterapia",
+    20: "Pélvica", 25: "Pélvica", 31: "Pélvica", 38: "Pélvica", 40: "Pélvica",
+    23: "Pilates", 27: "Terapia Manual", 30: "Terapia Manual",
+    28: "Drenagem", 36: "Respiratória", 37: "Respiratória", 26: "RPG",
 }
 
 def _nome_para_servico(nome_equipamento):
@@ -557,7 +562,7 @@ def consultar_agenda_feegow(paciente_id, retornar_raw=False, historico=False):
                         hora = str(a.get("horario") or a.get("hora", ""))[:5]
                         local_id = a.get("local_id")
                         local_info = _LOCAL_ID_MAP.get(local_id, {})
-                        servico_nome = local_info.get("servico") or a.get("procedimento_nome") or "Sessão"
+                        servico_nome = local_info.get("servico") or _PROC_ID_SERVICO.get(a.get("procedimento_id")) or a.get("procedimento_nome") or "Sessão"
                         unidade_ag = local_info.get("unidade", "")
                         parts = data_iso.split("-")
                         if len(parts) == 3:
@@ -2642,11 +2647,11 @@ def webhook():
             data_ini_str = data_ini.strftime('%Y-%m-%d')
             slots_all = [s for s in slots_all if s.get("data","") >= data_ini_str]
 
-            # Filtra por local_id correto da grade (evita mostrar slots de outras agendas)
-            local_ids_validos = _LOCAL_ID_SLOTS.get(local_id, [local_id])
+            # Regra de negócio: reagendamento = mesmo equipamento (local_id)
+            # Filtra apenas slots do mesmo local_id do agendamento original
             if any(s.get("local_id") for s in slots_all):
-                slots_all = [s for s in slots_all if s.get("local_id") in local_ids_validos]
-            print(f"[REAGEND-SLOTS] {len(slots_all)} slots após filtro local_id={local_ids_validos}", file=sys.stderr)
+                slots_all = [s for s in slots_all if s.get("local_id") == local_id]
+            print(f"[REAGEND-SLOTS] {len(slots_all)} slots após filtro local_id={local_id}", file=sys.stderr)
 
             # Filtra conflitos com agenda existente
             slots_ok = [s for s in slots_all if not _tem_conflito(s.get("data",""), s.get("hora",""), agendamentos_serie)]
