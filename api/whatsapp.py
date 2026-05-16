@@ -484,14 +484,19 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia SCS ✅ confirmado via paciente 2623
-    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia Ipiranga ✅ confirmado 14/05
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia Ipiranga ✅ confirmado 08/05
-    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura Ipiranga ✅ confirmado 14/05 08:00
-    # Pendente: Acupuntura SCS (local_id desconhecido — aparecerá nos logs quando paciente de SCS agendar)
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # ✅ confirmado
+    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # ✅ confirmado
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # ✅ confirmado
 }
 
-# Mapa: local_id do agendamento → local_ids válidos nos slots retornados pela API
+_LOCAL_ID_SLOTS = {
+    2: [2],   # Fisioterapia SCS
+    5: [5],   # Acupuntura SCS
+    6: [6],   # Fisioterapia Ipiranga
+    8: [6],   # Acupuntura Ipiranga → API retorna slots sob local_id=6
+}
+
 _PROC_ID_SERVICO = {
     21: "Acupuntura", 39: "Avaliação", 42: "Fisioterapia",
     9: "Avaliação", 32: "Avaliação",
@@ -2540,12 +2545,27 @@ def webhook():
                             ag_sel = agendamentos_raw[idx]
                         break
                 if not ag_sel:
-                    # Casa por título
+                    # Casa por título — inclui serviço para evitar ambiguidade
+                    msg_lower = msg_limpa
                     for ag in agendamentos_raw:
-                        titulo = f"{ag.get('servico','')} {ag.get('data_br','')} {ag.get('hora','')}".strip()
-                        if msg_limpa in titulo.lower() or ag.get("data_br","") in msg_recebida:
+                        servico_ag = ag.get('servico','').lower()
+                        data_ag = ag.get('data_br','')
+                        hora_ag = ag.get('hora','')
+                        # Verifica se o serviço e a data batem
+                        servico_ok = servico_ag and servico_ag in msg_lower
+                        data_ok = data_ag and data_ag.replace("/","") in msg_lower.replace("/","").replace("-","")
+                        hora_ok = hora_ag and hora_ag[:5] in msg_lower
+                        if servico_ok and (data_ok or hora_ok):
                             ag_sel = ag
                             break
+                    # Fallback: casa só por data+hora se serviço não identificado
+                    if not ag_sel:
+                        for ag in agendamentos_raw:
+                            data_ag = ag.get('data_br','')
+                            hora_ag = ag.get('hora','')
+                            if data_ag in msg_recebida and hora_ag[:5] in msg_recebida:
+                                ag_sel = ag
+                                break
                 if ag_sel:
                     update_paciente(phone, {"status": "reagendando_tipo", "agenda_sessao_selecionada": ag_sel, "agenda_local_id": ag_sel["local_id"], "agenda_procedimento_id": ag_sel["procedimento_id"]})
                     enviar_botoes(phone,
@@ -2647,11 +2667,11 @@ def webhook():
             data_ini_str = data_ini.strftime('%Y-%m-%d')
             slots_all = [s for s in slots_all if s.get("data","") >= data_ini_str]
 
-            # Regra de negócio: reagendamento = mesmo equipamento (local_id)
-            # Filtra apenas slots do mesmo local_id do agendamento original
+            # Regra: mesmo equipamento → filtra slots pelo local_id mapeado
+            local_ids_validos = _LOCAL_ID_SLOTS.get(local_id, [local_id])
             if any(s.get("local_id") for s in slots_all):
-                slots_all = [s for s in slots_all if s.get("local_id") == local_id]
-            print(f"[REAGEND-SLOTS] {len(slots_all)} slots após filtro local_id={local_id}", file=sys.stderr)
+                slots_all = [s for s in slots_all if s.get("local_id") in local_ids_validos]
+            print(f"[REAGEND-SLOTS] {len(slots_all)} slots após filtro local_id={local_ids_validos}", file=sys.stderr)
 
             # Filtra conflitos com agenda existente
             slots_ok = [s for s in slots_all if not _tem_conflito(s.get("data",""), s.get("hora",""), agendamentos_serie)]
