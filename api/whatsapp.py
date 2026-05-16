@@ -494,8 +494,8 @@ _LOCAL_ID_MAP = {
 _LOCAL_ID_SLOTS = {
     2: [2],   # Fisioterapia SCS
     3: [4],   # Acupuntura SCS → API retorna slots sob local_id=4 ✅ confirmado log 16/05
-    5: [5],   # Fisioterapia Ipiranga
-    6: [6],   # Fisioterapia Ipiranga
+    5: [4],   # Fisioterapia Ipiranga → API retorna slots sob local_id=4 ✅ confirmado log 16/05
+    6: [4],   # Fisioterapia Ipiranga → API retorna slots sob local_id=4
     8: [6],   # Acupuntura Ipiranga → API retorna slots sob local_id=6
 }
 
