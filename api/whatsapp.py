@@ -485,8 +485,8 @@ def buscar_feegow_por_cpf(cpf):
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
     2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # ✅ confirmado
-    5: {"unidade": "São Caetano", "servico": "Acupuntura"},    # ✅ confirmado
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado
+    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # ✅ confirmado
+    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado
     8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # ✅ confirmado
 }
 
