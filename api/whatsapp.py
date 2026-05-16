@@ -3611,7 +3611,9 @@ def diagnostico_slots():
             "slots_por_local_id": {
                 str(k): {
                     "quantidade": len(v),
-                    "primeiros": v[:3]
+                    "horarios": sorted(set(h.split(" ")[1] for h in v)),
+                    "datas": sorted(set(h.split(" ")[0] for h in v)),
+                    "primeiros": v[:6]
                 } for k, v in slot_local_ids.items()
             },
             "mapeamento_atual": _LOCAL_ID_SLOTS.get(lid, [lid])
