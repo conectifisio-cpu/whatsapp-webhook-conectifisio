@@ -641,11 +641,12 @@ def extrair_preferencia_data(texto):
                         data_result = cand.strftime('%Y-%m-%d')
                         break
         import re as _re
-        hora_match = _re.search(r'(\d{1,2})[:h](\d{2})?', txt_lower)
+        hora_match = _re.search(r'(\d{1,2})[h:](\d{2})?', txt_lower)
         if hora_match:
             h = int(hora_match.group(1))
             m = int(hora_match.group(2)) if hora_match.group(2) else 0
-            hora_result = f"{h:02d}:{m:02d}"
+            if 0 <= h <= 23:
+                hora_result = f"{h:02d}:{m:02d}"
         if "manhã" in txt_lower or "manha" in txt_lower: periodo_result = "manha"
         elif "tarde" in txt_lower: periodo_result = "tarde"
         return {"data": data_result, "hora": hora_result, "periodo": periodo_result}
@@ -3565,6 +3566,65 @@ def chat_manual():
         import traceback, sys
         print(traceback.format_exc(), file=sys.stderr)
         return jsonify({"success": False, "error": f"Erro de conexão/servidor: {str(e)}"}), 500
+
+@app.route("/api/diagnostico/slots", methods=["GET"])
+def diagnostico_slots():
+    """Endpoint de diagnóstico: consulta disponibilidade para cada local_id
+    e retorna qual local_id a API retorna nos slots.
+    
+    Uso:
+    GET /api/diagnostico/slots?token=conectifisio_followup_2025
+    GET /api/diagnostico/slots?token=...&local_id=5  (testa só um)
+    GET /api/diagnostico/slots?token=...&proc_id=42  (procedimento específico)
+    """
+    import sys
+    token = request.args.get("token", "")
+    if token != os.environ.get("FOLLOWUP_SECRET", "conectifisio_followup_2025"):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    local_id_param = request.args.get("local_id")
+    proc_id_param = int(request.args.get("proc_id", 42))
+
+    local_ids_testar = [int(local_id_param)] if local_id_param else [2, 3, 4, 5, 6, 7, 8]
+
+    hoje = datetime.now()
+    data_ini = hoje.strftime('%Y-%m-%d')
+    data_fim = (hoje + timedelta(days=14)).strftime('%Y-%m-%d')
+
+    resultado = []
+    for lid in local_ids_testar:
+        slots = consultar_disponibilidade_feegow(lid, proc_id_param, data_ini, data_fim)
+        # Agrupa por local_id dos slots retornados
+        slot_local_ids = {}
+        for s in slots:
+            slid = s.get("local_id", "?")
+            if slid not in slot_local_ids:
+                slot_local_ids[slid] = []
+            slot_local_ids[slid].append(f"{s['data']} {s['hora']}")
+
+        info_map = _LOCAL_ID_MAP.get(lid, {})
+        resultado.append({
+            "agendamento_local_id": lid,
+            "unidade": info_map.get("unidade", "?"),
+            "servico": info_map.get("servico", "?"),
+            "total_slots": len(slots),
+            "slots_por_local_id": {
+                str(k): {
+                    "quantidade": len(v),
+                    "primeiros": v[:3]
+                } for k, v in slot_local_ids.items()
+            },
+            "mapeamento_atual": _LOCAL_ID_SLOTS.get(lid, [lid])
+        })
+        print(f"[DIAG-SLOTS] local_id={lid} → {len(slots)} slots em local_ids={list(slot_local_ids.keys())}", file=sys.stderr)
+
+    return jsonify({
+        "data_consulta": hoje.strftime('%d/%m/%Y'),
+        "procedimento_id": proc_id_param,
+        "janela": f"{data_ini} a {data_fim}",
+        "resultados": resultado
+    }), 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
