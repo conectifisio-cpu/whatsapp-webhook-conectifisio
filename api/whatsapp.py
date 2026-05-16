@@ -493,7 +493,7 @@ _LOCAL_ID_MAP = {
 
 _LOCAL_ID_SLOTS = {
     2: [2],   # Fisioterapia SCS
-    3: [3],   # Acupuntura SCS
+    3: [4],   # Acupuntura SCS → API retorna slots sob local_id=4 ✅ confirmado log 16/05
     5: [5],   # Fisioterapia Ipiranga
     6: [6],   # Fisioterapia Ipiranga
     8: [6],   # Acupuntura Ipiranga → API retorna slots sob local_id=6
@@ -649,6 +649,15 @@ def extrair_preferencia_data(texto):
         if "manhã" in txt_lower or "manha" in txt_lower: periodo_result = "manha"
         elif "tarde" in txt_lower: periodo_result = "tarde"
         return {"data": data_result, "hora": hora_result, "periodo": periodo_result}
+
+    # Python primeiro para dias da semana — mais confiável que IA
+    txt_lower_check = texto.lower()
+    dias_semana_check = {"segunda", "terca", "terça", "quarta", "quinta", "sexta"}
+    tem_dia_semana = any(d in txt_lower_check for d in dias_semana_check)
+    resultado_python = _fallback_parse(texto)
+    if tem_dia_semana and resultado_python.get("data"):
+        print(f"[EXTRAIR-DATA] Python (dia semana): {resultado_python}", file=sys.stderr)
+        return resultado_python
 
     try:
         import json as _json
