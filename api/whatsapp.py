@@ -620,37 +620,72 @@ def _buscar_servico_atual_feegow(paciente_id):
     return None
 
 def extrair_preferencia_data(texto):
-    """Usa gpt-4o-mini base para extrair data/hora em formato ISO — sem parsing frágil."""
+    """Usa gpt-4o-mini para extrair data/hora. Fallback Python para dias da semana."""
+    import sys
+    hoje = datetime.now()
+    dias_map = {0: "segunda", 1: "terça", 2: "quarta", 3: "quinta", 4: "sexta", 5: "sábado", 6: "domingo"}
+    hoje_nome = dias_map.get(hoje.weekday(), "")
+
+    # Fallback Python — extrai dia da semana e hora do texto sem IA
+    def _fallback_parse(txt):
+        txt_lower = txt.lower()
+        dias_semana = {"segunda": 0, "terca": 1, "terça": 1, "quarta": 2, "quinta": 3, "sexta": 4}
+        data_result = None
+        hora_result = None
+        periodo_result = None
+        for nome, wd in dias_semana.items():
+            if nome in txt_lower:
+                for i in range(1, 8):
+                    cand = hoje + timedelta(days=i)
+                    if cand.weekday() == wd:
+                        data_result = cand.strftime('%Y-%m-%d')
+                        break
+        import re as _re
+        hora_match = _re.search(r'(\d{1,2})[:h](\d{2})?', txt_lower)
+        if hora_match:
+            h = int(hora_match.group(1))
+            m = int(hora_match.group(2)) if hora_match.group(2) else 0
+            hora_result = f"{h:02d}:{m:02d}"
+        if "manhã" in txt_lower or "manha" in txt_lower: periodo_result = "manha"
+        elif "tarde" in txt_lower: periodo_result = "tarde"
+        return {"data": data_result, "hora": hora_result, "periodo": periodo_result}
+
     try:
         import json as _json
-        hoje = datetime.now()
-        dias_map = {0: "segunda", 1: "terça", 2: "quarta", 3: "quinta", 4: "sexta", 5: "sábado", 6: "domingo"}
-        hoje_nome = dias_map.get(hoje.weekday(), "")
         prompt = (
-            f"Atue como extrator de datas. Um paciente de clínica de fisioterapia disse:\n"
-            f"\"{texto}\"\n\n"
-            f"Hoje é {hoje.strftime('%d/%m/%Y')} ({hoje_nome}). Atendemos de segunda a sexta.\n\n"
-            f"Extraia data e hora preferidas. Se relativo ('próxima quinta'), calcule a data real. "
-            f"Se só dia/mês sem ano, assuma {hoje.year}. "
-            f"Responda APENAS em JSON sem texto extra:\n"
-            f'{{"data": "YYYY-MM-DD ou null", "hora": "HH:MM ou null", "periodo": "manha/tarde ou null"}}'
+            f"Atue como um analista de dados. Analise o texto abaixo e extraia todas as informações de data e hora. "
+            f"Converta-as para o formato ISO 8601 (YYYY-MM-DD ou YYYY-MM-DDTHH:MM:SS). "
+            f"Se a hora não for mencionada, assuma 00:00:00. "
+            f"Se a data for relativa (ex: 'próxima sexta'), converta para a data real baseada em hoje {hoje.strftime('%d/%m/%Y')} ({hoje_nome}).\n\n"
+            f"Texto: \"{texto}\"\n\n"
+            f"Retorne APENAS um JSON válido sem texto extra:\n"
+            f"{{\"data\": \"YYYY-MM-DD\", \"hora\": \"HH:MM\"}}"
         )
         url_oai = "https://api.openai.com/v1/chat/completions"
         headers_oai = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-        payload_oai = {
-            "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 60, "temperature": 0
-        }
+        payload_oai = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "max_tokens": 60, "temperature": 0}
         res_oai = requests.post(url_oai, json=payload_oai, headers=headers_oai, timeout=10)
-        resp_text = res_oai.json().get("choices", [{}])[0].get("message", {}).get("content", "{}").strip()
-        import sys
+        resp_text = res_oai.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         print(f"[EXTRAIR-DATA] '{texto[:40]}' → {resp_text}", file=sys.stderr)
-        return _json.loads(resp_text)
+        # Remove possíveis backticks
+        resp_text = resp_text.replace("```json", "").replace("```", "").strip()
+        result = _json.loads(resp_text)
+        # Normaliza: extrai só data (YYYY-MM-DD) se vier com hora junto (YYYY-MM-DDTHH:MM:SS)
+        if result.get("data") and "T" in str(result["data"]):
+            partes = result["data"].split("T")
+            result["data"] = partes[0]
+            if not result.get("hora") and len(partes) > 1:
+                result["hora"] = partes[1][:5]
+        if not result.get("periodo"):
+            result["periodo"] = None
+        # Se IA falhou em extrair, usa fallback Python
+        if not result.get("data") and not result.get("hora"):
+            result = _fallback_parse(texto)
+            print(f"[EXTRAIR-DATA] Fallback Python: {result}", file=sys.stderr)
+        return result
     except Exception as e:
-        import sys
-        print(f"[EXTRAIR-DATA] Erro: {e}", file=sys.stderr)
-        return {"data": None, "hora": None, "periodo": None}
+        print(f"[EXTRAIR-DATA] Erro: {e} — usando fallback Python", file=sys.stderr)
+        return _fallback_parse(texto)
 
 def cancelar_agendamento_feegow(agendamento_id, obs="Desmarcado pelo paciente via robô."):
     """Cancela agendamento no Feegow — StatusID=11 (Desmarcado pelo paciente)."""
