@@ -484,15 +484,17 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # ✅ confirmado
-    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # ✅ confirmado
-    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado
-    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # ✅ confirmado
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # ✅ confirmado log
+    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # ✅ confirmado log 15/05 (agendamento_id=42031)
+    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado log 15/05 (unidade_id=1)
+    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado log anterior
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # ✅ confirmado log anterior
 }
 
 _LOCAL_ID_SLOTS = {
     2: [2],   # Fisioterapia SCS
-    5: [5],   # Acupuntura SCS
+    3: [3],   # Acupuntura SCS
+    5: [5],   # Fisioterapia Ipiranga
     6: [6],   # Fisioterapia Ipiranga
     8: [6],   # Acupuntura Ipiranga → API retorna slots sob local_id=6
 }
