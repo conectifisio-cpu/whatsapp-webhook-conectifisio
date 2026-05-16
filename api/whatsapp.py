@@ -484,19 +484,23 @@ def buscar_feegow_por_cpf(cpf):
 # Mapa de equipamentos Feegow → unidade e serviço
 # local_id confirmado via URL ?P=Equipamentos&I=X no Feegow
 _LOCAL_ID_MAP = {
-    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # ✅ confirmado log
-    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # ✅ confirmado log 15/05 (agendamento_id=42031)
-    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado log 15/05 (unidade_id=1)
-    6: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # ✅ confirmado log anterior
-    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # ✅ confirmado log anterior
+    # Confirmado via agendamentos reais em 16/05/2026 (paciente_id=2256)
+    # 42440 local_id=2 Cinesioterapia SCS
+    # 42439 local_id=3 Acupuntura SCS
+    # 42441 local_id=5 Cinesioterapia Ipiranga
+    # 42442 local_id=8 Acupuntura Ipiranga
+    2: {"unidade": "São Caetano", "servico": "Fisioterapia"},  # Cinesioterapia SCS
+    3: {"unidade": "São Caetano", "servico": "Acupuntura"},    # Acupuntura SCS
+    5: {"unidade": "Ipiranga",    "servico": "Fisioterapia"},  # Cinesioterapia Ipiranga
+    8: {"unidade": "Ipiranga",    "servico": "Acupuntura"},    # Acupuntura Ipiranga
 }
 
 _LOCAL_ID_SLOTS = {
-    2: [2],   # Fisioterapia SCS
-    3: [4],   # Acupuntura SCS → API retorna slots sob local_id=4 ✅ confirmado log 16/05
-    5: [4],   # Fisioterapia Ipiranga → API retorna slots sob local_id=4 ✅ confirmado log 16/05
-    6: [4],   # Fisioterapia Ipiranga → API retorna slots sob local_id=4
-    8: [6],   # Acupuntura Ipiranga → API retorna slots sob local_id=6
+    # local_id=4 agenda Fisioterapia, local_id=6 agenda Acupuntura
+    2: [4],   # Fisioterapia SCS
+    3: [6],   # Acupuntura SCS
+    5: [4],   # Fisioterapia Ipiranga
+    8: [6],   # Acupuntura Ipiranga
 }
 
 _PROC_ID_SERVICO = {
