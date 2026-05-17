@@ -503,6 +503,25 @@ _LOCAL_ID_SLOTS = {
     8: [6],   # Acupuntura Ipiranga
 }
 
+# Mapa local_id → unidade_id Feegow (confirmado via agendamentos 16/05/2026)
+# SCS = unidade principal = unidade_id=0
+# SP (Ipiranga) = unidade_id=1
+_LOCAL_ID_UNIDADE = {
+    2: 0,  # Cinesioterapia SCS
+    3: 0,  # Acupuntura SCS
+    5: 1,  # Cinesioterapia SP
+    8: 1,  # Acupuntura SP
+}
+
+# Mapa local_id equipamento → local_id agenda retornado pela API
+# Confirmado via testes 17/05/2026
+_LOCAL_ID_AGENDA = {
+    2: 4,  # Fisioterapia SCS  → agenda local_id=4
+    3: 4,  # Acupuntura SCS    → agenda local_id=4
+    5: 6,  # Fisioterapia SP   → agenda local_id=6
+    8: 6,  # Acupuntura SP     → agenda local_id=6
+}
+
 _PROC_ID_SERVICO = {
     21: "Acupuntura", 39: "Avaliação", 42: "Fisioterapia",
     9: "Avaliação", 32: "Avaliação",
@@ -799,18 +818,12 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
     data_ini_fmt = _fmt(data_inicio_iso)
     data_fim_fmt = _fmt(data_fim_iso)
 
-    # especialidade_id confirmado via painel Feegow: I=192 Fisio, I=137 Acupuntura
-    _PROC_TO_ESP = {42: 192, 9: 192, 11: 192, 12: 192, 30: 192, 21: 137}
-    especialidade_id = _PROC_TO_ESP.get(procedimento_id, 192)
-
-    # tipo=E com especialidade_id — único que funciona (tipo=L tem bug, tipo=E sem esp → 422)
+    # Usar tipo=P + procedimento_id + unidade_id — filtra por unidade sem misturar agendas
+    unidade_id = _LOCAL_ID_UNIDADE.get(local_id, 0)
+    local_id_agenda = _LOCAL_ID_AGENDA.get(local_id)  # local_id que a API retorna nos slots
     tentativas = [
-        {"tipo": "E", "local_id": local_id, "especialidade_id": especialidade_id, "data_start": data_ini_fmt, "data_end": data_fim_fmt},
-        {"tipo": "E", "local_id": local_id, "especialidade_id": 192, "data_start": data_ini_fmt, "data_end": data_fim_fmt},  # fallback fisio
+        {"tipo": "P", "procedimento_id": procedimento_id, "unidade_id": unidade_id, "data_start": data_ini_fmt, "data_end": data_fim_fmt},
     ]
-    if procedimento_id:
-        for t in tentativas:
-            t["procedimento_id"] = procedimento_id
 
     for params in tentativas:
         print(f"[FEEGOW-DISP] GET params={params}", file=sys.stderr)
@@ -821,6 +834,11 @@ def consultar_disponibilidade_feegow(local_id, procedimento_id, data_inicio_iso,
                 dados = res.json()
                 if dados.get("success") != False and dados.get("content"):
                     slots = _extrair_slots(dados)
+                    # Filtra pelo local_id correto da agenda para eliminar slots fantasmas
+                    if local_id_agenda and any(s.get("local_id") for s in slots):
+                        antes = len(slots)
+                        slots = [s for s in slots if s.get("local_id") == local_id_agenda]
+                        print(f"[FEEGOW-DISP] Filtro local_id={local_id_agenda}: {antes} → {len(slots)} slots", file=sys.stderr)
                     if slots:
                         print(f"[FEEGOW-DISP] {len(slots)} horário(s) encontrado(s)", file=sys.stderr)
                         return slots
@@ -2718,11 +2736,8 @@ def webhook():
             data_ini_str = data_ini.strftime('%Y-%m-%d')
             slots_all = [s for s in slots_all if s.get("data","") >= data_ini_str]
 
-            # Regra: mesmo equipamento → filtra slots pelo local_id mapeado
-            local_ids_validos = _LOCAL_ID_SLOTS.get(local_id, [local_id])
-            if any(s.get("local_id") for s in slots_all):
-                slots_all = [s for s in slots_all if s.get("local_id") in local_ids_validos]
-            print(f"[REAGEND-SLOTS] {len(slots_all)} slots após filtro local_id={local_ids_validos}", file=sys.stderr)
+            # Filtro por unidade_id já feito na consulta — não precisa filtrar aqui
+            print(f"[REAGEND-SLOTS] {len(slots_all)} slots unidade_id={_LOCAL_ID_UNIDADE.get(local_id, 0)}", file=sys.stderr)
 
             # Filtra conflitos com agenda existente
             slots_ok = [s for s in slots_all if not _tem_conflito(s.get("data",""), s.get("hora",""), agendamentos_serie)]
