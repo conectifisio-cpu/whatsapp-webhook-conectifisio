@@ -240,7 +240,7 @@ def _busca_por_ia(mensagem, faq_data):
             {"role": "user", "content": prompt[:3000]}
         ],
         "max_tokens": 800,
-        "temperature": 0.2
+        "temperature": 0.0
     }
 
     try:
@@ -1379,7 +1379,7 @@ def chamar_ia_custom(query):
             {"role": "user", "content": query[:300]}
         ],
         "max_tokens": 80,
-        "temperature": 0.5
+        "temperature": 0.1
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=15)
