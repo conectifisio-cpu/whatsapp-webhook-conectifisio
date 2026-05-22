@@ -233,8 +233,9 @@ def _busca_por_ia(mensagem, faq_data):
         "Authorization": "Bearer " + OPENAI_API_KEY,
         "Content-Type": "application/json"
     }
+    
     payload = {
-        OPENAI_FAQ_MODEL = os.environ.get("OPENAI_FAQ_MODEL", OPENAI_MODEL) # Modelo FAQ ativo (usando o v7 treinado)
+        "model": OPENAI_FAQ_MODEL,
         "messages": [
             {"role": "system", "content": "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural. Se a mensagem nao for uma duvida sobre a clinica (saudacao, agradecimento ou assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
             {"role": "user", "content": prompt[:3000]}
