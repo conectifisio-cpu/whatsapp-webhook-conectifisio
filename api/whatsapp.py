@@ -1907,7 +1907,7 @@ def webhook():
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
-        if request.args.get("action") == "send_reagendamento_confirmado":
+        if request.args.get("action") == "send__confirmado":
             try:
                 phone_r = request.args.get("phone","")
                 nome_r  = request.args.get("nome","paciente")
@@ -1915,7 +1915,7 @@ def webhook():
                 if not phone_r: return jsonify({"error":"phone obrigatório"}), 400
                 msg_rea = (
                     f"Olá, {nome_r}! ✅\n\n"
-                    f"Seu reagendamento foi *confirmado*!\n"
+                    f"Seu  foi *confirmado*!\n"
                     + (f"📅 Novo horário: *{slot_r}*\n\n" if slot_r else "\n")
                     + "Se precisar de algo, é só chamar. Até breve! 😊"
                 )
@@ -2304,7 +2304,7 @@ def webhook():
              
         if msg_recebida == "Sim, continuar":
              # Reapresenta o menu adequado para o status atual
-             if status in ["menu_veterano", "gestao_agenda", "reagendando_preferencia", "escolhendo_horario_reagendamento", "cancelando_sessao"]:
+             if status in ["menu_veterano", "gestao_agenda", "reagendando_preferencia", "escolhendo_horario_", "cancelando_sessao"]:
                  nome_s = info.get("title", "Paciente").split()[0]
                  secoes_vet = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                  update_paciente(phone, {"status": "menu_veterano"})
@@ -2472,7 +2472,7 @@ def webhook():
                 resultado_raw = consultar_agenda_feegow(info.get("feegow_id"), retornar_raw=True) if info.get("feegow_id") else None
                 sessoes_labels = resultado_raw["sessoes"] if resultado_raw else []
                 agendamentos_raw = resultado_raw["agendamentos"] if resultado_raw else []
-                # Salva dados do primeiro agendamento para uso no reagendamento
+                # Salva dados do primeiro agendamento para uso no 
                 local_id_ag = agendamentos_raw[0]["local_id"] if agendamentos_raw else None
                 proc_id_ag = agendamentos_raw[0]["procedimento_id"] if agendamentos_raw else None
                 # Atualiza unidade com base no agendamento real (não na seleção do menu)
@@ -2572,7 +2572,7 @@ def webhook():
                     if tem_mais:
                         rows.append({"id": "rag_mais", "title": "📅 Ver mais sessões"})
                     rows.append({"id": "rag_voltar", "title": "⬅️ Voltar"})
-                    update_paciente(phone, {"status": "escolhendo_sessao_reagendamento", "agenda_agendamentos": agendamentos_raw})
+                    update_paciente(phone, {"status": "escolhendo_sessao_", "agenda_agendamentos": agendamentos_raw})
                     lista_txt = "\n".join([f"• 🗓️ *{ag['data_br']} às {ag['hora']}* - {ag['servico']}" for ag in sessoes_exibir])
                     enviar_lista(phone, f"Qual sessão deseja reagendar?\n\n{lista_txt}", "Selecionar", [{"title": "Sessões", "rows": rows}])
                 return jsonify({"status": "reagendar_iniciado"}), 200
@@ -2612,7 +2612,7 @@ def webhook():
             else:
                 enviar_lista(phone, "Por favor, escolha uma das opções:", "Ver Opções", _secoes_ga)
 
-        elif status == "escolhendo_sessao_reagendamento":
+        elif status == "escolhendo_sessao_":
             agendamentos_raw = info.get("agenda_agendamentos", [])
             if msg_recebida in ["rag_voltar", "ag_voltar", "⬅️ Voltar"]:
                 update_paciente(phone, {"status": "gestao_agenda"})
@@ -2620,7 +2620,7 @@ def webhook():
                 enviar_lista(phone, "Voltando ao menu de gestão:", "Ver Opções", _secoes_ga2)
             elif msg_recebida == "rag_mais":
                 nome_rm = info.get("title", "Paciente").split()[0]
-                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[REAGENDAMENTO]: paciente quer reagendar sessões além das próximas."})
+                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[]: paciente quer reagendar sessões além das próximas."})
                 responder_texto(phone, f"Claro, {nome_rm}! Vou conectar você com nossa recepção para organizar as demais sessões. 💙")
             else:
                 # Tenta casar por ID (rag_N ou ag_N) ou por título
@@ -2702,7 +2702,7 @@ def webhook():
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_gav = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}, {"id": "ga_voltar", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Voltando às opções:", "Ver Opções", _secoes_gav)
-                return jsonify({"status": "reagendamento_cancelado"}), 200
+                return jsonify({"status": "_cancelado"}), 200
             # Usa IA para extrair preferência de data do texto livre
             pref = extrair_preferencia_data(msg_recebida)
             print(f"[REAGEND-PREF] Extraído: {pref}", file=sys.stderr)
@@ -2746,7 +2746,7 @@ def webhook():
                     except: continue
                 return False
 
-            update_paciente(phone, {"status": "escolhendo_horario_reagendamento", "reagendamento_hora_preferida": hora_preferida})
+            update_paciente(phone, {"status": "escolhendo_horario_", "_hora_preferida": hora_preferida})
             responder_texto(phone, "Buscando horários disponíveis... ⏳")
             slots_all = consultar_disponibilidade_feegow(local_id, proc_id, data_ini.strftime('%Y-%m-%d'), data_fim.strftime('%Y-%m-%d'))
 
