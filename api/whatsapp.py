@@ -271,6 +271,11 @@ def consultar_faq(mensagem):
     # O Firestore tem respostas antigas incompatíveis com o fluxo atual
     match_ia = _busca_por_ia(mensagem, [])  # passa lista vazia — modelo responde pelo treinamento
     if match_ia:
+        # Bloqueia respostas que contenham valores monetários — modelo alucina preços
+        import re as _re_faq
+        if _re_faq.search(r'R\$\s*[\d.,]+', match_ia):
+            print(f"[FAQ-IA] BLOQUEADO: resposta contém valor monetário: {match_ia[:80]}", file=sys.stderr)
+            return None
         print("[FAQ-IA] Respondendo via modelo v5", file=sys.stderr)
     return match_ia
 
@@ -2070,6 +2075,9 @@ def webhook():
             any(msg_limpa.startswith(w) for w in _cortesias_early) or
             any(char in msg_limpa for char in _emojis_early)
         )
+
+        # Definição antecipada — usado pelo FAQ e pelo fluxo principal
+        is_veteran = True if info.get("feegow_id") else False
 
         palavras_insta = ["interesse", "informações", "informacoes", "pilates"]
         eh_lead_instagram = (
