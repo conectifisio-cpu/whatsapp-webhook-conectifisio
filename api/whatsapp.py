@@ -39,8 +39,8 @@ WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini-2024-07-18:conectifisio:conectifisio-v7:DahD76G7")
-OPENAI_FAQ_MODEL = os.environ.get("OPENAI_FAQ_MODEL", OPENAI_MODEL) # Modelo FAQ ativo (usando o v7 treinado)
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini-2024-07-18:conectifisio:conectifisio-v8:DiX7KzHF")
+OPENAI_FAQ_MODEL = os.environ.get("OPENAI_FAQ_MODEL", OPENAI_MODEL) # Modelo FAQ v8 — system prompt unificado
 FEEGOW_TOKEN = os.environ.get("FEEGOW_TOKEN", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "conectifisio_webhook_2026")
 PORTO_SEGURO_CPF = os.environ.get("PORTO_SEGURO_CPF", "25052258852")
@@ -180,65 +180,39 @@ def _busca_por_keywords(msg_limpa, faq_data):
     return None
 
 def _busca_por_ia(mensagem, faq_data):
-    """Usa o modelo treinado OpenAI para responder duvidas da clinica.
-    Funciona com ou sem FAQ no Firestore:
-    - COM FAQ: fornece as respostas como contexto para o modelo
-    - SEM FAQ: o modelo responde com o conhecimento do treinamento direto"""
+    """Usa o modelo fine-tuned v8 para responder dúvidas da clínica.
+    System prompt IDÊNTICO ao usado no treinamento v8 — obrigatório para evitar alucinações."""
     import sys
     if not OPENAI_API_KEY or len(mensagem.strip()) < 5:
         if not OPENAI_API_KEY:
             print("[FAQ-IA] OPENAI_API_KEY ausente", file=sys.stderr)
         return None
 
-    # Monta contexto do FAQ se houver conteudo no Firestore
-    linhas_faq = []
-    for cat in (faq_data or []):
-        for pq in cat.get("perguntas_frequentes", []):
-            pergunta = pq.get("pergunta", "")
-            resposta = pq.get("resposta_ideal", "")
-            variacoes = ", ".join(pq.get("variacoes", []))
-            if pergunta and resposta:
-                entrada = "PERGUNTA: " + pergunta + chr(10) + "VARIACOES: " + variacoes + chr(10) + "RESPOSTA: " + resposta
-                linhas_faq.append(entrada)
-
-    # Prompt adaptado: com ou sem FAQ no Firestore
-    if linhas_faq:
-        faq_formatado = (chr(10) + chr(10) + "---" + chr(10) + chr(10)).join(linhas_faq)
-        linhas_prompt = [
-            "Voce e o assistente virtual da clinica Conectifisio (fisioterapia, Sao Paulo).",
-            "",
-            "Um paciente enviou esta mensagem:",
-            '"' + mensagem + '"',
-            "",
-            "Abaixo estao as duvidas frequentes da clinica com as respostas corretas:",
-            "",
-            faq_formatado,
-            "",
-            "INSTRUCAO: Analise se a mensagem e uma duvida respondida pelo FAQ acima.",
-            "- Se SIM: responda SOMENTE com o texto exato da RESPOSTA correspondente.",
-            "- Se NAO: responda SOMENTE com a palavra NENHUMA.",
-            "",
-            "Resposta:"
-        ]
-    else:
-        # Sem FAQ no Firestore — modelo responde com conhecimento do treinamento
-        linhas_prompt = [
-            mensagem
-        ]
-
-    prompt = chr(10).join(linhas_prompt)
+    # System prompt v8 — IDÊNTICO ao treinamento (não alterar!)
+    system_prompt_v8 = (
+        "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates "
+        "com unidades em São Caetano do Sul e Ipiranga (São Paulo). "
+        "Seu tom é profissional, acolhedor e eficiente.\n\n"
+        "REGRAS OBRIGATÓRIAS:\n"
+        "1. NUNCA invente preços, valores ou tabelas. Para qualquer pergunta sobre preço, responda que vai encaminhar para a recepção.\n"
+        "2. NUNCA confirme cobertura de convênios que NÃO são atendidos. Convênios ACEITOS: Amil, Bradesco Saúde, Porto Seguro Saúde, Prevent Senior, Saúde Caixa, Saúde Petrobras, Mediservice, Cassi e Geap Saúde. Qualquer outro convênio NÃO é atendido.\n"
+        "3. Para Pilates: Saúde Caixa, Wellhub (plano Golden) e TotalPass (plano TP5). Nunca fale preço de Pilates no primeiro contato.\n"
+        "4. Não atendemos menores de 12 anos (sem especialidade pediátrica).\n"
+        "5. Não realizamos consultas médicas (somos clínica de fisioterapia e Pilates).\n"
+        "6. Se a mensagem não for uma dúvida sobre a clínica (saudação, agradecimento, assunto fora do escopo), responda SOMENTE com a palavra NENHUMA.\n"
+        "7. Responda de forma natural e direta. Use emojis com moderação."
+    )
 
     url = "https://api.openai.com/v1/chat/completions"
     headers_oai = {
         "Authorization": "Bearer " + OPENAI_API_KEY,
         "Content-Type": "application/json"
     }
-    
     payload = {
         "model": OPENAI_FAQ_MODEL,
         "messages": [
-            {"role": "system", "content": "Você é o assistente virtual da ConectiFisio, uma clínica de fisioterapia e pilates com unidades em São Caetano e Ipiranga. Seu tom é profissional, acolhedor e eficiente. Use as informações do manual para responder dúvidas de pacientes de forma natural. Se a mensagem nao for uma duvida sobre a clinica (saudacao, agradecimento ou assunto fora do escopo), responda SOMENTE com a palavra NENHUMA."},
-            {"role": "user", "content": prompt[:3000]}
+            {"role": "system", "content": system_prompt_v8},
+            {"role": "user", "content": mensagem[:3000]}
         ],
         "max_tokens": 800,
         "temperature": 0.0
@@ -248,7 +222,7 @@ def _busca_por_ia(mensagem, faq_data):
         res = requests.post(url, json=payload, headers=headers_oai, timeout=15)
         if res.status_code == 200:
             resposta_ia = res.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-            print("[FAQ-IA] OpenAI: " + resposta_ia[:80], file=sys.stderr)
+            print("[FAQ-IA] OpenAI v8: " + resposta_ia[:80], file=sys.stderr)
             # Rejeita respostas truncadas (menos de 15 chars ou sem pontuação final)
             if resposta_ia and resposta_ia.upper() != "NENHUMA" and len(resposta_ia) > 15:
                 return resposta_ia
@@ -260,24 +234,34 @@ def _busca_por_ia(mensagem, faq_data):
     return None
 
 def consultar_faq(mensagem):
-    """FAQ com IA — dois estágios:
-    1. Busca por palavras-chave no Firestore (se tiver conteúdo)
-    2. OpenAI ft:gpt-4o-mini:conectifisio-v1 sempre como fallback
-    O OpenAI funciona mesmo com Firestore vazio — usa o conhecimento do treinamento."""
+    """FAQ com modelo fine-tuned v8.
+    Sem Firestore, sem Gemini — apenas o modelo treinado com system prompt unificado.
+    Filtros de segurança bloqueiam alucinações residuais."""
     import sys
     msg_limpa = mensagem.lower().strip()
-    faq_data = _carregar_faq()
 
-    # Estágio único: modelo fine-tuned v5 — ignora keywords do Firestore
-    # O Firestore tem respostas antigas incompatíveis com o fluxo atual
-    match_ia = _busca_por_ia(mensagem, [])  # passa lista vazia — modelo responde pelo treinamento
+    # Modelo fine-tuned v8 — responde pelo treinamento com system prompt unificado
+    match_ia = _busca_por_ia(mensagem, [])
     if match_ia:
-        # Bloqueia respostas que contenham valores monetários — modelo alucina preços
         import re as _re_faq
+
+        # FILTRO 1: Bloqueia respostas que contenham valores monetários inventados
         if _re_faq.search(r'R\$\s*[\d.,]+', match_ia):
-            print(f"[FAQ-IA] BLOQUEADO: resposta contém valor monetário: {match_ia[:80]}", file=sys.stderr)
+            print(f"[FAQ-FILTRO] BLOQUEADO R$: {match_ia[:80]}", file=sys.stderr)
             return None
-        print("[FAQ-IA] Respondendo via modelo v5", file=sys.stderr)
+
+        # FILTRO 2: Bloqueia se afirmar que atende convênio não aceito
+        _CONV_NAO_ATENDIDOS = ["notredame", "notre dame", "unimed", "sulamerica", "sulamérica", "hapvida", "golden cross"]
+        resp_lower = match_ia.lower()
+        for conv in _CONV_NAO_ATENDIDOS:
+            if conv in resp_lower:
+                # Se mencionou o convênio MAS sem negar → alucinação
+                tem_negacao = any(neg in resp_lower for neg in ["não", "nao", "infelizmente", "não somos", "não atendemos", "não trabalhamos"])
+                if not tem_negacao:
+                    print(f"[FAQ-FILTRO] BLOQUEADO convênio não atendido afirmado: {match_ia[:80]}", file=sys.stderr)
+                    return None
+
+        print("[FAQ-IA] Respondendo via modelo v8", file=sys.stderr)
     return match_ia
 
 def update_paciente(phone, data):
@@ -1356,9 +1340,10 @@ def chamar_ia_custom(query):
     Chama o modelo BASE gpt-4o-mini para acolhimento empático de queixas.
     IMPORTANTE: NÃO usar o modelo fine-tuned aqui —
     ele foi treinado para FAQ e gera respostas inadequadas para acolhimento.
+    Gemini removido — se OpenAI falhar, retorna None (fallback estático no código).
     """
     if not OPENAI_API_KEY:
-        return chamar_gemini(query)
+        return None
 
     system_prompt = (
         "Você é o assistente virtual da ConectiFisio, clínica de fisioterapia em São Paulo. "
@@ -1380,7 +1365,7 @@ def chamar_ia_custom(query):
             {"role": "user", "content": query[:300]}
         ],
         "max_tokens": 80,
-        "temperature": 0.1
+        "temperature": 0.3
     }
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=15)
@@ -1392,17 +1377,6 @@ def chamar_ia_custom(query):
     except Exception as e:
         import sys
         print(f"[ACOLHIMENTO] Erro OpenAI: {e}", file=sys.stderr)
-    return chamar_gemini(query)
-
-def chamar_gemini(query):
-    if not API_KEY: return None
-    system_prompt = "Atue como o Assistente Virtual da clínica Conectifisio. Seu tom de voz deve ser brasileiro (PT-BR), acolhedor e focado na experiência do paciente. O paciente enviará a sua queixa clínica a seguir. Responda com UMA única frase empática se solidarizando com a dor dele."
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={API_KEY}"
-    payload = {"contents": [{"parts": [{"text": query[:300]}]}], "systemInstruction": {"parts": [{"text": system_prompt}]}}
-    try:
-        res = requests.post(url, json=payload, timeout=10)
-        if res.status_code == 200: return res.json().get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-    except: pass
     return None
 
 def enviar_whatsapp(to, payload_msg, numero_id=None):
@@ -1908,7 +1882,7 @@ def webhook():
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
-        if request.args.get("action") == "send__confirmado":
+        if request.args.get("action") == "send_reagendamento_confirmado":
             try:
                 phone_r = request.args.get("phone","")
                 nome_r  = request.args.get("nome","paciente")
@@ -1916,7 +1890,7 @@ def webhook():
                 if not phone_r: return jsonify({"error":"phone obrigatório"}), 400
                 msg_rea = (
                     f"Olá, {nome_r}! ✅\n\n"
-                    f"Seu  foi *confirmado*!\n"
+                    f"Seu reagendamento foi *confirmado*!\n"
                     + (f"📅 Novo horário: *{slot_r}*\n\n" if slot_r else "\n")
                     + "Se precisar de algo, é só chamar. Até breve! 😊"
                 )
@@ -2305,7 +2279,7 @@ def webhook():
              
         if msg_recebida == "Sim, continuar":
              # Reapresenta o menu adequado para o status atual
-             if status in ["menu_veterano", "gestao_agenda", "reagendando_preferencia", "escolhendo_horario_", "cancelando_sessao"]:
+             if status in ["menu_veterano", "gestao_agenda", "reagendando_preferencia", "escolhendo_horario_reagendamento", "cancelando_sessao"]:
                  nome_s = info.get("title", "Paciente").split()[0]
                  secoes_vet = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                  update_paciente(phone, {"status": "menu_veterano"})
@@ -2473,7 +2447,7 @@ def webhook():
                 resultado_raw = consultar_agenda_feegow(info.get("feegow_id"), retornar_raw=True) if info.get("feegow_id") else None
                 sessoes_labels = resultado_raw["sessoes"] if resultado_raw else []
                 agendamentos_raw = resultado_raw["agendamentos"] if resultado_raw else []
-                # Salva dados do primeiro agendamento para uso no 
+                # Salva dados do primeiro agendamento para uso no reagendamento
                 local_id_ag = agendamentos_raw[0]["local_id"] if agendamentos_raw else None
                 proc_id_ag = agendamentos_raw[0]["procedimento_id"] if agendamentos_raw else None
                 # Atualiza unidade com base no agendamento real (não na seleção do menu)
@@ -2573,7 +2547,7 @@ def webhook():
                     if tem_mais:
                         rows.append({"id": "rag_mais", "title": "📅 Ver mais sessões"})
                     rows.append({"id": "rag_voltar", "title": "⬅️ Voltar"})
-                    update_paciente(phone, {"status": "escolhendo_sessao_", "agenda_agendamentos": agendamentos_raw})
+                    update_paciente(phone, {"status": "escolhendo_sessao_reagendamento", "agenda_agendamentos": agendamentos_raw})
                     lista_txt = "\n".join([f"• 🗓️ *{ag['data_br']} às {ag['hora']}* - {ag['servico']}" for ag in sessoes_exibir])
                     enviar_lista(phone, f"Qual sessão deseja reagendar?\n\n{lista_txt}", "Selecionar", [{"title": "Sessões", "rows": rows}])
                 return jsonify({"status": "reagendar_iniciado"}), 200
@@ -2613,7 +2587,7 @@ def webhook():
             else:
                 enviar_lista(phone, "Por favor, escolha uma das opções:", "Ver Opções", _secoes_ga)
 
-        elif status == "escolhendo_sessao_":
+        elif status == "escolhendo_sessao_reagendamento":
             agendamentos_raw = info.get("agenda_agendamentos", [])
             if msg_recebida in ["rag_voltar", "ag_voltar", "⬅️ Voltar"]:
                 update_paciente(phone, {"status": "gestao_agenda"})
@@ -2621,7 +2595,7 @@ def webhook():
                 enviar_lista(phone, "Voltando ao menu de gestão:", "Ver Opções", _secoes_ga2)
             elif msg_recebida == "rag_mais":
                 nome_rm = info.get("title", "Paciente").split()[0]
-                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[]: paciente quer reagendar sessões além das próximas."})
+                update_paciente(phone, {"status": "atendimento_humano", "unread": True, "queixa": "[REAGENDAMENTO]: paciente quer reagendar sessões além das próximas."})
                 responder_texto(phone, f"Claro, {nome_rm}! Vou conectar você com nossa recepção para organizar as demais sessões. 💙")
             else:
                 # Tenta casar por ID (rag_N ou ag_N) ou por título
@@ -2703,7 +2677,7 @@ def webhook():
                 update_paciente(phone, {"status": "gestao_agenda"})
                 _secoes_gav = [{"title": "O que deseja fazer?", "rows": [{"id": "ga_consultar", "title": "📋 Ver minha agenda"}, {"id": "ga_confirmar", "title": "✅ Confirmar presença"}, {"id": "ga_reagendar", "title": "🔄 Reagendar sessão"}, {"id": "ga_cancelar", "title": "❌ Cancelar sessão"}, {"id": "ga_voltar", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Voltando às opções:", "Ver Opções", _secoes_gav)
-                return jsonify({"status": "_cancelado"}), 200
+                return jsonify({"status": "reagendamento_cancelado"}), 200
             # Usa IA para extrair preferência de data do texto livre
             pref = extrair_preferencia_data(msg_recebida)
             print(f"[REAGEND-PREF] Extraído: {pref}", file=sys.stderr)
@@ -2747,7 +2721,7 @@ def webhook():
                     except: continue
                 return False
 
-            update_paciente(phone, {"status": "escolhendo_horario_", "_hora_preferida": hora_preferida})
+            update_paciente(phone, {"status": "escolhendo_horario_reagendamento", "reagendamento_hora_preferida": hora_preferida})
             responder_texto(phone, "Buscando horários disponíveis... ⏳")
             slots_all = consultar_disponibilidade_feegow(local_id, proc_id, data_ini.strftime('%Y-%m-%d'), data_fim.strftime('%Y-%m-%d'))
 
