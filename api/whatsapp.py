@@ -37,7 +37,6 @@ def serve_dashboard():
 # ==========================================
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.environ.get("PHONE_NUMBER_ID")
-API_KEY = os.environ.get("GEMINI_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "ft:gpt-4o-mini-2024-07-18:conectifisio:conectifisio-v8:DiX7KzHF")
 OPENAI_FAQ_MODEL = os.environ.get("OPENAI_FAQ_MODEL", OPENAI_MODEL) # Modelo FAQ v8 — system prompt unificado
@@ -142,7 +141,7 @@ def get_paciente(phone):
     return doc.to_dict() if doc.exists else {}
 
 # ==========================================
-# FAQ COM IA — Cache + Gemini semântico
+# FAQ COM IA — Modelo fine-tuned v8 (OpenAI)
 # ==========================================
 _faq_cache = {"data": None, "ts": 0}
 _FAQ_CACHE_TTL = 300  # 5 minutos — evita leituras repetidas do Firestore
@@ -235,10 +234,43 @@ def _busca_por_ia(mensagem, faq_data):
 
 def consultar_faq(mensagem):
     """FAQ com modelo fine-tuned v8.
-    Sem Firestore, sem Gemini — apenas o modelo treinado com system prompt unificado.
-    Filtros de segurança bloqueiam alucinações residuais."""
+    Apenas o modelo treinado com system prompt unificado.
+    Filtros de segurança bloqueiam alucinações residuais.
+
+    Retorna tupla (resposta, motivo_filtro):
+    - (texto, None): resposta normal do FAQ
+    - (None, "massagem"): redirecionar para Liberação Miofascial
+    - (None, "servico_nao_atendido:<nome>"): negar e oferecer alternativas
+    - (None, None): sem resposta válida
+    """
     import sys
     msg_limpa = mensagem.lower().strip()
+
+    # PRÉ-FILTRO 1: Detecta pedido de massagem → redireciona para Liberação Miofascial
+    PALAVRAS_MASSAGEM = ["massagem", "massoterapia", "massotera", "massagista"]
+    if any(p in msg_limpa for p in PALAVRAS_MASSAGEM):
+        # Só redireciona se NÃO mencionar liberação miofascial (paciente já sabe)
+        if "miofascial" not in msg_limpa and "liberação" not in msg_limpa and "liberacao" not in msg_limpa:
+            print(f"[FAQ-PRE] Detectado pedido de massagem → Liberação Miofascial", file=sys.stderr)
+            return None, "massagem"
+
+    # PRÉ-FILTRO 2: Detecta serviço não atendido na PERGUNTA
+    SERVICOS_NAO_ATENDIDOS_KEYWORDS = {
+        "ATM / disfunção temporomandibular": ["atm", "articulação temporomandibular", "temporomandibular", "disfunção temporomandibular", "disfuncao temporomandibular", "disfunção tm"],
+        "fisioterapia facial / estética facial": ["fisioterapia facial", "fisio facial", "estética facial", "estetica facial"],
+        "fisioterapia pediátrica": ["fisioterapia pediátrica", "fisioterapia pediatrica", "fisio pediátrica", "fisio pediatrica", "fisioterapia infantil", "fisio infantil"],
+        "fisioterapia neuropediátrica": ["neuropediátrica", "neuropediatrica", "fisioterapia neurológica pediátrica", "fisio neuro pediátrica", "fisio neuro pediatrica"],
+        "drenagem linfática": ["drenagem linfática", "drenagem linfatica", "drenagem"],
+        "RPG": [" rpg ", " rpg?", " rpg.", " rpg!", "reeducação postural global"],
+        "quiropraxia": ["quiropraxia", "quiroprática", "quiropratica"],
+        "fisioterapia respiratória": ["fisioterapia respiratória", "fisioterapia respiratoria", "fisio respiratória", "fisio respiratoria"]
+    }
+    msg_pad = " " + msg_limpa + " "
+    for nome_serv, kws in SERVICOS_NAO_ATENDIDOS_KEYWORDS.items():
+        for kw in kws:
+            if kw in msg_pad:
+                print(f"[FAQ-PRE] Detectado serviço não atendido: {nome_serv}", file=sys.stderr)
+                return None, f"servico_nao_atendido:{nome_serv}"
 
     # Modelo fine-tuned v8 — responde pelo treinamento com system prompt unificado
     match_ia = _busca_por_ia(mensagem, [])
@@ -248,10 +280,10 @@ def consultar_faq(mensagem):
         # FILTRO 1: Bloqueia respostas que contenham valores monetários inventados
         if _re_faq.search(r'R\$\s*[\d.,]+', match_ia):
             print(f"[FAQ-FILTRO] BLOQUEADO R$: {match_ia[:80]}", file=sys.stderr)
-            return None
+            return None, None
 
         # FILTRO 2: Bloqueia se afirmar que atende convênio não aceito
-        _CONV_NAO_ATENDIDOS = ["notredame", "notre dame", "unimed", "sulamerica", "sulamérica", "hapvida", "golden cross"]
+        _CONV_NAO_ATENDIDOS = ["notredame", "notre dame", "unimed", "sulamerica", "sulamérica", "hapvida", "golden cross", "apivida", "amesp", "qualicorp"]
         resp_lower = match_ia.lower()
         for conv in _CONV_NAO_ATENDIDOS:
             if conv in resp_lower:
@@ -259,10 +291,120 @@ def consultar_faq(mensagem):
                 tem_negacao = any(neg in resp_lower for neg in ["não", "nao", "infelizmente", "não somos", "não atendemos", "não trabalhamos"])
                 if not tem_negacao:
                     print(f"[FAQ-FILTRO] BLOQUEADO convênio não atendido afirmado: {match_ia[:80]}", file=sys.stderr)
-                    return None
+                    return None, None
+
+        # FILTRO 3: Bloqueia se afirmar serviço não atendido sem negar (anti-alucinação ATM, RPG, etc)
+        SERVICOS_BLOQUEADOS_NA_RESP = ["atm", "temporomandibular", "fisioterapia facial", "fisio facial",
+                                       "fisioterapia pediátrica", "fisioterapia pediatrica", "fisio pediátrica",
+                                       "neuropediátrica", "neuropediatrica", "drenagem linfática", "drenagem linfatica",
+                                       "quiropraxia", "fisioterapia respiratória", "fisioterapia respiratoria"]
+        for serv in SERVICOS_BLOQUEADOS_NA_RESP:
+            if serv in resp_lower:
+                tem_negacao = any(neg in resp_lower for neg in ["não", "nao", "infelizmente", "não realizamos", "não atendemos", "não fazemos", "não trabalhamos"])
+                if not tem_negacao:
+                    print(f"[FAQ-FILTRO] BLOQUEADO serviço não atendido afirmado: {match_ia[:80]}", file=sys.stderr)
+                    return None, f"servico_nao_atendido:{serv}"
+
+        # FILTRO 4: Anti-alucinação de convênio aceito
+        # Se a resposta menciona um convênio específico mas a pergunta não mencionou → suspeita
+        CONV_ACEITOS = ["amil", "bradesco saúde", "porto seguro", "prevent senior", "saúde caixa",
+                        "saúde petrobras", "mediservice", "cassi", "geap"]
+        msg_lower_pergunta = mensagem.lower()
+        for conv_aceito in CONV_ACEITOS:
+            if conv_aceito in resp_lower and conv_aceito not in msg_lower_pergunta:
+                # Resposta afirma um convênio sem o paciente ter perguntado especificamente
+                # Só bloqueia se a resposta for afirmativa ("Sim, atendemos X")
+                if "sim" in resp_lower[:30] or "atendemos" in resp_lower[:60]:
+                    # Caso especial: resposta lista TODOS os convênios (correto). Permite se listar 3+
+                    qtd_conv = sum(1 for c in CONV_ACEITOS if c in resp_lower)
+                    if qtd_conv < 3:
+                        print(f"[FAQ-FILTRO] Suspeita de alucinação convênio: paciente não citou '{conv_aceito}'", file=sys.stderr)
+                        return None, None
 
         print("[FAQ-IA] Respondendo via modelo v8", file=sys.stderr)
-    return match_ia
+    return match_ia, None
+
+# ============================================================
+# DETECTOR DE PEDIDO DE RECEPÇÃO (preço, vaga, desconto)
+# Não vai para Intervenção — mantém card na coluna + selo "Precisa Recepção"
+# ============================================================
+PALAVRAS_PEDIDO_RECEPCAO = [
+    # Preço / valor / desconto
+    "quanto custa", "quanto e", "quanto é", "qual o valor", "qual valor",
+    "qual preço", "qual o preço", "qual o preco", "qual preco",
+    "tabela de preço", "tabela de preco", "tabela de valores", "valores",
+    "consegue desconto", "tem promoção", "tem promocao", "tem desconto",
+    "fazem desconto", "faz desconto", "negociar valor", "parcelar", "parcelamento",
+    # Vaga / agenda / horário disponível
+    "tem vaga", "tem horário", "tem horario", "horário disponível", "horario disponivel",
+    "horários disponíveis", "horarios disponiveis", "horários e dias", "horarios e dias",
+    "agenda disponível", "agenda disponivel", "data mais próxima", "data mais proxima",
+    "tem disponibilidade", "data próxima", "data proxima", "agenda essa semana",
+    "vaga essa semana", "vaga semana", "primeira data", "data livre"
+]
+
+def detectar_pedido_recepcao(msg):
+    """Detecta pedidos sobre preço/vaga/desconto que devem ser tratados pela recepção
+    sem mover o card para Intervenção (mantém na coluna comercial)."""
+    msg_lower = (msg or "").lower().strip()
+    for kw in PALAVRAS_PEDIDO_RECEPCAO:
+        if kw in msg_lower:
+            return kw
+    return None
+
+def marcar_precisa_recepcao(phone, motivo):
+    """Marca paciente como precisando da recepção (selo no card, mantém na coluna)."""
+    import sys
+    now_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
+    update_paciente(phone, {
+        "precisa_recepcao": True,
+        "motivo_recepcao": motivo,
+        "marcado_recepcao_em": now_iso,
+        "bot_pausado_recepcao": True,  # pausa o bot até "Resolvido"
+        "unread": True
+    })
+    print(f"[RECEPCAO] {phone} marcado: {motivo}", file=sys.stderr)
+
+# ============================================================
+# RETOMAR FLUXO — após FAQ/intervenção, oferece continuar ou voltar ao menu
+# ============================================================
+PERGUNTAS_RETOMADA = {
+    "cadastrando_queixa": "Pode me contar o que te trouxe à clínica?",
+    "cadastrando_queixa_veterano": "Pode me contar o que está sentindo?",
+    "modalidade": "Deseja atendimento pelo CONVÊNIO ou de forma PARTICULAR?",
+    "nome_convenio": "Qual o seu convênio?",
+    "num_carteirinha": "Pode me informar o número da sua carteirinha?",
+    "foto_carteirinha": "Pode me enviar a foto da carteirinha do convênio?",
+    "foto_pedido_medico": "Pode me enviar o pedido médico?",
+    "agendando": "Qual o melhor período — Manhã, Tarde ou Noite?",
+    "confirmando_convenio_salvo": "Vamos seguir com o convênio anterior?",
+    "menu_veterano": "Como posso te ajudar?",
+    "escolhendo_unidade": "Qual unidade você prefere — São Caetano ou Ipiranga?",
+    "escolhendo_especialidade": "Qual serviço você precisa?",
+    "confirmando_servico_nova_guia": "Confirma o serviço escolhido?",
+    "aguardando_token_convenio": "Pode me informar o token de autorização?",
+    "gestao_agenda": "O que deseja fazer com sua agenda?",
+}
+
+def retomar_fluxo(phone, info, status_atual):
+    """Após uma resposta do FAQ, oferece 2 botões:
+    - Continuar de onde parou (repete pergunta do estado)
+    - Voltar ao menu inicial (veterano → menu_veterano / novo → escolhendo_unidade)"""
+    import sys
+    pergunta = PERGUNTAS_RETOMADA.get(status_atual)
+    if not pergunta:
+        print(f"[RETOMAR] Status sem retomada definida: {status_atual}", file=sys.stderr)
+        return False
+
+    # Marca no banco que estamos aguardando escolha de retomada
+    update_paciente(phone, {"status_anterior_retomada": status_atual})
+
+    botoes = [
+        {"id": "retomar_continuar", "title": "↩️ Continuar"},
+        {"id": "retomar_menu", "title": "🏠 Voltar ao Menu"}
+    ]
+    enviar_botoes(phone, f"Voltando ao seu atendimento:\n\n{pergunta}", botoes)
+    return True
 
 def update_paciente(phone, data):
     if not db: return
@@ -1521,6 +1663,24 @@ def webhook():
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        if request.args.get("action") == "resolver_recepcao":
+            # Limpa o selo "precisa_recepcao" e reativa o bot (card permanece na coluna)
+            try:
+                phone = request.args.get("phone")
+                resolvido_por = request.args.get("resolvido_por", "Recepção")
+                if not phone:
+                    return jsonify({"success": False}), 400
+                db.collection("PatientsKanban").document(phone).set({
+                    "precisa_recepcao": False,
+                    "bot_pausado_recepcao": False,
+                    "motivo_recepcao": "",
+                    "resolvido_recepcao_por": resolvido_por,
+                    "resolvido_recepcao_em": datetime.utcnow().strftime('%d/%m/%Y %H:%M')
+                }, merge=True)
+                return jsonify({"success": True}), 200
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
         if request.args.get("action") == "update_status":
             try:
                 phone = request.args.get("phone")
@@ -2036,9 +2196,12 @@ def webhook():
             registrar_historico(phone, "paciente", "texto" if not tem_anexo else "anexo", msg_recebida)
 
         agora_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
+        # Reset contador de FAQ loops quando o paciente clica botão (interagiu com o fluxo)
+        reset_faq = {"faq_calls_seguidas": 0} if msg_type == "interactive" else {}
         db.collection("PatientsKanban").document(phone).set(
             {"lastPatientInteraction": agora_iso,
              "numero_id": numero_id,
+             **reset_faq,
              **(({"followup_toque": 0, "followup_retomado_em": agora_iso}) if info.get("followup_toque", 0) > 0 else {})},
             merge=True)
 
@@ -2116,30 +2279,174 @@ def webhook():
             responder_texto(phone, f"Token *{_token_valor}* recebido! ✅\nNossa recepção já foi notificada. 😊")
             return jsonify({"status": "token_registrado"}), 200
 
-        _periodos = ["manhã", "manha", "tarde", "noite", "de manhã", "de manha", "de tarde", "de noite", "pela manhã", "pela tarde", "pela noite"]
-        if info.get("faq_encaminhou") and msg_limpa.strip() in _periodos:
+        _periodos = ["manhã", "manha", "tarde", "noite"]
+        # Detecta período mesmo dentro de frases ("Manhã e Tarde", "de manhã pode", etc)
+        periodo_detectado = None
+        if info.get("faq_encaminhou"):
+            for p in _periodos:
+                if p in msg_limpa:
+                    periodo_detectado = p
+                    break
+        if periodo_detectado:
             import sys
-            print(f"[FAQ→BOT] Período '{msg_recebida}' capturado — iniciando fluxo", file=sys.stderr)
+            print(f"[FAQ→BOT] Período '{periodo_detectado}' detectado em '{msg_recebida[:40]}' — iniciando fluxo", file=sys.stderr)
             if info.get("feegow_id"):
                 nome_s2 = info.get("title", "Paciente").split()[0]
                 update_paciente(phone, {"status": "menu_veterano", "faq_encaminhou": False, "periodo_preferido": msg_recebida, "servico": "", "modalidade": ""})
-                secoes_fp = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_fp = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Olá, {nome_s2}! 😊 Como posso te ajudar?", "Ver Opções", secoes_fp)
             else:
-                update_paciente(phone, {"status": "escolhendo_unidade", "faq_encaminhou": False, "periodo_preferido": msg_recebida})
-                enviar_botoes(phone, f"Ótimo! Para iniciarmos, em qual unidade você deseja ser atendido? 😊", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
+                # NOVO: paciente novo vai pra pedir o NOME (não unidade)
+                update_paciente(phone, {"status": "cadastrando_nome", "faq_encaminhou": False, "periodo_preferido": msg_recebida})
+                responder_texto(phone,
+                    "Ótimo! Antes de prosseguirmos, preciso saber como você gostaria de ser chamado(a). 😊"
+                )
             return jsonify({"status": "faq_periodo_capturado"}), 200
 
+        # ============================================================
+        # HANDLER: BOTÕES DE RETOMADA DE FLUXO
+        # ============================================================
+        if msg_recebida in ["↩️ Continuar", "Continuar", "retomar_continuar"]:
+            status_anterior = info.get("status_anterior_retomada")
+            if status_anterior:
+                import sys
+                print(f"[RETOMAR] Continuando fluxo: {status_anterior}", file=sys.stderr)
+                update_paciente(phone, {"status": status_anterior, "status_anterior_retomada": ""})
+                pergunta = PERGUNTAS_RETOMADA.get(status_anterior, "Como posso continuar te ajudando?")
+                responder_texto(phone, f"Perfeito! {pergunta}")
+                return jsonify({"status": "fluxo_continuado"}), 200
+
+        if msg_recebida in ["🏠 Voltar ao Menu", "Voltar ao Menu", "retomar_menu"]:
+            import sys
+            print(f"[RETOMAR] Voltando ao menu inicial. Veterano={is_veteran}", file=sys.stderr)
+            if is_veteran:
+                # Veterano sempre vai ao menu_veterano (não pede unidade)
+                nome_mv = info.get("title", "Paciente").split()[0]
+                update_paciente(phone, {
+                    "status": "menu_veterano", "status_anterior_retomada": "",
+                    "faq_encaminhou": False, "servico": "", "modalidade": ""
+                })
+                secoes_mv = [{"title": "Como posso ajudar?", "rows": [
+                    {"id": "v1", "title": "🗓️ Meus Agendamentos"},
+                    {"id": "v2", "title": "🔄 Nova Guia/Tratamento"},
+                    {"id": "v3", "title": "➕ Novo Serviço"},
+                    {"id": "v5", "title": "🔑 Enviar Token"},
+                    {"id": "v4", "title": "📁 Secretaria"}
+                ]}]
+                enviar_lista(phone, f"Como posso te ajudar, {nome_mv}? 😊", "Ver Opções", secoes_mv)
+            else:
+                # Novo lead — recomeça pela escolha de unidade
+                update_paciente(phone, {
+                    "status": "escolhendo_unidade", "status_anterior_retomada": "",
+                    "faq_encaminhou": False
+                })
+                enviar_botoes(phone, "Vamos recomeçar! 😊 Em qual unidade você deseja ser atendido?",
+                    [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
+            return jsonify({"status": "menu_retomado"}), 200
+
+        # ============================================================
+        # DETECTOR DE PEDIDO DE RECEPÇÃO (preço, vaga, desconto)
+        # NÃO vai para Intervenção — mantém card na coluna comercial
+        # ============================================================
+        if msg_type == "text" and not is_cortesia:
+            kw_recepcao = detectar_pedido_recepcao(msg_recebida)
+            if kw_recepcao:
+                import sys
+                print(f"[RECEPCAO] Detectado '{kw_recepcao}' em: {msg_recebida[:60]}", file=sys.stderr)
+                marcar_precisa_recepcao(phone, f"Cliente perguntou: '{msg_recebida[:80]}'")
+                responder_texto(phone, "Pra te passar valores e disponibilidade com precisão e atualizados, vou chamar nossa recepção pra te atender pessoalmente. Um momento! 😊")
+                return jsonify({"status": "recepcao_acionada"}), 200
+
+        # ============================================================
+        # SAUDAÇÃO PURA EM TRIAGEM → vai direto pedir o nome
+        # Evita que "Olá" caia no FAQ e sequestre o fluxo do novo paciente
+        # ============================================================
+        _saudacoes_puras = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite",
+                           "oi!", "olá!", "ola!", "bom dia!", "boa tarde!", "boa noite!",
+                           "oii", "oiii", "ei", "alô", "alo", "hey", "hi", "hello"]
+        eh_saudacao_pura = msg_limpa.strip().rstrip(".!?,") in _saudacoes_puras
+        if eh_saudacao_pura and status_atual == "triagem" and not is_veteran:
+            import sys
+            print(f"[SAUDACAO→NOME] Novo paciente saudação → pede nome direto", file=sys.stderr)
+            update_paciente(phone, {"status": "cadastrando_nome"})
+            responder_texto(phone,
+                "Olá! ✨ Seja muito bem-vindo(a) à Conectifisio.\n\n"
+                "Para iniciarmos seu atendimento, como você gostaria de ser chamado(a)? 😊"
+            )
+            return jsonify({"status": "saudacao_pediu_nome"}), 200
+
         STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "arquivado", "menu_veterano", "cadastrando_queixa_veterano"]
-        if msg_type == "text" and len(msg_limpa) > 3 and not is_cortesia and status_atual in STATUSES_FAQ_PERMITIDOS:
-            resposta_faq = consultar_faq(msg_recebida)
+        # FAQ também responde durante fluxos ativos, mas chama retomar_fluxo depois
+        STATUSES_FAQ_COM_RETOMADA = [
+            "cadastrando_queixa", "cadastrando_queixa_veterano", "modalidade",
+            "nome_convenio", "num_carteirinha", "foto_carteirinha", "foto_pedido_medico",
+            "agendando", "confirmando_convenio_salvo", "escolhendo_unidade",
+            "escolhendo_especialidade", "confirmando_servico_nova_guia"
+        ]
+
+        if msg_type == "text" and len(msg_limpa) > 3 and not is_cortesia and (status_atual in STATUSES_FAQ_PERMITIDOS or status_atual in STATUSES_FAQ_COM_RETOMADA):
+            resposta_faq, motivo_filtro = consultar_faq(msg_recebida)
+
+            # CASO ESPECIAL 1: paciente pediu massagem → redireciona para Liberação Miofascial
+            if motivo_filtro == "massagem":
+                import sys
+                print(f"[FAQ-MASSAGEM] Redirecionando para Liberação Miofascial", file=sys.stderr)
+                msg_massagem = (
+                    "Não realizamos massagem terapêutica tradicional, mas oferecemos a *Liberação Miofascial*! 💆\n\n"
+                    "É uma técnica manual eficaz para tensão muscular, dores e nós musculares, "
+                    "realizada por fisioterapeutas especializados.\n\n"
+                    "É um serviço *particular*. Gostaria de saber mais?"
+                )
+                responder_texto(phone, msg_massagem)
+                # Se estava em fluxo, retoma
+                if status_atual in STATUSES_FAQ_COM_RETOMADA:
+                    retomar_fluxo(phone, info, status_atual)
+                return jsonify({"status": "faq_massagem_redirecionada"}), 200
+
+            # CASO ESPECIAL 2: serviço não atendido (ATM, RPG, drenagem, etc) → nega + marca recepção
+            if motivo_filtro and motivo_filtro.startswith("servico_nao_atendido:"):
+                import sys
+                nome_serv = motivo_filtro.replace("servico_nao_atendido:", "")
+                print(f"[FAQ-NAO-ATENDIDO] Serviço não oferecido: {nome_serv}", file=sys.stderr)
+                msg_neg = (
+                    f"Infelizmente ainda não atendemos *{nome_serv}*. 💙\n\n"
+                    "Outros serviços que oferecemos:\n"
+                    "• Fisioterapia Ortopédica\n"
+                    "• Fisioterapia Neurológica\n"
+                    "• Fisioterapia Pélvica\n"
+                    "• Acupuntura\n"
+                    "• Pilates Studio\n"
+                    "• Recovery\n"
+                    "• Liberação Miofascial\n\n"
+                    "Nossa recepção vai te orientar sobre as melhores opções para o seu caso. 😊"
+                )
+                responder_texto(phone, msg_neg)
+                marcar_precisa_recepcao(phone, f"Solicitou serviço não atendido: {nome_serv}. Msg: {msg_recebida[:80]}")
+                return jsonify({"status": "faq_servico_nao_atendido"}), 200
+
             if resposta_faq and resposta_faq.upper() != "NENHUMA":
                 import sys
                 print(f"[FAQ] Respondendo: '{resposta_faq[:60]}'", file=sys.stderr)
                 responder_texto(phone, resposta_faq)
+
+                # Conta chamadas FAQ consecutivas (anti-loop)
+                faq_calls = info.get("faq_calls_seguidas", 0) + 1
+                update_paciente(phone, {"faq_calls_seguidas": faq_calls})
+
+                # Se chamou FAQ 3 vezes consecutivas sem progresso → marca recepção
+                if faq_calls >= 3:
+                    print(f"[FAQ-LOOP] {faq_calls} chamadas seguidas → marcando recepção", file=sys.stderr)
+                    marcar_precisa_recepcao(phone, f"FAQ chamado {faq_calls}x sem progresso. Última msg: {msg_recebida[:80]}")
+                    return jsonify({"status": "faq_loop_detectado"}), 200
+
+                # Se o FAQ responder mas estamos no MEIO de um fluxo → retoma com 2 botões
+                if status_atual in STATUSES_FAQ_COM_RETOMADA:
+                    retomado = retomar_fluxo(phone, info, status_atual)
+                    if retomado:
+                        return jsonify({"status": "faq_respondido_com_retomada"}), 200
+
                 if "vou encaminhar" in resposta_faq.lower():
-                    import sys
-                    # CIRURGIA 2: veterano não é redirecionado — mantém contexto
+                    # CIRURGIA: veterano não é redirecionado — mantém contexto
                     if is_veteran and status_atual in ["menu_veterano", "agendando", "cadastrando_queixa_veterano"]:
                         update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida})
                         print(f"[FAQ→VETERANO] Respondeu FAQ sem resetar estado: {status_atual}", file=sys.stderr)
@@ -2159,6 +2466,14 @@ def webhook():
                         })
                         print(f"[FAQ→HUMANO] Encaminhou para recepção: {msg_recebida[:50]}", file=sys.stderr)
                 return jsonify({"status": "faq_respondido"}), 200
+            elif (not resposta_faq or (resposta_faq and resposta_faq.upper() == "NENHUMA")) and status_atual in STATUSES_FAQ_COM_RETOMADA:
+                # FAQ retornou NENHUMA durante fluxo → mensagem provavelmente fora de contexto
+                # Retoma o fluxo silenciosamente
+                import sys
+                print(f"[FAQ-NENHUMA] Retomando fluxo: {status_atual}", file=sys.stderr)
+                retomado = retomar_fluxo(phone, info, status_atual)
+                if retomado:
+                    return jsonify({"status": "fluxo_retomado"}), 200
 
         if msg_recebida in ["Particular", "Convênio"]:
             update_paciente(phone, {"modalidade": msg_recebida})
@@ -2184,7 +2499,7 @@ def webhook():
                 nome_salvo = info.get("title", "Paciente").split()[0]
                 unidade_salva = info.get("unit", "")
                 update_paciente(phone, {"status": "menu_veterano", "servico": "", "modalidade": ""})
-                secoes_r = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_r = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 unid_txt = f" (unidade {unidade_salva})" if unidade_salva else ""
                 enviar_lista(phone, f"Atendimento reiniciado. 🔄\n\nOlá, {nome_salvo}! Como posso te ajudar{unid_txt}?", "Ver Opções", secoes_r)
             else:
@@ -2209,18 +2524,35 @@ def webhook():
 
         status = info.get("status", "triagem")
 
+        # ============================================================
+        # BOT PAUSADO POR PEDIDO À RECEPÇÃO (preço/vaga/desconto)
+        # Mantém card na coluna comercial, apenas silencia o bot
+        # Recepção limpa a flag via botão "✅ Resolvido" no dashboard
+        # ============================================================
+        if info.get("bot_pausado_recepcao"):
+            update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida, "unread": True})
+            return jsonify({"status": "bot_aguardando_recepcao"}), 200
+
         if status == "pausado":
-            if info.get("faq_encaminhou") and msg_limpa in ["manhã", "tarde", "noite", "de manhã", "de tarde", "de noite", "pela manhã", "pela tarde", "pela noite"]:
+            _periodos_p = ["manhã", "manha", "tarde", "noite"]
+            periodo_p = None
+            if info.get("faq_encaminhou"):
+                for p in _periodos_p:
+                    if p in msg_limpa:
+                        periodo_p = p
+                        break
+            if periodo_p:
                 import sys
-                print(f"[FAQ→BOT] Paciente respondeu período '{msg_recebida}' — iniciando fluxo", file=sys.stderr)
+                print(f"[FAQ→BOT] Paciente respondeu período '{periodo_p}' (em '{msg_recebida[:40]}') — iniciando fluxo", file=sys.stderr)
                 if info.get("feegow_id"):
                     nome_s3 = info.get("title", "Paciente").split()[0]
                     update_paciente(phone, {"status": "menu_veterano", "faq_encaminhou": False, "periodo_preferido": msg_recebida, "servico": "", "modalidade": ""})
-                    secoes_fp2 = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                    secoes_fp2 = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                     enviar_lista(phone, f"Olá, {nome_s3}! 😊 Como posso te ajudar?", "Ver Opções", secoes_fp2)
                 else:
-                    update_paciente(phone, {"status": "escolhendo_unidade", "faq_encaminhou": False, "periodo_preferido": msg_recebida})
-                    enviar_botoes(phone, f"Ótimo! Para iniciarmos, em qual unidade você deseja ser atendido? 😊", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
+                    # Novo: vai pra nome (não unidade)
+                    update_paciente(phone, {"status": "cadastrando_nome", "faq_encaminhou": False, "periodo_preferido": msg_recebida})
+                    responder_texto(phone, "Ótimo! Antes de prosseguirmos, preciso saber como você gostaria de ser chamado(a). 😊")
                 return jsonify({"status": "faq_periodo_capturado"}), 200
             update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida, "unread": True})
             return jsonify({"status": "bot_silenciado"}), 200
@@ -2233,7 +2565,7 @@ def webhook():
                 nome_salvo = info.get("title", "Paciente").split()[0]
                 unidade_salva = info.get("unit", "")
                 update_paciente(phone, {"status": "menu_veterano", "servico": "", "modalidade": ""})
-                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 unid_txt = f" (unidade {unidade_salva})" if unidade_salva else ""
                 enviar_lista(phone, f"Olá, {nome_salvo}! ✨ Que bom ter você de volta{unid_txt}. Como posso te ajudar hoje?", "Ver Opções", secoes)
                 return jsonify({"status": "veterano_reativacao_direto"}), 200
@@ -2281,7 +2613,7 @@ def webhook():
              # Reapresenta o menu adequado para o status atual
              if status in ["menu_veterano", "gestao_agenda", "reagendando_preferencia", "escolhendo_horario_reagendamento", "cancelando_sessao"]:
                  nome_s = info.get("title", "Paciente").split()[0]
-                 secoes_vet = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                 secoes_vet = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                  update_paciente(phone, {"status": "menu_veterano"})
                  enviar_lista(phone, f"Olá, {nome_s}! 😊 Retomando — como posso te ajudar?", "Ver Opções", secoes_vet)
              else:
@@ -2317,21 +2649,22 @@ def webhook():
 
         if status == "triagem":
             if info.get("faq_encaminhou"):
-                # CIRURGIA 1: veterano volta direto ao menu, sem pedir unidade
+                # Veterano volta direto ao menu, sem pedir unidade
                 if is_veteran:
                     nome_salvo = info.get("title", "Paciente").split()[0]
                     update_paciente(phone, {"status": "menu_veterano", "faq_encaminhou": False})
-                    secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                    secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                     enviar_lista(phone, f"Olá, {nome_salvo}! 😊 Como posso te ajudar?", "Ver Opções", secoes)
                     return jsonify({"status": "veterano_faq_para_menu"}), 200
-                update_paciente(phone, {"status": "escolhendo_unidade", "faq_encaminhou": False})
-                enviar_botoes(phone,
-                    "Para iniciarmos seu atendimento, em qual unidade você deseja ser atendido? 😊",
-                    [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                # Novo paciente: pede NOME (não pede unidade ainda)
+                update_paciente(phone, {"status": "cadastrando_nome", "faq_encaminhou": False})
+                responder_texto(phone,
+                    "Olá! ✨ Seja muito bem-vindo(a) à Conectifisio.\n\n"
+                    "Para iniciarmos seu atendimento, como você gostaria de ser chamado(a)? 😊"
                 )
-                return jsonify({"status": "faq_para_fluxo"}), 200
+                return jsonify({"status": "faq_para_fluxo_nome"}), 200
 
-            # CIRURGIA 1: veterano pula seleção de unidade — vai direto ao menu
+            # Veterano: pula direto pro menu
             if is_veteran:
                 import sys as _sys_vet
                 nome_salvo = info.get("title", "Paciente").split()[0]
@@ -2346,18 +2679,26 @@ def webhook():
                 except Exception as e_vet:
                     print(f"[VETERAN-UNIT] Erro: {e_vet}", file=_sys_vet.stderr)
                 update_paciente(phone, {"status": "menu_veterano", "unit": unidade_salva})
-                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 unid_txt = f" (unidade {unidade_salva})" if unidade_salva else ""
                 enviar_lista(phone, f"Olá, {nome_salvo}! ✨ Que bom ter você de volta{unid_txt}. Como posso te ajudar hoje?", "Ver Opções", secoes)
                 return jsonify({"status": "veterano_menu_direto"}), 200
 
-            update_paciente(phone, {"status": "escolhendo_unidade"})
+            # NOVO PACIENTE: pede o NOME ANTES de qualquer outra coisa
+            update_paciente(phone, {"status": "cadastrando_nome"})
             if info.get("is_historico"):
-                enviar_botoes(phone, "Olá! ✨ Que bom ter você de volta à Conectifisio.\n\nPara iniciarmos seu novo atendimento, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
+                responder_texto(phone,
+                    "Olá! ✨ Que bom ter você de volta à Conectifisio.\n\n"
+                    "Para iniciarmos seu atendimento, como você gostaria de ser chamado(a)? 😊"
+                )
             else:
-                enviar_botoes(phone, "Olá! ✨ Seja muito bem-vindo à Conectifisio.\n\nPara iniciarmos, em qual unidade você deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
+                responder_texto(phone,
+                    "Olá! ✨ Seja muito bem-vindo(a) à Conectifisio.\n\n"
+                    "Para iniciarmos seu atendimento, como você gostaria de ser chamado(a)? 😊"
+                )
 
         elif status == "escolhendo_unidade":
+            # Mantido para retrocompatibilidade quando volta ao Menu pelo retomar_fluxo
             if msg_recebida not in ["São Caetano", "Ipiranga"]:
                  enviar_botoes(phone, "Por favor, utilize os botões abaixo para escolher a unidade:", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             else:
@@ -2371,38 +2712,136 @@ def webhook():
                 if is_veteran:
                     nome_salvo = info.get("title", "Paciente").split()[0]
                     update_paciente(phone, {"status": "menu_veterano"})
-                    secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                    secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                     enviar_lista(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nOlá, {nome_salvo}! ✨ Que bom ter você de volta. Como posso te ajudar hoje?", "Ver Opções", secoes)
-                elif info.get("is_historico"):
-                    update_paciente(phone, {"status": "cadastrando_nome"})
-                    responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nComo você já conversou conosco antes, para agilizarmos seu cadastro, por favor me informe seu NOME COMPLETO:")
                 else:
-                    update_paciente(phone, {"status": "cadastrando_nome"})
-                    responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
+                    # Caso novo paciente caia aqui (retomada): vai pra serviço
+                    if info.get("title") and not info.get("title", "").startswith("Paciente"):
+                        update_paciente(phone, {"status": "escolhendo_especialidade"})
+                        secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}, {"id": "e9", "title": "🔍 Não encontrei"}]}]
+                        enviar_lista(phone, f"Unidade {msg_recebida} confirmada! ✅\n\nQual serviço você procura hoje?", "Ver Serviços", secoes)
+                    else:
+                        update_paciente(phone, {"status": "cadastrando_nome"})
+                        responder_texto(phone, f"Unidade {msg_recebida} selecionada! ✅\n\nPara garantirmos um atendimento personalizado, como você gostaria de ser chamado(a)?")
 
         elif status == "cadastrando_nome":
-            partes_nome = [p for p in msg_limpa.split() if len(p) >= 2]
-            if len(partes_nome) < 1 or msg_recebida.isdigit() or len(msg_recebida.strip()) < 2:
-                responder_texto(phone, "❌ Por favor, me informe como você gostaria de ser chamado(a):")
-            else:
-                frases_terceiro = [
-                    "estou agendando para", "estou marcando para", "estou ligando para",
-                    "sou a mãe de", "sou o pai de", "sou a esposa de", "sou o marido de",
-                    "sou a filha de", "sou o filho de", "agendando para meu", "agendando para minha",
-                    "marcando para meu", "marcando para minha", "para o meu marido", "para a minha esposa",
-                    "para o meu pai", "para a minha mãe", "para meu filho", "para minha filha",
-                    "para meu irmão", "para minha irmã", "mas estou vendo atendimento para"
-                ]
-                eh_terceiro = any(frase in msg_limpa for frase in frases_terceiro)
+            # VALIDAÇÃO RIGOROSA: rejeita qualquer coisa que não seja nome
+            # (anexo, pergunta, URL, número, saudação, frase com verbos de pergunta)
 
-                if eh_terceiro:
-                    update_paciente(phone, {"title": msg_recebida, "agendado_por_terceiro": True, "status": "confirmando_paciente_real"})
-                    responder_texto(phone, f"Entendido! 😊 Fico feliz em ajudar.\n\nPara garantirmos que o cadastro fique correto no sistema, por favor me informe o *NOME COMPLETO do paciente* que será atendido (conforme documento):")
-                else:
-                    primeiro_nome = msg_recebida.strip().split()[0].capitalize()
-                    update_paciente(phone, {"title": msg_recebida, "primeiro_nome": primeiro_nome, "status": "escolhendo_especialidade"})
-                    secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
-                    enviar_lista(phone, f"Prazer, {primeiro_nome}! 😊\n\nPara direcionarmos o seu atendimento, qual serviço você procura hoje?", "Ver Serviços", secoes)
+            # 1. Rejeita anexos
+            if tem_anexo:
+                responder_texto(phone,
+                    "Antes de seguir, preciso saber como você gostaria de ser chamado(a). 😊\n\n"
+                    "Pode me dizer seu nome?"
+                )
+                return jsonify({"status": "nome_anexo_rejeitado"}), 200
+
+            msg_stripped = msg_recebida.strip()
+            msg_lower_strip = msg_stripped.lower()
+
+            # 2. Rejeita perguntas (tem "?", "!")
+            tem_pontuacao_pergunta = "?" in msg_stripped or msg_stripped.endswith("!")
+
+            # 3. Rejeita URLs
+            tem_url = "http" in msg_lower_strip or "www." in msg_lower_strip
+
+            # 4. Rejeita só números
+            so_numeros = msg_stripped.replace(" ", "").replace("-", "").replace(".", "").isdigit()
+
+            # 5. Rejeita saudação isolada
+            saudacoes_puras = ["oi", "olá", "ola", "bom dia", "boa tarde", "boa noite",
+                               "oi!", "olá!", "ola!", "bom dia!", "boa tarde!", "boa noite!",
+                               "oii", "oiii", "ei", "alô", "alo"]
+            eh_saudacao = msg_lower_strip in saudacoes_puras
+
+            # 6. Rejeita início com verbos de pergunta
+            verbos_pergunta = ["vocês", "voces", "qual", "quanto", "como", "onde",
+                              "quando", "atendem", "fazem", "tem ", "atende",
+                              "preciso", "queria", "gostaria de saber", "gostaria saber",
+                              "podem", "pode me", "vou", "estou com dor", "estou querendo"]
+            comeca_com_pergunta = any(msg_lower_strip.startswith(v) for v in verbos_pergunta)
+
+            # 7. Rejeita mensagem muito longa (> 80 chars sugere frase, não nome)
+            muito_longo = len(msg_stripped) > 80
+
+            # 8. Rejeita texto sem letras
+            tem_letra = any(c.isalpha() for c in msg_stripped)
+
+            # 9. Tamanho mínimo
+            muito_curto = len(msg_stripped) < 2
+
+            nome_invalido = (tem_pontuacao_pergunta or tem_url or so_numeros or eh_saudacao
+                            or comeca_com_pergunta or muito_longo or not tem_letra or muito_curto)
+
+            if nome_invalido:
+                import sys
+                print(f"[NOME-BLOQUEIO] Mensagem rejeitada como nome: '{msg_recebida[:60]}'", file=sys.stderr)
+                responder_texto(phone,
+                    "Para prosseguirmos com seu atendimento, preciso primeiro saber como você gostaria de ser chamado(a). 😊\n\n"
+                    "Pode me dizer seu nome?"
+                )
+                return jsonify({"status": "nome_invalido"}), 200
+
+            # Detecta frase de terceiro ("estou agendando para minha mãe", etc)
+            frases_terceiro = [
+                "estou agendando para", "estou marcando para", "estou ligando para",
+                "sou a mãe de", "sou o pai de", "sou a esposa de", "sou o marido de",
+                "sou a filha de", "sou o filho de", "agendando para meu", "agendando para minha",
+                "marcando para meu", "marcando para minha", "para o meu marido", "para a minha esposa",
+                "para o meu pai", "para a minha mãe", "para meu filho", "para minha filha",
+                "para meu irmão", "para minha irmã", "mas estou vendo atendimento para"
+            ]
+            eh_terceiro = any(frase in msg_lower_strip for frase in frases_terceiro)
+
+            if eh_terceiro:
+                update_paciente(phone, {"title": msg_recebida, "agendado_por_terceiro": True, "status": "confirmando_paciente_real"})
+                responder_texto(phone, f"Entendido! 😊 Fico feliz em ajudar.\n\nPara garantirmos que o cadastro fique correto no sistema, por favor me informe o *NOME COMPLETO do paciente* que será atendido (conforme documento):")
+            else:
+                primeiro_nome = msg_stripped.split()[0].capitalize()
+                # Salva o nome e pergunta para quem é o atendimento
+                update_paciente(phone, {
+                    "title": msg_recebida,
+                    "primeiro_nome": primeiro_nome,
+                    "status": "perguntando_para_quem"
+                })
+                enviar_botoes(phone,
+                    f"Prazer em conhecer você, {primeiro_nome}! 😊\n\n"
+                    f"Para te oferecermos a melhor experiência, vou te conduzir por algumas perguntas rápidas.\n\n"
+                    f"O atendimento é para você ou para outra pessoa?",
+                    [{"id": "pq_eu", "title": "Para mim"}, {"id": "pq_outro", "title": "Para outra pessoa"}]
+                )
+
+        elif status == "perguntando_para_quem":
+            if "outra pessoa" in msg_limpa or msg_recebida == "Para outra pessoa":
+                update_paciente(phone, {"agendado_por_terceiro": True, "status": "confirmando_paciente_real"})
+                responder_texto(phone,
+                    "Entendido! 😊\n\n"
+                    "Por favor, me informe o *NOME COMPLETO* do paciente que será atendido (conforme documento):"
+                )
+            elif "mim" in msg_limpa or "para mim" in msg_limpa or msg_recebida == "Para mim":
+                # Pula para escolha de serviço
+                primeiro_nome = info.get("primeiro_nome") or info.get("title", "Paciente").split()[0]
+                update_paciente(phone, {"status": "escolhendo_especialidade"})
+                secoes = [{"title": "Nossos Serviços", "rows": [
+                    {"id": "e1", "title": "Fisio Ortopédica"},
+                    {"id": "e2", "title": "Fisio Neurológica"},
+                    {"id": "e3", "title": "Fisio Pélvica"},
+                    {"id": "e4", "title": "Acupuntura"},
+                    {"id": "e5", "title": "Pilates Studio"},
+                    {"id": "e6", "title": "Recovery"},
+                    {"id": "e7", "title": "Liberação Miofascial"},
+                    {"id": "e9", "title": "🔍 Não encontrei"}
+                ]}]
+                enviar_lista(phone,
+                    f"Perfeito, {primeiro_nome}! 😊\n\nQual serviço você procura hoje?",
+                    "Ver Serviços",
+                    secoes
+                )
+            else:
+                enviar_botoes(phone,
+                    "Por favor, escolha uma das opções abaixo:",
+                    [{"id": "pq_eu", "title": "Para mim"}, {"id": "pq_outro", "title": "Para outra pessoa"}]
+                )
 
         elif status == "confirmando_paciente_real":
             if len(msg_limpa) < 2 or msg_recebida.isdigit():
@@ -2410,16 +2849,39 @@ def webhook():
             else:
                 nome_responsavel = info.get("title", "")
                 update_paciente(phone, {"title": msg_recebida, "nome_responsavel": nome_responsavel, "status": "escolhendo_especialidade"})
-                secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
+                secoes = [{"title": "Nossos Serviços", "rows": [
+                    {"id": "e1", "title": "Fisio Ortopédica"},
+                    {"id": "e2", "title": "Fisio Neurológica"},
+                    {"id": "e3", "title": "Fisio Pélvica"},
+                    {"id": "e4", "title": "Acupuntura"},
+                    {"id": "e5", "title": "Pilates Studio"},
+                    {"id": "e6", "title": "Recovery"},
+                    {"id": "e7", "title": "Liberação Miofascial"},
+                    {"id": "e9", "title": "🔍 Não encontrei"}
+                ]}]
                 enviar_lista(phone, f"Perfeito! Cadastro em nome de *{msg_recebida}*. ✅\n\nQual serviço o paciente procura hoje?", "Ver Serviços", secoes)
 
         elif status == "menu_veterano":
             if "Novo Serviço" in msg_recebida:
-                update_paciente(phone, {"status": "escolhendo_especialidade"})
+                # Limpa dados antigos — paciente pode escolher modalidade/convênio diferente
+                update_paciente(phone, {
+                    "status": "escolhendo_especialidade",
+                    "queixa": "", "queixa_ia": "",
+                    "modalidade": "", "convenio": "",
+                    "numCarteirinha": "", "carteirinha_media_id": "",
+                    "pedido_media_id": ""
+                })
                 secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}, {"id": "e8", "title": "⬅️ Voltar ao Menu"}]}]
                 enviar_lista(phone, "Perfeito! Qual novo serviço você deseja agendar?", "Ver Serviços", secoes)
 
             elif "Nova Guia" in msg_recebida or "Tratamento" in msg_recebida:
+                # Limpa dados antigos — paciente pode mudar modalidade/convênio
+                update_paciente(phone, {
+                    "queixa": "", "queixa_ia": "",
+                    "modalidade": "",
+                    "numCarteirinha": "", "carteirinha_media_id": "",
+                    "pedido_media_id": ""
+                })
                 feegow_id = info.get("feegow_id")
                 servico_atual = _buscar_servico_atual_feegow(feegow_id) if feegow_id else None
                 if servico_atual and servico_atual.get("servico"):
@@ -2443,7 +2905,7 @@ def webhook():
                     secoes_ng = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}, {"id": "e8", "title": "⬅️ Voltar ao Menu"}]}]
                     enviar_lista(phone, "Não identifiquei seu tratamento automaticamente. Qual serviço deseja renovar a guia?", "Ver Serviços", secoes_ng)
 
-            elif "Reagendar" in msg_recebida:
+            elif "Reagendar" in msg_recebida or "Meus Agendamentos" in msg_recebida or msg_recebida == "v1":
                 resultado_raw = consultar_agenda_feegow(info.get("feegow_id"), retornar_raw=True) if info.get("feegow_id") else None
                 sessoes_labels = resultado_raw["sessoes"] if resultado_raw else []
                 agendamentos_raw = resultado_raw["agendamentos"] if resultado_raw else []
@@ -2479,7 +2941,7 @@ def webhook():
             else:
                 # Catch-all: mensagem não reconhecida → reapresenta o menu
                 nome_mv = info.get("title", "Paciente").split()[0]
-                secoes_mv = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_mv = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Como posso te ajudar, {nome_mv}? 😊", "Ver Opções", secoes_mv)
 
         elif status == "gestao_agenda":
@@ -2490,10 +2952,20 @@ def webhook():
                 res_raw = consultar_agenda_feegow(info.get("feegow_id"), retornar_raw=True)
                 sessoes_v = res_raw["sessoes"] if res_raw else []
                 if sessoes_v:
-                    responder_texto(phone, f"📋 Sua agenda:\n\n{chr(10).join(sessoes_v[:10])}\n\nQualquer dúvida, é só chamar! 😊")
+                    responder_texto(phone, f"📋 Sua agenda:\n\n{chr(10).join(sessoes_v[:10])}")
                 else:
                     responder_texto(phone, "Não encontrei sessões futuras agendadas no momento.")
+                # Reapresenta menu veterano em vez de apenas "qualquer dúvida é só chamar"
                 update_paciente(phone, {"status": "menu_veterano"})
+                nome_va = info.get("title", "Paciente").split()[0]
+                secoes_va = [{"title": "Como posso ajudar?", "rows": [
+                    {"id": "v1", "title": "🗓️ Meus Agendamentos"},
+                    {"id": "v2", "title": "🔄 Nova Guia/Tratamento"},
+                    {"id": "v3", "title": "➕ Novo Serviço"},
+                    {"id": "v5", "title": "🔑 Enviar Token"},
+                    {"id": "v4", "title": "📁 Secretaria"}
+                ]}]
+                enviar_lista(phone, f"Posso te ajudar com mais alguma coisa, {nome_va}? 😊", "Ver Opções", secoes_va)
                 return jsonify({"status": "agenda_consultada"}), 200
 
             elif msg_recebida in ["ga_confirmar", "✅ Confirmar presença", "Confirmar presença"]:
@@ -2581,7 +3053,7 @@ def webhook():
             elif msg_recebida in ["ga_voltar", "⬅️ Voltar ao Menu", "Voltar ao Menu"]:
                 nome_s = info.get("title", "Paciente").split()[0]
                 update_paciente(phone, {"status": "menu_veterano"})
-                secoes_vet_v = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_vet_v = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Voltando ao menu principal. Como posso te ajudar, {nome_s}?", "Ver Opções", secoes_vet_v)
 
             else:
@@ -2918,12 +3390,12 @@ def webhook():
                 nome_tk = info.get("title", "Paciente").split()[0]
                 responder_texto(phone, f"Token *{token_val}* registrado! ✅\nNossa recepção já recebeu a autorização. 😊")
                 import time as _t_tk; _t_tk.sleep(1)
-                secoes_tk = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_tk = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Mais alguma coisa, {nome_tk}?", "Ver Opções", secoes_tk)
             elif eh_saida:
                 nome_tk2 = info.get("title", "Paciente").split()[0]
                 update_paciente(phone, {"status": "menu_veterano"})
-                secoes_tk2 = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_tk2 = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Como posso te ajudar, {nome_tk2}? 😊", "Ver Opções", secoes_tk2)
             else:
                 responder_texto(phone, "❌ Não reconheci esse código. O token de autorização tem entre 4 e 10 dígitos numéricos.\n\nPode tentar novamente?")
@@ -2940,7 +3412,7 @@ def webhook():
             elif msg_recebida in ["ng_voltar"] or "Voltar" in msg_recebida:
                 update_paciente(phone, {"status": "menu_veterano"})
                 nome_ng = info.get("title", "Paciente").split()[0]
-                secoes_ng_v = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes_ng_v = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Voltando ao menu. Como posso ajudar, {nome_ng}?", "Ver Opções", secoes_ng_v)
             else:
                 sv_ng = info.get("nova_guia_servico", "")
@@ -3028,7 +3500,7 @@ def webhook():
             if "Voltar" in msg_recebida:
                 update_paciente(phone, {"status": "menu_veterano"})
                 nome_s_sec = info.get("title", "Paciente").split()[0]
-                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, f"Voltando ao menu principal. Como posso ajudar, {nome_s_sec}?", "Ver Opções", secoes)
             elif "Exames" in msg_recebida:
                 update_paciente(phone, {"status": "enviando_exames"})
@@ -3100,26 +3572,235 @@ def webhook():
         elif status == "escolhendo_especialidade":
             if "Voltar" in msg_recebida:
                 update_paciente(phone, {"status": "menu_veterano"})
-                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Reagendar Sessão"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
+                secoes = [{"title": "Como posso ajudar?", "rows": [{"id": "v1", "title": "🗓️ Meus Agendamentos"}, {"id": "v2", "title": "🔄 Nova Guia/Tratamento"}, {"id": "v3", "title": "➕ Novo Serviço"}, {"id": "v5", "title": "🔑 Enviar Token"}, {"id": "v4", "title": "📁 Secretaria"}]}]
                 enviar_lista(phone, "Voltando ao menu principal. Como posso ajudar?", "Ver Opções", secoes)
+
+            # OPÇÃO "Não encontrei" — paciente descreve em texto livre
+            elif "Não encontrei" in msg_recebida or "Nao encontrei" in msg_recebida or msg_recebida == "🔍 Não encontrei":
+                update_paciente(phone, {"status": "interpretando_servico_livre"})
+                responder_texto(phone,
+                    "Sem problemas! 😊\n\n"
+                    "Me conte com suas palavras: qual tratamento você está procurando?\n\n"
+                    "_Pode descrever o que está sentindo ou o nome do procedimento que você conhece._"
+                )
+
             elif msg_recebida in ["Recovery", "Liberação Miofascial"]:
-                update_paciente(phone, {"servico": msg_recebida, "modalidade": "Particular", "status": "cadastrando_queixa"})
-                responder_texto(phone, f"Ótima escolha para performance em {msg_recebida}! 🚀\n\nPara prepararmos o consultório com a estrutura correta para você, me conte brevemente: o que te trouxe aqui hoje?")
+                # Particular — pergunta unidade depois
+                if is_veteran:
+                    update_paciente(phone, {"servico": msg_recebida, "modalidade": "Particular", "status": "cadastrando_queixa"})
+                    responder_texto(phone, f"Ótima escolha! {msg_recebida} é um serviço particular. ✨\n\nPara prepararmos o atendimento, me conte brevemente: o que te trouxe aqui hoje?")
+                else:
+                    update_paciente(phone, {"servico": msg_recebida, "modalidade": "Particular", "status": "escolhendo_unidade_apos_servico"})
+                    enviar_botoes(phone,
+                        f"Ótima escolha! {msg_recebida} é um serviço particular. ✨\n\nEm qual unidade você prefere ser atendido?",
+                        [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                    )
+
             elif msg_recebida == "Fisio Neurológica":
-                update_paciente(phone, {"servico": msg_recebida, "status": "triagem_neuro"})
+                if is_veteran:
+                    update_paciente(phone, {"servico": msg_recebida, "status": "triagem_neuro"})
+                else:
+                    update_paciente(phone, {"servico": msg_recebida, "status": "escolhendo_unidade_apos_servico"})
+                    enviar_botoes(phone,
+                        f"Entendido! Fisio Neurológica selecionada. ✅\n\nEm qual unidade você prefere ser atendido?",
+                        [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                    )
+                    return jsonify({"status": "neuro_pediu_unidade"}), 200
                 texto_neuro = "Queremos garantir que sua experiência na Conectifisio seja a mais confortável e segura possível. 😊\n\nPoderia nos contar em qual dessas opções de suporte você se enquadra hoje?\n\n1️⃣ Preciso de auxílio integral (ajuda de outra pessoa para me movimentar).\n2️⃣ Preciso de auxílio parcial (utilizo bengala, andador).\n3️⃣ Tenho autonomia total."
                 enviar_botoes(phone, texto_neuro, [{"id": "n1", "title": "1️⃣ Auxílio integral"}, {"id": "n2", "title": "2️⃣ Auxílio parcial"}, {"id": "n3", "title": "3️⃣ Autonomia total"}])
+
             elif msg_recebida == "Pilates Studio":
+                # Pilates só em São Caetano
                 if info.get("unit") == "Ipiranga":
                     update_paciente(phone, {"servico": msg_recebida, "status": "transferencia_pilates"})
-                    enviar_botoes(phone, "O Pilates Studio é uma modalidade exclusiva da nossa unidade de **São Caetano**. 🧘‍♀️\n\nDeseja transferir o seu atendimento para lá para realizar o Pilates?", [{"id": "tp_sim", "title": "Sim, mudar p/ São Caetano"}, {"id": "tp_nao", "title": "Não, escolher outro"}])
+                    enviar_botoes(phone, "O Pilates Studio é uma modalidade exclusiva da nossa unidade de *São Caetano*. 🧘‍♀️\n\nDeseja transferir o seu atendimento para lá para realizar o Pilates?", [{"id": "tp_sim", "title": "Sim, mudar p/ São Caetano"}, {"id": "tp_nao", "title": "Não, escolher outro"}])
                 else:
-                    update_paciente(phone, {"servico": msg_recebida, "status": "pilates_modalidade"})
+                    # Define a unidade automaticamente como São Caetano
+                    update_paciente(phone, {"servico": msg_recebida, "unit": "São Caetano", "status": "pilates_modalidade"})
                     secoes = [{"title": "Modalidade Pilates", "rows": [{"id": "p_part", "title": "💎 Plano Particular"}, {"id": "p_caixa", "title": "🏦 Saúde Caixa"}, {"id": "p_app", "title": "💪 Wellhub/Totalpass"}, {"id": "p_vol", "title": "⬅️ Voltar"}]}]
-                    enviar_lista(phone, "Excelente escolha! 🧘‍♀️ O Pilates é fundamental para a correção postural e fortalecimento.\n\nPara passarmos as informações corretas de horários e valores, como você pretende realizar as aulas?", "Ver Opções", secoes)
+                    enviar_lista(phone, "Excelente escolha! 🧘‍♀️ O Pilates é fundamental para a correção postural e fortalecimento.\n\n📍 Atendemos Pilates exclusivamente em *São Caetano*.\n\nComo você pretende realizar as aulas?", "Ver Opções", secoes)
+
             else:
-                update_paciente(phone, {"servico": msg_recebida, "status": "cadastrando_queixa"})
-                responder_texto(phone, f"Entendido! {msg_recebida} selecionada. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
+                # Outros serviços (Fisio Ortopédica, Pélvica, Acupuntura) — pergunta unidade
+                if is_veteran:
+                    update_paciente(phone, {"servico": msg_recebida, "status": "cadastrando_queixa"})
+                    responder_texto(phone, f"Entendido! {msg_recebida} selecionada. ✅\n\nPara garantirmos o conforto e segurança no seu atendimento, me conte brevemente: o que te trouxe à clínica hoje?")
+                else:
+                    update_paciente(phone, {"servico": msg_recebida, "status": "escolhendo_unidade_apos_servico"})
+                    enviar_botoes(phone,
+                        f"Entendido! {msg_recebida} selecionada. ✅\n\nEm qual unidade você prefere ser atendido?",
+                        [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                    )
+
+        elif status == "escolhendo_unidade_apos_servico":
+            if msg_recebida not in ["São Caetano", "Ipiranga"]:
+                enviar_botoes(phone,
+                    "Por favor, escolha uma das unidades abaixo:",
+                    [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                )
+                return jsonify({"status": "unidade_invalida"}), 200
+            unidade_info = UNIDADES.get(msg_recebida, {})
+            update_paciente(phone, {
+                "unit": msg_recebida,
+                "address": unidade_info.get("endereco"),
+                "maps_link": unidade_info.get("maps"),
+                "recommendation": unidade_info.get("recomendacao")
+            })
+            servico_escolhido = info.get("servico", "")
+            # Vai para queixa (ou neuro_triagem se aplicável)
+            if servico_escolhido == "Fisio Neurológica":
+                update_paciente(phone, {"status": "triagem_neuro"})
+                texto_neuro = f"Unidade {msg_recebida} selecionada! ✅\n\nQueremos garantir que sua experiência seja a mais confortável possível. 😊\n\nPoderia nos contar em qual dessas opções de suporte você se enquadra hoje?\n\n1️⃣ Preciso de auxílio integral (ajuda de outra pessoa para me movimentar).\n2️⃣ Preciso de auxílio parcial (utilizo bengala, andador).\n3️⃣ Tenho autonomia total."
+                enviar_botoes(phone, texto_neuro, [{"id": "n1", "title": "1️⃣ Auxílio integral"}, {"id": "n2", "title": "2️⃣ Auxílio parcial"}, {"id": "n3", "title": "3️⃣ Autonomia total"}])
+            else:
+                update_paciente(phone, {"status": "cadastrando_queixa"})
+                responder_texto(phone,
+                    f"Unidade {msg_recebida} selecionada! ✅\n\n"
+                    f"Para prepararmos o atendimento, me conte brevemente: o que te trouxe à clínica hoje?"
+                )
+
+        elif status == "interpretando_servico_livre":
+            # Paciente descreveu em texto livre — usa o modelo v8 para interpretar
+            import sys
+            print(f"[SERVICO-LIVRE] Texto recebido: {msg_recebida[:80]}", file=sys.stderr)
+
+            # Primeiro: filtros locais antes da IA
+            msg_lower_serv = msg_recebida.lower()
+
+            # Detecta massagem → Liberação Miofascial
+            if any(w in msg_lower_serv for w in ["massagem", "massoterapia", "massotera"]):
+                if "miofascial" not in msg_lower_serv and "liberação" not in msg_lower_serv:
+                    update_paciente(phone, {"status": "confirmando_servico_livre", "servico_sugerido": "Liberação Miofascial"})
+                    enviar_botoes(phone,
+                        "Não realizamos massagem terapêutica tradicional, mas oferecemos a *Liberação Miofascial*! 💆\n\n"
+                        "É uma técnica manual eficaz para tensão muscular e dores, realizada por fisioterapeutas especializados.\n\n"
+                        "É um serviço *particular*. É isso que você está procurando?",
+                        [{"id": "sl_sim", "title": "✅ Sim, é isso"}, {"id": "sl_nao", "title": "❌ Não é isso"}]
+                    )
+                    return jsonify({"status": "sugerido_liberacao"}), 200
+
+            # Detecta serviços não atendidos
+            SERVICOS_NAO_ATENDIDOS_KEYWORDS = {
+                "ATM / disfunção temporomandibular": ["atm", "articulação temporomandibular", "temporomandibular", "disfunção tm"],
+                "fisioterapia facial / estética facial": ["fisioterapia facial", "fisio facial", "estética facial", "estetica facial"],
+                "fisioterapia pediátrica": ["pediátrica", "pediatrica", "infantil"],
+                "fisioterapia neuropediátrica": ["neuropediátrica", "neuropediatrica"],
+                "drenagem linfática": ["drenagem linfática", "drenagem linfatica", "drenagem"],
+                "RPG": [" rpg", "reeducação postural global"],
+                "quiropraxia": ["quiropraxia", "quiroprática"],
+                "fisioterapia respiratória": ["respiratória", "respiratoria"]
+            }
+            msg_pad_serv = " " + msg_lower_serv + " "
+            servico_nao_atendido = None
+            for nome_s, kws in SERVICOS_NAO_ATENDIDOS_KEYWORDS.items():
+                if any(kw in msg_pad_serv for kw in kws):
+                    servico_nao_atendido = nome_s
+                    break
+
+            if servico_nao_atendido:
+                responder_texto(phone,
+                    f"Infelizmente ainda não atendemos *{servico_nao_atendido}*. 💙\n\n"
+                    "Outros serviços que oferecemos:\n"
+                    "• Fisioterapia Ortopédica\n"
+                    "• Fisioterapia Neurológica\n"
+                    "• Fisioterapia Pélvica\n"
+                    "• Acupuntura\n"
+                    "• Pilates Studio\n"
+                    "• Recovery\n"
+                    "• Liberação Miofascial\n\n"
+                    "Nossa recepção vai te orientar sobre as melhores opções para o seu caso. 😊"
+                )
+                marcar_precisa_recepcao(phone, f"Solicitou serviço não atendido: {servico_nao_atendido}. Msg: {msg_recebida[:80]}")
+                return jsonify({"status": "servico_livre_nao_atendido"}), 200
+
+            # Tenta interpretar com o modelo
+            prompt_interpretacao = (
+                f"Paciente descreveu: \"{msg_recebida[:200]}\"\n\n"
+                "Qual dos serviços abaixo melhor corresponde ao que ele procura?\n"
+                "- Fisio Ortopédica\n"
+                "- Fisio Neurológica\n"
+                "- Fisio Pélvica\n"
+                "- Acupuntura\n"
+                "- Pilates Studio\n"
+                "- Recovery\n"
+                "- Liberação Miofascial\n\n"
+                "Responda APENAS com o nome exato do serviço da lista (sem explicações). "
+                "Se nenhum bater, responda NENHUM."
+            )
+            try:
+                url_oai = "https://api.openai.com/v1/chat/completions"
+                headers_oai = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+                payload_oai = {
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": prompt_interpretacao}],
+                    "max_tokens": 30,
+                    "temperature": 0.0
+                }
+                res_oai = requests.post(url_oai, json=payload_oai, headers=headers_oai, timeout=10)
+                resp_interp = res_oai.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                print(f"[SERVICO-LIVRE] Modelo sugeriu: {resp_interp}", file=sys.stderr)
+
+                SERVICOS_VALIDOS = ["Fisio Ortopédica", "Fisio Neurológica", "Fisio Pélvica", "Acupuntura", "Pilates Studio", "Recovery", "Liberação Miofascial"]
+                servico_match = None
+                for sv in SERVICOS_VALIDOS:
+                    if sv.lower() in resp_interp.lower() or resp_interp.lower() in sv.lower():
+                        servico_match = sv
+                        break
+
+                if servico_match:
+                    update_paciente(phone, {"status": "confirmando_servico_livre", "servico_sugerido": servico_match})
+                    enviar_botoes(phone,
+                        f"Pelo que você descreveu, *{servico_match}* parece a melhor opção. 😊\n\nÉ isso que você procura?",
+                        [{"id": "sl_sim", "title": "✅ Sim, é isso"}, {"id": "sl_nao", "title": "❌ Não é isso"}]
+                    )
+                else:
+                    # Modelo não conseguiu identificar → recepção
+                    marcar_precisa_recepcao(phone, f"Serviço não identificado. Descrição livre: {msg_recebida[:120]}")
+                    responder_texto(phone,
+                        "Obrigado por compartilhar! 💙\n\n"
+                        "Para te oferecermos a melhor orientação, vou conectar você com nossa recepção. "
+                        "Em instantes alguém da equipe vai te atender pessoalmente. 😊"
+                    )
+            except Exception as e_int:
+                print(f"[SERVICO-LIVRE] Erro IA: {e_int}", file=sys.stderr)
+                marcar_precisa_recepcao(phone, f"Erro ao interpretar serviço. Descrição: {msg_recebida[:120]}")
+                responder_texto(phone,
+                    "Obrigado por compartilhar! 💙\n\n"
+                    "Vou conectar você com nossa recepção para te orientar melhor. 😊"
+                )
+
+        elif status == "confirmando_servico_livre":
+            servico_sug = info.get("servico_sugerido", "")
+            if msg_recebida in ["✅ Sim, é isso", "sl_sim"] or "sim" in msg_limpa[:5]:
+                # Confirmado: vai para o fluxo normal do serviço
+                update_paciente(phone, {"servico": servico_sug, "servico_sugerido": ""})
+                if servico_sug in ["Recovery", "Liberação Miofascial"]:
+                    update_paciente(phone, {"modalidade": "Particular", "status": "escolhendo_unidade_apos_servico"})
+                    enviar_botoes(phone,
+                        f"Perfeito! {servico_sug} é um serviço particular. ✨\n\nEm qual unidade você prefere ser atendido?",
+                        [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                    )
+                elif servico_sug == "Pilates Studio":
+                    update_paciente(phone, {"unit": "São Caetano", "status": "pilates_modalidade"})
+                    secoes = [{"title": "Modalidade Pilates", "rows": [{"id": "p_part", "title": "💎 Plano Particular"}, {"id": "p_caixa", "title": "🏦 Saúde Caixa"}, {"id": "p_app", "title": "💪 Wellhub/Totalpass"}, {"id": "p_vol", "title": "⬅️ Voltar"}]}]
+                    enviar_lista(phone, "Excelente! 🧘‍♀️\n\n📍 Atendemos Pilates exclusivamente em *São Caetano*.\n\nComo você pretende realizar as aulas?", "Ver Opções", secoes)
+                else:
+                    update_paciente(phone, {"status": "escolhendo_unidade_apos_servico"})
+                    enviar_botoes(phone,
+                        f"Perfeito! {servico_sug} confirmado. ✅\n\nEm qual unidade você prefere ser atendido?",
+                        [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}]
+                    )
+            elif msg_recebida in ["❌ Não é isso", "sl_nao"] or "não" in msg_limpa[:5] or "nao" in msg_limpa[:5]:
+                # Não é o serviço sugerido → marca recepção
+                marcar_precisa_recepcao(phone, f"Não confirmou serviço sugerido ({servico_sug}). Recepção avalia.")
+                responder_texto(phone,
+                    "Entendido! Vou conectar você com nossa recepção para te orientar melhor sobre as opções disponíveis. 💙"
+                )
+            else:
+                enviar_botoes(phone,
+                    f"O serviço *{servico_sug}* é o que você procura?",
+                    [{"id": "sl_sim", "title": "✅ Sim, é isso"}, {"id": "sl_nao", "title": "❌ Não é isso"}]
+                )
 
         elif status == "transferencia_pilates":
             if "Sim" in msg_recebida or "mudar" in msg_recebida.lower():
@@ -3287,6 +3968,22 @@ def webhook():
                 enviar_botoes(phone, f"{acolhimento}\n\nDeseja atendimento pelo seu CONVÊNIO ou de forma PARTICULAR?", [{"id": "m1", "title": "Convênio"}, {"id": "m2", "title": "Particular"}])
 
         elif status == "cadastrando_queixa":
+            # VALIDAÇÃO: rejeita respostas que não são queixa (paciente clicou achando que era avanço)
+            msg_strip_queixa = msg_recebida.strip().lower()
+            palavras_avanco = ["próximo", "proximo", "next", "avançar", "avancar", "ok",
+                              "sim", "tá", "ta", "blz", "beleza", "continuar", "vai",
+                              "manda", "pode mandar", "?", "."]
+            eh_resposta_curta_invalida = (
+                len(msg_strip_queixa) <= 12 and
+                (msg_strip_queixa in palavras_avanco or msg_strip_queixa.replace("!", "").replace(".", "").replace("?", "") in palavras_avanco)
+            )
+            if eh_resposta_curta_invalida:
+                responder_texto(phone,
+                    "Por favor, me conte um pouquinho mais sobre o que está sentindo ou o motivo da consulta. 😊\n\n"
+                    "_Pode descrever em poucas palavras: dor, lesão, recuperação, etc._"
+                )
+                return jsonify({"status": "queixa_invalida"}), 200
+
             acolhimento = chamar_ia_custom(msg_recebida) or "Compreendo perfeitamente, e saiba que estamos aqui para cuidar de você da melhor forma."
             if servico in ["Recovery", "Liberação Miofascial"]:
                 if is_veteran:
@@ -3419,13 +4116,36 @@ def webhook():
         elif status == "data_nascimento":
             validacao = validar_data_nascimento(msg_recebida)
             if validacao == "menor_12":
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "finalizado", "robo_ligado": False})
-                responder_texto(phone, "⚠️ Atenção: Identificamos que o paciente é menor de 12 anos. Informamos que não possuímos especialidade pediátrica em nossas unidades. Infelizmente, não poderemos realizar este agendamento. Recomendamos a busca por profissionais especializados na área infantil. Obrigado! 🙏")
+                # Permite ao paciente confirmar se foi engano antes de bloquear
+                update_paciente(phone, {"birthDate": msg_recebida, "status": "confirmando_menor_12"})
+                enviar_botoes(phone,
+                    f"⚠️ A data *{msg_recebida}* indica que o paciente tem menos de 12 anos.\n\n"
+                    "Foi um engano de digitação?",
+                    [{"id": "menor_engano", "title": "Sim, foi engano"}, {"id": "menor_correto", "title": "Não, é correta"}]
+                )
             elif not validacao:
                 responder_texto(phone, "❌ Data de nascimento inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
             else:
                 update_paciente(phone, {"birthDate": msg_recebida, "status": "coletando_email"})
                 responder_texto(phone, "Ótimo! Para finalizar seu cadastro, qual seu melhor E-MAIL?")
+
+        elif status == "confirmando_menor_12":
+            if "engano" in msg_limpa or msg_recebida == "Sim, foi engano":
+                update_paciente(phone, {"status": "data_nascimento", "birthDate": ""})
+                responder_texto(phone, "Sem problemas! 😊 Pode me informar a data de nascimento correta? (Ex: 15/05/1980)")
+            elif "correta" in msg_limpa or msg_recebida == "Não, é correta":
+                update_paciente(phone, {"status": "finalizado", "robo_ligado": False})
+                responder_texto(phone,
+                    "⚠️ Infelizmente não possuímos especialidade pediátrica em nossas unidades. "
+                    "Não poderemos realizar este agendamento.\n\n"
+                    "Recomendamos a busca por profissionais especializados na área infantil. "
+                    "Obrigado pela compreensão! 🙏"
+                )
+            else:
+                enviar_botoes(phone,
+                    "Por favor, confirme:",
+                    [{"id": "menor_engano", "title": "Sim, foi engano"}, {"id": "menor_correto", "title": "Não, é correta"}]
+                )
 
         elif status == "coletando_email":
             if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
