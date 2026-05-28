@@ -2754,12 +2754,41 @@ def webhook():
                                "oii", "oiii", "ei", "alô", "alo"]
             eh_saudacao = msg_lower_strip in saudacoes_puras
 
-            # 6. Rejeita início com verbos de pergunta
-            verbos_pergunta = ["vocês", "voces", "qual", "quanto", "como", "onde",
-                              "quando", "atendem", "fazem", "tem ", "atende",
+            # 6. Rejeita início com verbos/pronomes de pergunta (formas variadas de "você")
+            verbos_pergunta = ["vocês", "voces", "voce", "vc", "vcs", "vces",
+                              "qual", "quanto", "como", "onde",
+                              "quando", "atendem", "atende", "atender", "fazem", "faz", "tem ",
                               "preciso", "queria", "gostaria de saber", "gostaria saber",
-                              "podem", "pode me", "vou", "estou com dor", "estou querendo"]
+                              "podem", "pode me", "pode", "vou", "estou com dor", "estou querendo",
+                              "aceita", "aceitam", "realizam", "cobre", "cobrem"]
             comeca_com_pergunta = any(msg_lower_strip.startswith(v) for v in verbos_pergunta)
+
+            # 6b. Rejeita palavras de pergunta/agendamento em QUALQUER posição (frases com 3+ palavras)
+            palavras_msg = msg_lower_strip.split()
+            palavras_pergunta_meio = [
+                "atende", "atendem", "atendimento", "atender",
+                "fazem", "faz", "realizam", "realiza",
+                "aceita", "aceitam", "cobrem", "cobre", "cobertura",
+                "convênio", "convenio", "plano", "seguro saúde",
+                "marcar", "agendar", "agendamento", "agenda",
+                "preço", "preco", "valor", "valores", "custa", "custo",
+                "disponível", "disponivel", "horário", "horario", "horarios",
+                "vaga", "vagas", "atendimento",
+                "particular", "consulta", "sessão", "sessao"
+            ]
+            tem_palavra_pergunta_no_meio = (
+                len(palavras_msg) >= 3 and
+                any(p in msg_lower_strip for p in palavras_pergunta_meio)
+            )
+
+            # 6c. Rejeita se mencionar nome de convênio (claramente não é nome de pessoa)
+            convenios_mencionados = [
+                "amil", "bradesco", "porto seguro", "porto", "prevent",
+                "saúde caixa", "saude caixa", "saúde petrobras", "saude petrobras",
+                "mediservice", "cassi", "geap", "unimed", "sulamerica", "sulamérica",
+                "hapvida", "notredame", "notre dame", "wellhub", "totalpass", "gympass"
+            ]
+            tem_convenio = any(c in msg_lower_strip for c in convenios_mencionados)
 
             # 7. Rejeita mensagem muito longa (> 80 chars sugere frase, não nome)
             muito_longo = len(msg_stripped) > 80
@@ -2771,11 +2800,21 @@ def webhook():
             muito_curto = len(msg_stripped) < 2
 
             nome_invalido = (tem_pontuacao_pergunta or tem_url or so_numeros or eh_saudacao
-                            or comeca_com_pergunta or muito_longo or not tem_letra or muito_curto)
+                            or comeca_com_pergunta or tem_palavra_pergunta_no_meio
+                            or tem_convenio or muito_longo or not tem_letra or muito_curto)
 
             if nome_invalido:
                 import sys
-                print(f"[NOME-BLOQUEIO] Mensagem rejeitada como nome: '{msg_recebida[:60]}'", file=sys.stderr)
+                motivo = []
+                if tem_pontuacao_pergunta: motivo.append("pontuacao_pergunta")
+                if comeca_com_pergunta: motivo.append("inicio_pergunta")
+                if tem_palavra_pergunta_no_meio: motivo.append("palavra_pergunta_meio")
+                if tem_convenio: motivo.append("convenio_mencionado")
+                if eh_saudacao: motivo.append("saudacao")
+                if muito_longo: motivo.append("muito_longo")
+                if so_numeros: motivo.append("so_numeros")
+                if tem_url: motivo.append("url")
+                print(f"[NOME-BLOQUEIO] '{msg_recebida[:60]}' motivos={motivo}", file=sys.stderr)
                 responder_texto(phone,
                     "Para prosseguirmos com seu atendimento, preciso primeiro saber como você gostaria de ser chamado(a). 😊\n\n"
                     "Pode me dizer seu nome?"
