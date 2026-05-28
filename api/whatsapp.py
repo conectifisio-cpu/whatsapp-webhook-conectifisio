@@ -2377,15 +2377,21 @@ def webhook():
 
         STATUSES_FAQ_PERMITIDOS = ["triagem", "finalizado", "arquivado", "menu_veterano"]
         # FAQ também responde durante fluxos ativos, mas chama retomar_fluxo depois.
-        # NOTA: cadastrando_queixa e cadastrando_queixa_veterano NÃO entram aqui —
-        # a queixa é a resposta esperada do paciente, vai direto pro acolhimento.
+        # NOTA CRÍTICA: estados que esperam DADOS ESPECÍFICOS (queixa, número, foto, período)
+        # NÃO entram aqui — o modelo alucina interpretando o dado como dúvida.
+        # Removidos: cadastrando_queixa, num_carteirinha, foto_carteirinha, foto_pedido_medico, agendando
         STATUSES_FAQ_COM_RETOMADA = [
-            "modalidade", "nome_convenio", "num_carteirinha", "foto_carteirinha",
-            "foto_pedido_medico", "agendando", "confirmando_convenio_salvo",
+            "modalidade", "nome_convenio", "confirmando_convenio_salvo",
             "escolhendo_unidade", "escolhendo_especialidade", "confirmando_servico_nova_guia"
         ]
 
-        if msg_type == "text" and len(msg_limpa) > 3 and not is_cortesia and (status_atual in STATUSES_FAQ_PERMITIDOS or status_atual in STATUSES_FAQ_COM_RETOMADA):
+        # PROTEÇÃO: FAQ NÃO processa mensagens só com números/símbolos
+        # (CPF, carteirinha, telefone, token, datas — o modelo alucina interpretando como dúvida)
+        msg_so_numeros_simbolos = bool(msg_limpa.strip()) and all(
+            not c.isalpha() for c in msg_limpa.strip()
+        )
+
+        if msg_type == "text" and len(msg_limpa) > 3 and not is_cortesia and not msg_so_numeros_simbolos and (status_atual in STATUSES_FAQ_PERMITIDOS or status_atual in STATUSES_FAQ_COM_RETOMADA):
             resposta_faq, motivo_filtro = consultar_faq(msg_recebida)
 
             # CASO ESPECIAL 1: paciente pediu massagem → redireciona para Liberação Miofascial
