@@ -2486,12 +2486,17 @@ def webhook():
                 enviar_botoes(phone, "Atendimento reiniciado. 🔄\n\nEm qual unidade deseja ser atendido?", [{"id": "u1", "title": "São Caetano"}, {"id": "u2", "title": "Ipiranga"}])
             return jsonify({"status": "reset"}), 200
 
-        if not info.get("feegow_id"):
+        # Busca no Feegow APENAS na primeira interação do paciente.
+        # Depois disso, is_veteran é definido pelo feegow_id já gravado e nunca muda durante o fluxo.
+        # Isso evita que um paciente novo vire "veterano" no meio do cadastro por causa
+        # de um match acidental do Feegow (cadastro antigo, telefone reutilizado, etc).
+        if not info.get("feegow_id") and not info.get("feegow_ja_buscado"):
             busca_tel = buscar_feegow_por_telefone(phone)
             if busca_tel:
                 info.update({"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
-                update_paciente(phone, {"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"]})
+                update_paciente(phone, {"feegow_id": busca_tel["id"], "title": busca_tel["nome"], "cpf": busca_tel["cpf"], "feegow_ja_buscado": True})
             else:
+                update_paciente(phone, {"feegow_ja_buscado": True})
                 doc_hist = db.collection("historico_contatos").document(phone).get()
                 if doc_hist.exists:
                     info.update({"is_historico": True})
