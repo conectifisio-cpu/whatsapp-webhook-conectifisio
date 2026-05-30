@@ -85,11 +85,19 @@ UNIDADES = {
     "Ipiranga": {
         "endereco": "Rua Visconde de Pirajá, 525 - Vila Dom Pedro I, São Paulo - SP (Próximo ao Metrô Alto do Ipiranga)",
         "maps": "https://maps.app.goo.gl/MCoghy1k9LGfSaGx9",
+        "lat": -23.6028705845668,
+        "lon": -46.61265078607649,
+        "nome_oficial": "Conectifisio - Unidade Ipiranga",
+        "dica_chegada": "📍 Estamos a *30m do Metrô Alto do Ipiranga* (Linha Verde).",
         "recomendacao": "Traga o pedido médico original, documento com foto e carteirinha. Chegue com 15 minutos de antecedência. Unidade próxima ao metrô Alto do Ipiranga (30 metros)."
     },
     "São Caetano": {
         "endereco": "Rua Alegre, 667 - Santa Paula, São Caetano do Sul - SP (Próximo ao Hotel Mercure)",
         "maps": "https://maps.app.goo.gl/mhct13HEmChxmfJF8",
+        "lat": -23.622233790675214,
+        "lon": -46.55177682658113,
+        "nome_oficial": "Conectifisio - Unidade São Caetano",
+        "dica_chegada": "📍 Temos *vaga de embarque/desembarque na porta*.",
         "recomendacao": "Traga o pedido médico original, documento com foto e carteirinha. Chegue com 15 minutos de antecedência. Temos vaga de embarque/desembarque na porta e convênio com Valet."
     }
 }
@@ -1548,6 +1556,21 @@ def enviar_lista(to, texto, titulo_botao, secoes, numero_id=None):
         "interactive": {"type": "list", "body": {"text": texto}, "action": {"button": titulo_botao[:20], "sections": secoes}}
     }, numero_id=numero_id)
 
+def enviar_localizacao(to, unidade, numero_id=None):
+    """Envia mini mapa nativo do WhatsApp com a localização da unidade.
+    🛡️ Ver mapa_fluxos.md → Mensagem de confirmação pós-agendamento."""
+    info = UNIDADES.get(unidade, UNIDADES["Ipiranga"])
+    registrar_historico(to, "robo", "texto", f"📍 Localização: {info['nome_oficial']}")
+    return enviar_whatsapp(to, {
+        "type": "location",
+        "location": {
+            "latitude": str(info["lat"]),
+            "longitude": str(info["lon"]),
+            "name": info["nome_oficial"],
+            "address": info["endereco"]
+        }
+    }, numero_id=numero_id)
+
 # ==========================================
 # PROXY DE MÍDIA — Visualização de imagens do WhatsApp no Dashboard
 # ==========================================
@@ -2103,37 +2126,76 @@ def webhook():
                 nome_p  = request.args.get("nome", "paciente")
                 data_p  = request.args.get("data", "")
                 unidade_p = request.args.get("unidade", "Ipiranga")
+                modalidade_p = request.args.get("modalidade", "")
+                servico_p = request.args.get("servico", "")
 
                 if not phone_p:
                     return jsonify({"error": "phone obrigatório"}), 400
 
-                info_unidade = UNIDADES.get(unidade_p, UNIDADES["Ipiranga"])
-                link_maps = info_unidade["maps"]
+                # 🛡️ Fallback: se modalidade ou servico não vierem do dashboard,
+                # tenta puxar do Firebase para garantir texto correto.
+                if not modalidade_p or not servico_p:
+                    info_p = get_paciente(phone_p) or {}
+                    modalidade_p = modalidade_p or info_p.get("modalidade", "")
+                    servico_p = servico_p or info_p.get("servico", "")
 
-                if data_p:
+                info_unidade = UNIDADES.get(unidade_p, UNIDADES["Ipiranga"])
+
+                # Bloco de data: só aparece se a recepção preencheu
+                bloco_data = f"Esperamos por você no *{data_p}*, na unidade *{unidade_p}*.\n\n" if data_p else f"Esperamos por você na unidade *{unidade_p}*.\n\n"
+
+                # 🛡️ 3 variantes de texto baseadas em modalidade/serviço
+                # Regra blindada (ver mapa_fluxos.md → Mensagem de confirmação pós-agendamento)
+                if servico_p == "Pilates Studio":
+                    # PILATES — roupa específica, meias antiderrapantes, 10 min antes
                     msg_recomendacao = (
-                        f"Tudo certo para o seu atendimento, {nome_p}! ✅\n"
-                        f"Esperamos por você no dia {data_p}.\n\n"
-                        "Para que sua recepção seja tranquila, pedimos a gentileza de chegar "
-                        "15 minutos antes e não esquecer o pedido médico original. "
-                        "Vale lembrar que alguns planos de saúde pedem um token de validação "
-                        "enviado ao seu celular na hora, então fique atento às notificações.\n\n"
-                        "Até breve! Se precisar de algo, é só chamar. 😊"
+                        f"Tudo certo para a sua aula de *Pilates*, {nome_p}! ✅\n"
+                        f"{bloco_data}"
+                        "👕 *O que trazer:*\n"
+                        "• Roupa confortável (legging/short + camiseta)\n"
+                        "• *Meias antiderrapantes* (obrigatórias no studio)\n"
+                        "• Documento com foto\n\n"
+                        "Chegue *10 minutos antes* para conhecer o espaço.\n\n"
+                        "Até breve! Qualquer dúvida, nossa equipe está à disposição. 😊"
+                    )
+                elif modalidade_p == "Convênio":
+                    # CONVÊNIO — pedido médico + carteirinha + aviso de token
+                    servico_label = servico_p or "fisioterapia"
+                    msg_recomendacao = (
+                        f"Tudo certo para a sua sessão de *{servico_label}*, {nome_p}! ✅\n"
+                        f"{bloco_data}"
+                        "👕 *Dica importante:* para facilitar o seu tratamento, use roupas confortáveis "
+                        "que permitam acesso à área a ser tratada (como shorts ou regata/top).\n\n"
+                        "Chegue *15 minutos antes* e não esqueça do *pedido médico original* "
+                        "e um *documento com foto*.\n\n"
+                        "📱 Como vamos utilizar o seu plano de saúde, mantenha o celular por perto — "
+                        "sua operadora pode pedir um token de validação na hora.\n\n"
+                        "Até breve! Qualquer dúvida, nossa equipe está à disposição. 😊"
                     )
                 else:
+                    # PARTICULAR (Fisio Orto/Neuro/Pélvica/Acup/Recovery/Liberação)
+                    # — só documento com foto, sem pedido nem token
+                    servico_label = servico_p or "fisioterapia"
                     msg_recomendacao = (
-                        f"Tudo certo para o seu atendimento, {nome_p}! ✅\n\n"
-                        "Para que sua recepção seja tranquila, pedimos a gentileza de chegar "
-                        "15 minutos antes e não esquecer o pedido médico original. "
-                        "Vale lembrar que alguns planos de saúde pedem um token de validação "
-                        "enviado ao seu celular na hora, então fique atento às notificações.\n\n"
-                        "Até breve! Se precisar de algo, é só chamar. 😊"
+                        f"Tudo certo para a sua sessão de *{servico_label}*, {nome_p}! ✅\n"
+                        f"{bloco_data}"
+                        "👕 *Dica importante:* use roupas confortáveis que permitam acesso "
+                        "à área a ser tratada (como shorts ou regata/top).\n\n"
+                        "Chegue *15 minutos antes* e traga apenas um *documento com foto* "
+                        "para o seu prontuário.\n\n"
+                        "Até breve! Qualquer dúvida, nossa equipe está à disposição. 😊"
                     )
 
                 responder_texto(phone_p, msg_recomendacao)
                 import time as _t2
                 _t2.sleep(1)
-                responder_texto(phone_p, f"📍 Como chegar à nossa unidade {unidade_p}:\n{link_maps}")
+                # 🛡️ Dica específica da unidade + mini mapa nativo
+                # (ver mapa_fluxos.md → Mensagem de confirmação pós-agendamento)
+                dica = info_unidade.get("dica_chegada", "")
+                if dica:
+                    responder_texto(phone_p, dica)
+                    _t2.sleep(1)
+                enviar_localizacao(phone_p, unidade_p)
 
                 return jsonify({"ok": True, "enviado": True}), 200
             except Exception as e:
