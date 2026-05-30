@@ -2577,15 +2577,21 @@ def webhook():
         # ============================================================
         # BOT PAUSADO POR PEDIDO À RECEPÇÃO (preço/vaga/desconto/Pilates)
         # Mantém card na coluna comercial, apenas silencia o bot.
-        # 🛡️ Se paciente envia mensagem, responde "mensagem de espera"
-        # com cooldown de 15min (não spamar).
+        # 🛡️ Lógica:
+        #   1. Se mensagem é cortesia (obrigado/ok/valeu) → "Por nada!..." (sem cooldown)
+        #   2. Caso contrário → "Só mais um momento..." com cooldown de 15min
         # Recepção limpa a flag via botão "✅ Resolvido" no dashboard.
         # Ver mapa_fluxos.md → Bot pausado com mensagem de espera.
         # ============================================================
         if info.get("bot_pausado_recepcao"):
             update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida, "unread": True})
 
-            # Cooldown: só responde se nunca respondeu OU faz mais de 15min
+            # CASO 1 — Cortesia (agradecimento): responde gentilmente sem cooldown
+            if is_cortesia:
+                responder_texto(phone, "Por nada! 😊 Nossa equipe já recebeu seus dados e confirmará tudo em instantes. Qualquer dúvida, é só chamar!")
+                return jsonify({"status": "bot_aguardando_recepcao_cortesia"}), 200
+
+            # CASO 2 — Outras mensagens: cooldown de 15min para mensagem de espera
             ultima_resp_str = info.get("ultima_resp_espera_em", "")
             deve_responder = True
             if ultima_resp_str:
