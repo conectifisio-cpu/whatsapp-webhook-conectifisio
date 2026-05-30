@@ -364,7 +364,9 @@ def detectar_pedido_recepcao(msg):
     return None
 
 def marcar_precisa_recepcao(phone, motivo):
-    """Marca paciente como precisando da recepção (selo no card, mantém na coluna)."""
+    """Marca paciente como precisando da recepção (selo no card, mantém na coluna).
+    🛡️ Reseta cooldown da mensagem de espera para que a próxima mensagem do paciente
+    seja respondida (mesmo que a anterior tenha sido respondida há pouco tempo)."""
     import sys
     now_iso = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')
     update_paciente(phone, {
@@ -372,6 +374,7 @@ def marcar_precisa_recepcao(phone, motivo):
         "motivo_recepcao": motivo,
         "marcado_recepcao_em": now_iso,
         "bot_pausado_recepcao": True,  # pausa o bot até "Resolvido"
+        "ultima_resp_espera_em": "",  # reseta cooldown para próxima mensagem ser respondida
         "unread": True
     })
     print(f"[RECEPCAO] {phone} marcado: {motivo}", file=sys.stderr)
@@ -2572,12 +2575,30 @@ def webhook():
         status = info.get("status", "triagem")
 
         # ============================================================
-        # BOT PAUSADO POR PEDIDO À RECEPÇÃO (preço/vaga/desconto)
-        # Mantém card na coluna comercial, apenas silencia o bot
-        # Recepção limpa a flag via botão "✅ Resolvido" no dashboard
+        # BOT PAUSADO POR PEDIDO À RECEPÇÃO (preço/vaga/desconto/Pilates)
+        # Mantém card na coluna comercial, apenas silencia o bot.
+        # 🛡️ Se paciente envia mensagem, responde "mensagem de espera"
+        # com cooldown de 15min (não spamar).
+        # Recepção limpa a flag via botão "✅ Resolvido" no dashboard.
+        # Ver mapa_fluxos.md → Bot pausado com mensagem de espera.
         # ============================================================
         if info.get("bot_pausado_recepcao"):
             update_paciente(phone, {"ultima_mensagem_paciente": msg_recebida, "unread": True})
+
+            # Cooldown: só responde se nunca respondeu OU faz mais de 15min
+            ultima_resp_str = info.get("ultima_resp_espera_em", "")
+            deve_responder = True
+            if ultima_resp_str:
+                try:
+                    ultima_dt = datetime.strptime(ultima_resp_str, '%Y-%m-%dT%H:%M:%S+00:00')
+                    if (datetime.utcnow() - ultima_dt).total_seconds() < 15 * 60:
+                        deve_responder = False
+                except: pass
+
+            if deve_responder:
+                responder_texto(phone, "Só mais um momento, nossa equipe vai te atender 😊")
+                update_paciente(phone, {"ultima_resp_espera_em": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S+00:00')})
+
             return jsonify({"status": "bot_aguardando_recepcao"}), 200
 
         if status == "pausado":
@@ -3940,7 +3961,17 @@ def webhook():
             elif status == "pilates_part_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    # 🛡️ Pilates: cadastra aluno no Feegow + marca precisa_recepcao
+                    # Card permanece na coluna Lead Pilates (ver index.html filtros)
+                    # Ver mapa_fluxos.md → Fluxo Pilates
+                    update_paciente(phone, {"email": msg_recebida})
+                    info_atualizado = get_paciente(phone)
+                    resultado_feegow = integrar_feegow(phone, info_atualizado)
+                    update_data = {"status": "pilates_pendente_recepcao"}
+                    if resultado_feegow:
+                        update_data.update(resultado_feegow)
+                    update_paciente(phone, update_data)
+                    marcar_precisa_recepcao(phone, "Atenção lead Pilates")
                     responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário. Aguarde um instante! 👩‍⚕️")
 
             elif status == "pilates_app":
@@ -3988,7 +4019,16 @@ def webhook():
             elif status == "pilates_app_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    # 🛡️ Pilates: cadastra aluno no Feegow + marca precisa_recepcao
+                    # Ver mapa_fluxos.md → Fluxo Pilates
+                    update_paciente(phone, {"email": msg_recebida})
+                    info_atualizado = get_paciente(phone)
+                    resultado_feegow = integrar_feegow(phone, info_atualizado)
+                    update_data = {"status": "pilates_pendente_recepcao"}
+                    if resultado_feegow:
+                        update_data.update(resultado_feegow)
+                    update_paciente(phone, update_data)
+                    marcar_precisa_recepcao(phone, "Atenção lead Pilates")
                     responder_texto(phone, "Cadastro concluído! 🎉 Nossa equipe vai confirmar o seu horário de Pilates e logo retorna. 👩‍⚕️")
 
             elif status == "pilates_caixa_foto_pedido":
@@ -4028,7 +4068,16 @@ def webhook():
             elif status == "pilates_caixa_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    update_paciente(phone, {"email": msg_recebida, "status": "atendimento_humano"})
+                    # 🛡️ Pilates: cadastra aluno no Feegow + marca precisa_recepcao
+                    # Ver mapa_fluxos.md → Fluxo Pilates
+                    update_paciente(phone, {"email": msg_recebida})
+                    info_atualizado = get_paciente(phone)
+                    resultado_feegow = integrar_feegow(phone, info_atualizado)
+                    update_data = {"status": "pilates_pendente_recepcao"}
+                    if resultado_feegow:
+                        update_data.update(resultado_feegow)
+                    update_paciente(phone, update_data)
+                    marcar_precisa_recepcao(phone, "Atenção lead Pilates")
                     responder_texto(phone, "Recebido! ✅ Tudo pronto! Nossa equipe vai confirmar o seu horário e logo retorna. 👩‍⚕️")
 
         elif status == "triagem_neuro":
