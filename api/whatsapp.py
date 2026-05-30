@@ -2454,23 +2454,10 @@ def webhook():
                 if retomado:
                     return jsonify({"status": "fluxo_retomado"}), 200
 
-        if msg_recebida in ["Particular", "Convênio"]:
-            update_paciente(phone, {"modalidade": msg_recebida})
-            if msg_recebida == "Particular":
-                status_alvo = "agendando" if info.get("feegow_id") else "cadastrando_nome_completo"
-                update_paciente(phone, {"status": status_alvo})
-                if info.get("feegow_id"):
-                    enviar_botoes(phone, "Perfeito! Como você já é nosso paciente, vamos direto para a agenda. Qual o melhor período para você? ☀️⛅", [{"id": "t1", "title": "Manhã"}, {"id": "t2", "title": "Tarde"}])
-                else:
-                    primeiro_nome = info.get("primeiro_nome", "")
-                    msg_nome = f"Perfeito! Para finalizar o cadastro, {primeiro_nome} — preciso do seu nome completo conforme documento:" if primeiro_nome else "Perfeito! Para seu cadastro, qual seu nome completo conforme documento?"
-                    responder_texto(phone, msg_nome)
-                return jsonify({"status": "time_travel_particular"}), 200
-            elif msg_recebida == "Convênio":
-                update_paciente(phone, {"status": "nome_convenio"})
-                secoes = [{"title": "Convênios Aceitos", "rows": [{"id": "c1", "title": "Saúde Petrobras"}, {"id": "c2", "title": "Mediservice"}, {"id": "c3", "title": "Cassi"}, {"id": "c4", "title": "Geap Saúde"}, {"id": "c5", "title": "Amil"}, {"id": "c6", "title": "Bradesco Saúde"}, {"id": "c7", "title": "Porto Seguro Saúde"}, {"id": "c8", "title": "Prevent Senior"}, {"id": "c9", "title": "Saúde Caixa"}]}]
-                enviar_lista(phone, "Entendido! Selecione o seu plano de saúde para validarmos a cobertura:", "Ver Convênios", secoes)
-                return jsonify({"status": "time_travel_convenio"}), 200
+        # 🛡️ REMOVIDO 30/maio/2026 — interceptor global de "Particular"/"Convênio"
+        # bypassava o handler `modalidade` (linha ~4022) e pulava a pergunta de unidade
+        # no fluxo Particular. Bug detectado no Teste 2 (Maria). Ver mapa_fluxos.md.
+        # O handler `modalidade` cuida de tudo: Convênio → lista convênios | Particular → pergunta unidade.
 
         if msg_recebida.lower() in ["recomeçar", "reset", "menu inicial", "⬅️ voltar ao menu"]:
             if info.get("feegow_id"):
