@@ -117,6 +117,9 @@ def validar_cpf(cpf_str):
     return True
 
 def validar_data_nascimento(data_str):
+    """🛡️ Retorna dict {"valida": bool, "data": str_normalizada, "menor_12": bool}.
+    Normaliza ano de 2 dígitos para 4 dígitos (78 → 1978, 05 → 2005).
+    Ver mapa_fluxos.md → bug Cleusa."""
     # Aceitar ano com 2 dígitos (ex: 15/04/60 → 15/04/1960)
     if re.match(r'^\d{2}/\d{2}/\d{2}$', data_str):
         partes = data_str.split('/')
@@ -124,21 +127,21 @@ def validar_data_nascimento(data_str):
         ano_completo = 1900 + ano if ano >= 20 else 2000 + ano
         data_str = f"{partes[0]}/{partes[1]}/{ano_completo}"
     if not re.match(r'^\d{2}/\d{2}/\d{4}$', data_str):
-        return False
+        return {"valida": False, "data": "", "menor_12": False}
     try:
         data_obj = datetime.strptime(data_str, "%d/%m/%Y")
         hoje = datetime.now()
         if data_obj > hoje or data_obj.year < (hoje.year - 120):
-            return False
-        
+            return {"valida": False, "data": "", "menor_12": False}
+
         # Funcionalidade 1: Menor de 12 anos (Encaminhar para Humano)
         idade = hoje.year - data_obj.year - ((hoje.month, hoje.day) < (data_obj.month, data_obj.day))
         if idade < 12:
-            return "menor_12"
-            
-        return True
+            return {"valida": True, "data": data_str, "menor_12": True}
+
+        return {"valida": True, "data": data_str, "menor_12": False}
     except ValueError:
-        return False
+        return {"valida": False, "data": "", "menor_12": False}
 
 # ==========================================
 # FUNÇÕES DE MEMÓRIA E HISTÓRICO (FIREBASE)
@@ -454,8 +457,19 @@ def get_feegow_headers():
     }
 
 def formatar_data_feegow(data_br):
+    """🛡️ Converte data BR para formato Feegow (YYYY-MM-DD).
+    Aceita tanto 8 dígitos (DD/MM/YYYY) quanto 6 dígitos (DD/MM/YY) como fallback.
+    Defesa em profundidade — a validação principal está em validar_data_nascimento.
+    Ver mapa_fluxos.md → bug Cleusa."""
     data_limpa = re.sub(r'\D', '', str(data_br))
-    if len(data_limpa) == 8: return f"{data_limpa[4:]}-{data_limpa[2:4]}-{data_limpa[:2]}"
+    if len(data_limpa) == 8:
+        # DD/MM/YYYY → YYYY-MM-DD
+        return f"{data_limpa[4:]}-{data_limpa[2:4]}-{data_limpa[:2]}"
+    if len(data_limpa) == 6:
+        # DD/MM/YY → normaliza ano (78 → 1978, 05 → 2005) → YYYY-MM-DD
+        ano_2dig = int(data_limpa[4:6])
+        ano_4dig = 1900 + ano_2dig if ano_2dig >= 20 else 2000 + ano_2dig
+        return f"{ano_4dig}-{data_limpa[2:4]}-{data_limpa[:2]}"
     return data_br
 
 def mapear_convenio(nome):
@@ -3916,9 +3930,11 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
 
             elif status == "pilates_part_nasc":
-                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
+                validacao = validar_data_nascimento(msg_recebida)
+                if not validacao["valida"]: responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
                 else:
-                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_part_email"})
+                    # Salva data NORMALIZADA (4 dígitos) — ver mapa_fluxos.md bug Cleusa
+                    update_paciente(phone, {"birthDate": validacao["data"], "status": "pilates_part_email"})
                     responder_texto(phone, "Para completarmos, qual seu melhor E-MAIL?")
 
             elif status == "pilates_part_email":
@@ -3962,9 +3978,11 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
 
             elif status == "pilates_app_nasc":
-                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
+                validacao = validar_data_nascimento(msg_recebida)
+                if not validacao["valida"]: responder_texto(phone, "❌ Data inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
                 else:
-                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_app_email"})
+                    # Salva data NORMALIZADA (4 dígitos) — ver mapa_fluxos.md bug Cleusa
+                    update_paciente(phone, {"birthDate": validacao["data"], "status": "pilates_app_email"})
                     responder_texto(phone, "Para completarmos o registro, qual seu melhor E-MAIL?")
 
             elif status == "pilates_app_email":
@@ -4000,9 +4018,11 @@ def webhook():
                     responder_texto(phone, "Recebido! ✅ Qual sua data de nascimento? (Ex: 15/05/1980)")
 
             elif status == "pilates_caixa_nasc":
-                if not validar_data_nascimento(msg_recebida): responder_texto(phone, "❌ Data inválida. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
+                validacao = validar_data_nascimento(msg_recebida)
+                if not validacao["valida"]: responder_texto(phone, "❌ Data inválida. Digite no formato DD/MM/AAAA (ex: 15/05/1980).")
                 else:
-                    update_paciente(phone, {"birthDate": msg_recebida, "status": "pilates_caixa_email"})
+                    # Salva data NORMALIZADA (4 dígitos) — ver mapa_fluxos.md bug Cleusa
+                    update_paciente(phone, {"birthDate": validacao["data"], "status": "pilates_caixa_email"})
                     responder_texto(phone, "Ótimo! Qual seu melhor E-MAIL?")
 
             elif status == "pilates_caixa_email":
@@ -4179,18 +4199,20 @@ def webhook():
 
         elif status == "data_nascimento":
             validacao = validar_data_nascimento(msg_recebida)
-            if validacao == "menor_12":
+            if not validacao["valida"]:
+                responder_texto(phone, "❌ Data de nascimento inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
+            elif validacao["menor_12"]:
                 # Permite ao paciente confirmar se foi engano antes de bloquear
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "confirmando_menor_12"})
+                # Salva a data NORMALIZADA (4 dígitos) — ver mapa_fluxos.md bug Cleusa
+                update_paciente(phone, {"birthDate": validacao["data"], "status": "confirmando_menor_12"})
                 enviar_botoes(phone,
-                    f"⚠️ A data *{msg_recebida}* indica que o paciente tem menos de 12 anos.\n\n"
+                    f"⚠️ A data *{validacao['data']}* indica que o paciente tem menos de 12 anos.\n\n"
                     "Foi um engano de digitação?",
                     [{"id": "menor_engano", "title": "Sim, foi engano"}, {"id": "menor_correto", "title": "Não, é correta"}]
                 )
-            elif not validacao:
-                responder_texto(phone, "❌ Data de nascimento inválida. Digite uma data real no formato DD/MM/AAAA (ex: 15/05/1980).")
             else:
-                update_paciente(phone, {"birthDate": msg_recebida, "status": "coletando_email"})
+                # Salva a data NORMALIZADA (4 dígitos) — ver mapa_fluxos.md bug Cleusa
+                update_paciente(phone, {"birthDate": validacao["data"], "status": "coletando_email"})
                 responder_texto(phone, "Ótimo! Para finalizar seu cadastro, qual seu melhor E-MAIL?")
 
         elif status == "confirmando_menor_12":
