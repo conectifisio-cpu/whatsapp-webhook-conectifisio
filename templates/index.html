@@ -2010,7 +2010,12 @@
             // Se Sim: envia recomendações via backend
             if (decisao === 'sim') {
                 try {
-                    const params = new URLSearchParams({ phone, nome, unidade, data: dataAgendamento });
+                    // 🛡️ Busca modalidade e servico do paciente para personalizar a mensagem
+                    // Ver mapa_fluxos.md → Mensagem de confirmação pós-agendamento
+                    const pacienteInfo = (typeof allPatients !== 'undefined' && allPatients) ? allPatients.find(x => x.id === phone) : null;
+                    const modalidade = pacienteInfo?.modalidade || '';
+                    const servico = pacienteInfo?.servico || '';
+                    const params = new URLSearchParams({ phone, nome, unidade, data: dataAgendamento, modalidade, servico });
                     const res = await fetch(`${BACKEND_URL}/api/whatsapp?action=send_recomendacao&${params}`);
                     if (!res.ok) {
                         console.warn('Erro ao enviar recomendações:', await res.text());
