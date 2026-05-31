@@ -1903,6 +1903,8 @@ def webhook():
                     "pilates_part_nome", "pilates_part_cpf", "pilates_part_nasc",
                     "pilates_part_email", "pilates_app_nome_completo", "pilates_app_cpf",
                     "pilates_app_nasc", "pilates_app_email", "pilates_app",
+                    "pilates_app_confirma_plano", "pilates_app_cross_sell", "pilates_app_orientar",
+                    "pilates_lead_morno",
                     "pilates_wellhub_id", "pilates_app_periodo", "pilates_app_pref",
                     "pilates_caixa_nome", "pilates_caixa_cpf", "pilates_caixa_nasc",
                     "pilates_caixa_email", "pilates_caixa_foto_pedido",
@@ -3992,14 +3994,71 @@ def webhook():
                     responder_texto(phone, "Tudo pronto! Nossa equipe vai assumir o atendimento agora mesmo para confirmar o seu horário. Aguarde um instante! 👩‍⚕️")
 
             elif status == "pilates_app":
-                update_paciente(phone, {"convenio": msg_recebida})
-                if msg_recebida == "Wellhub":
-                    update_paciente(phone, {"status": "pilates_wellhub_id"})
-                    responder_texto(phone, "Perfeito! Atendemos pelo *plano Golden*. Por favor, informe o seu Wellhub ID.")
+                # 🛡️ Wellhub/TotalPass: após escolher app, confirma se tem plano elegível
+                # Ver mapa_fluxos.md → Fluxo Wellhub / TotalPass
+                plano = "Golden" if msg_recebida == "Wellhub" else "TP5"
+                update_paciente(phone, {"convenio": msg_recebida, "status": "pilates_app_confirma_plano"})
+                enviar_botoes(phone, f"⚠️ Atendemos apenas o plano *{plano}* do {msg_recebida}. Você está com este plano?",
+                    [{"id": "pl_sim", "title": f"✅ Tenho {plano}"}, {"id": "pl_nsei", "title": "❓ Não sei"}, {"id": "pl_outro", "title": "❌ Tenho outro"}])
+
+            elif status == "pilates_app_confirma_plano":
+                # 🛡️ Roteia para A (segue Golden/TP5), B (cross-sell), C (orientar verificação)
+                info_app = info.get("convenio", "Wellhub")
+                if "✅" in msg_recebida or "Tenho Golden" in msg_recebida or "Tenho TP5" in msg_recebida:
+                    # CAMINHO A — segue fluxo Wellhub/TotalPass normal
+                    if info_app == "Wellhub":
+                        update_paciente(phone, {"status": "pilates_wellhub_id"})
+                        responder_texto(phone, "Perfeito! Por favor, informe o seu Wellhub ID.")
+                    else:
+                        update_paciente(phone, {"status": "pilates_app_periodo"})
+                        enviar_botoes(phone, "Perfeito! ✅ Para agilizarmos o agendamento, qual o melhor período para você?",
+                            [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
+                elif "❌" in msg_recebida or "outro" in msg_recebida.lower():
+                    # CAMINHO B — cross-sell
+                    update_paciente(phone, {"status": "pilates_app_cross_sell"})
+                    enviar_botoes(phone,
+                        f"Que pena! Atualmente atendemos apenas o plano de cobertura completa pelo {info_app}.\n\n"
+                        "Mas temos o nosso *Plano Particular* que pode te interessar. Gostaria de conhecer?",
+                        [{"id": "cs_sim", "title": "Sim, quero conhecer"}, {"id": "cs_nao", "title": "Agora não"}])
+                elif "❓" in msg_recebida or "não sei" in msg_recebida.lower() or "nao sei" in msg_recebida.lower():
+                    # CAMINHO C — orientar verificação
+                    update_paciente(phone, {"status": "pilates_app_orientar"})
+                    enviar_botoes(phone,
+                        f"Sem problemas! 😊\n\nPara verificar, abra o app do {info_app} em *'Minha conta'* — o plano aparece logo abaixo do seu nome.\n\n"
+                        "Enquanto verifica, posso te orientar sobre nosso *Plano Particular*, caso seu plano não cubra. Deseja conhecer?",
+                        [{"id": "or_sim", "title": "Sim, quero conhecer"}, {"id": "or_nao", "title": "Vou verificar e volto"}])
                 else:
-                    update_paciente(phone, {"status": "pilates_app_periodo"})
-                    enviar_botoes(phone, "Perfeito! Atendemos pelo *plano TP5*. ✅ Para agilizarmos o agendamento, qual o melhor período para você?", [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
-            
+                    enviar_botoes(phone, "Por favor, escolha uma das opções:",
+                        [{"id": "pl_sim", "title": "✅ Tenho o plano"}, {"id": "pl_nsei", "title": "❓ Não sei"}, {"id": "pl_outro", "title": "❌ Tenho outro"}])
+
+            elif status == "pilates_app_cross_sell":
+                # 🛡️ Caminho B: paciente tinha plano fora de cobertura
+                info_app = info.get("convenio", "Wellhub")
+                if "Sim" in msg_recebida:
+                    # Migra para fluxo Particular
+                    update_paciente(phone, {"modalidade": "Particular", "convenio": "", "status": "pilates_part_experiencia"})
+                    enviar_botoes(phone, "Ótima decisão! ✨\n\nPara personalizarmos sua experiência, você já praticou Pilates? 🧘",
+                        [{"id": "exp_atual", "title": "☑️ Já pratico"}, {"id": "exp_pass", "title": "🌱 Já pratiquei"}, {"id": "exp_nao", "title": "❌ Nunca pratiquei"}])
+                else:
+                    # Lead morno
+                    update_paciente(phone, {"status": "pilates_lead_morno",
+                                            "motivo_lead_morno": f"Plano {info_app} fora da cobertura"})
+                    marcar_precisa_recepcao(phone, "Recuperar lead")
+                    responder_texto(phone, "Tudo certo! Volte quando quiser, será um prazer atender. 😊")
+
+            elif status == "pilates_app_orientar":
+                # 🛡️ Caminho C: paciente não sabia o plano
+                info_app = info.get("convenio", "Wellhub")
+                if "Sim" in msg_recebida:
+                    update_paciente(phone, {"modalidade": "Particular", "convenio": "", "status": "pilates_part_experiencia"})
+                    enviar_botoes(phone, "Ótima decisão! ✨\n\nPara personalizarmos sua experiência, você já praticou Pilates? 🧘",
+                        [{"id": "exp_atual", "title": "☑️ Já pratico"}, {"id": "exp_pass", "title": "🌱 Já pratiquei"}, {"id": "exp_nao", "title": "❌ Nunca pratiquei"}])
+                else:
+                    update_paciente(phone, {"status": "pilates_lead_morno",
+                                            "motivo_lead_morno": f"Não sabia o plano {info_app}"})
+                    marcar_precisa_recepcao(phone, "Recuperar lead")
+                    responder_texto(phone, "Tudo certo! Volte quando quiser, será um prazer atender. 😊")
+
             elif status == "pilates_wellhub_id":
                 update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_periodo"})
                 enviar_botoes(phone, "ID recebido com sucesso! ✅ Para agilizarmos, qual o melhor período para você?", [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
@@ -4036,21 +4095,16 @@ def webhook():
             elif status == "pilates_app_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    # 🛡️ Wellhub/TotalPass: cadastra no Feegow + arquiva card (booking é pelo app)
-                    # NÃO marca precisa_recepcao — recepção não precisa agir
-                    # Bot fica pausado para não atrapalhar (regra global de bot_pausado_recepcao)
+                    # 🛡️ Wellhub/TotalPass (Golden/TP5): cadastra no Feegow + recepção transfere pro NextFit
                     # Ver mapa_fluxos.md → Fluxo Wellhub / TotalPass
                     update_paciente(phone, {"email": msg_recebida})
                     info_atualizado = get_paciente(phone)
                     resultado_feegow = integrar_feegow(phone, info_atualizado)
-                    update_data = {
-                        "status": "arquivado",
-                        "bot_pausado_recepcao": True,
-                        "ultima_resp_espera_em": "",
-                    }
+                    update_data = {"status": "pilates_pendente_recepcao"}
                     if resultado_feegow:
                         update_data.update(resultado_feegow)
                     update_paciente(phone, update_data)
+                    marcar_precisa_recepcao(phone, "Transferir NextFit")
 
                     nome_app = info_atualizado.get("convenio", "do seu aplicativo")
                     responder_texto(phone,
