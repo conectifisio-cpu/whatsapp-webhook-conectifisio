@@ -1899,7 +1899,7 @@ def webhook():
                     "cadastrando_nascimento", "cadastrando_email"
                 ]
                 STATUSES_PILATES = [
-                    "pilates_modalidade", "pilates_part_exp", "pilates_part_periodo",
+                    "pilates_modalidade", "pilates_part_experiencia", "pilates_part_exp", "pilates_part_periodo",
                     "pilates_part_nome", "pilates_part_cpf", "pilates_part_nasc",
                     "pilates_part_email", "pilates_app_nome_completo", "pilates_app_cpf",
                     "pilates_app_nasc", "pilates_app_email", "pilates_app",
@@ -3929,8 +3929,17 @@ def webhook():
                     update_paciente(phone, {"modalidade": "Convênio", "convenio": "Saúde Caixa", "status": "pilates_caixa_foto_pedido"})
                     responder_texto(phone, "Entendido! 🏦 Para o plano Saúde Caixa, envie uma FOTO ou PDF do seu PEDIDO MÉDICO atualizado para seguirmos.")
                 elif "Particular" in msg_recebida:
-                    update_paciente(phone, {"modalidade": "Particular", "status": "pilates_part_exp"})
-                    enviar_botoes(phone, "Ótima escolha! ✨ O Pilates vai ajudar a fortalecer o corpo. Gostaria de agendar uma aula experimental gratuita para conhecer o nosso estúdio?", [{"id": "pe_sim", "title": "Sim, gostaria"}, {"id": "pe_nao", "title": "Não, já quero começar"}])
+                    # 🛡️ Pilates Particular: pergunta experiência ANTES da aula experimental
+                    # Ver mapa_fluxos.md → Experiência com Pilates
+                    update_paciente(phone, {"modalidade": "Particular", "status": "pilates_part_experiencia"})
+                    enviar_botoes(phone, "Para personalizarmos sua experiência, você já praticou Pilates? 🧘",
+                        [{"id": "exp_atual", "title": "☑️ Já pratico"}, {"id": "exp_pass", "title": "🌱 Já pratiquei"}, {"id": "exp_nao", "title": "❌ Nunca pratiquei"}])
+
+            elif status == "pilates_part_experiencia":
+                # 🛡️ Captura nível de experiência do lead Pilates Particular
+                # Ver mapa_fluxos.md → Experiência com Pilates
+                update_paciente(phone, {"experiencia_pilates": msg_recebida, "status": "pilates_part_exp"})
+                enviar_botoes(phone, "Ótima escolha! ✨ O Pilates vai ajudar a fortalecer o corpo. Gostaria de agendar uma aula experimental gratuita para conhecer o nosso estúdio?", [{"id": "pe_sim", "title": "Sim, gostaria"}, {"id": "pe_nao", "title": "Não, já quero começar"}])
 
             elif status == "pilates_part_exp":
                 update_paciente(phone, {"interesse_experimental": msg_recebida, "status": "pilates_part_periodo"})
