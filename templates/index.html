@@ -1670,7 +1670,14 @@
                                 const safeTitle = p.title || 'Desconhecido';
                                 const safePhone = p.cellphone || p.id || '';
                                 const displayMsg = ultimaMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                                const displayQueixa = (p.queixa || p.queixa_ia || 'Aguardando resposta...').replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                                // 🛡️ Card de Pilates mostra "Experiência com Pilates" em vez de queixa
+                                // Ver mapa_fluxos.md → Experiência com Pilates
+                                const isPilates = p.servico === 'Pilates Studio';
+                                const tituloCampoClinico = isPilates ? 'Experiência com Pilates' : 'O que te trouxe aqui?';
+                                const valorCampoClinico = isPilates
+                                    ? (p.experiencia_pilates || 'Aguardando resposta...')
+                                    : (p.queixa || p.queixa_ia || 'Aguardando resposta...');
+                                const displayQueixa = valorCampoClinico.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
                                 const isFlagged = flaggedCards.has(p.id);
                                 return `
@@ -1718,8 +1725,8 @@
 
                                     <div class="space-y-2 mt-auto">
                                         <div class="bg-blue-50/50 p-2 rounded-lg border border-blue-100">
-                                            <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1 flex items-center gap-1">O que te trouxe aqui?</p>
-                                            <p class="text-[10px] text-blue-800 italic line-clamp-2">"🤖 ${displayQueixa}"</p>
+                                            <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1 flex items-center gap-1">${tituloCampoClinico}</p>
+                                            <p class="text-[10px] text-blue-800 italic line-clamp-2">"${isPilates ? '🧘' : '🤖'} ${displayQueixa}"</p>
                                         </div>
                                         <div class="bg-slate-50 p-2 rounded-lg border border-slate-200">
                                             <p class="text-[8px] text-slate-500 font-black uppercase tracking-widest mb-1 flex items-center gap-1">Última Interação do Cliente</p>
@@ -2190,11 +2197,22 @@
                     p.id ? `<div class="psp-row"><span class="psp-label">Celular</span><span class="psp-value">${p.id}</span></div>` : '',
                 ].filter(Boolean).join('');
 
-                const pspQueixa = (p.queixa || p.queixa_ia) ? `
+                // 🛡️ Card de detalhes: Pilates mostra "Experiência com Pilates", outros mostram queixa
+                // Ver mapa_fluxos.md → Experiência com Pilates
+                const pspIsPilates = p.servico === 'Pilates Studio';
+                const pspQueixa = pspIsPilates ? (
+                    p.experiencia_pilates ? `
+                    <div class="psp-card-section bg-blue-50/50 border-blue-100">
+                        <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">Experiência com Pilates</p>
+                        <p class="text-[10px] text-blue-800 italic">"🧘 ${p.experiencia_pilates}"</p>
+                    </div>` : ''
+                ) : (
+                    (p.queixa || p.queixa_ia) ? `
                     <div class="psp-card-section bg-blue-50/50 border-blue-100">
                         <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">O que te trouxe aqui?</p>
                         <p class="text-[10px] text-blue-800 italic">"🤖 ${p.queixa || p.queixa_ia}"</p>
-                    </div>` : '';
+                    </div>` : ''
+                );
 
                 const pspImages = (p.carteirinha_media_id || p.pedido_media_id) ? `
                     <div class="psp-card-section">
