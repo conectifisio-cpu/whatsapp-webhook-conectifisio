@@ -3923,8 +3923,10 @@ def webhook():
                     secoes = [{"title": "Nossos Serviços", "rows": [{"id": "e1", "title": "Fisio Ortopédica"}, {"id": "e2", "title": "Fisio Neurológica"}, {"id": "e3", "title": "Fisio Pélvica"}, {"id": "e4", "title": "Acupuntura"}, {"id": "e5", "title": "Pilates Studio"}, {"id": "e6", "title": "Recovery"}, {"id": "e7", "title": "Liberação Miofascial"}]}]
                     enviar_lista(phone, "Voltando ao menu de especialidades. Qual serviço você procura hoje?", "Ver Serviços", secoes)
                 elif "Wellhub" in msg_recebida or "Totalpass" in msg_recebida:
+                    # 🛡️ Wellhub/TotalPass: informar planos aceitos antes da escolha
+                    # Ver mapa_fluxos.md → Fluxo Wellhub / TotalPass
                     update_paciente(phone, {"modalidade": "Parceria App", "status": "pilates_app"})
-                    enviar_botoes(phone, "Qual desses aplicativos você utiliza para o seu plano?", [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}])
+                    enviar_botoes(phone, "Atendemos *Wellhub (Golden)* e *TotalPass (TP5)*. Qual o seu?", [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}])
                 elif "Saúde Caixa" in msg_recebida:
                     update_paciente(phone, {"modalidade": "Convênio", "convenio": "Saúde Caixa", "status": "pilates_caixa_foto_pedido"})
                     responder_texto(phone, "Entendido! 🏦 Para o plano Saúde Caixa, envie uma FOTO ou PDF do seu PEDIDO MÉDICO atualizado para seguirmos.")
@@ -3993,10 +3995,10 @@ def webhook():
                 update_paciente(phone, {"convenio": msg_recebida})
                 if msg_recebida == "Wellhub":
                     update_paciente(phone, {"status": "pilates_wellhub_id"})
-                    responder_texto(phone, "Por favor, informe o seu Wellhub ID.")
+                    responder_texto(phone, "Perfeito! Atendemos pelo *plano Golden*. Por favor, informe o seu Wellhub ID.")
                 else:
                     update_paciente(phone, {"status": "pilates_app_periodo"})
-                    enviar_botoes(phone, "Tudo certo com o Totalpass! ✅ Para agilizarmos o agendamento, qual o melhor período para você?", [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
+                    enviar_botoes(phone, "Perfeito! Atendemos pelo *plano TP5*. ✅ Para agilizarmos o agendamento, qual o melhor período para você?", [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
             
             elif status == "pilates_wellhub_id":
                 update_paciente(phone, {"numCarteirinha": msg_recebida, "status": "pilates_app_periodo"})
@@ -4034,17 +4036,30 @@ def webhook():
             elif status == "pilates_app_email":
                 if "@" not in msg_recebida or "." not in msg_recebida: responder_texto(phone, "❌ E-mail inválido. Por favor, digite um e-mail válido.")
                 else:
-                    # 🛡️ Pilates: cadastra aluno no Feegow + marca precisa_recepcao
-                    # Ver mapa_fluxos.md → Fluxo Pilates
+                    # 🛡️ Wellhub/TotalPass: cadastra no Feegow + arquiva card (booking é pelo app)
+                    # NÃO marca precisa_recepcao — recepção não precisa agir
+                    # Bot fica pausado para não atrapalhar (regra global de bot_pausado_recepcao)
+                    # Ver mapa_fluxos.md → Fluxo Wellhub / TotalPass
                     update_paciente(phone, {"email": msg_recebida})
                     info_atualizado = get_paciente(phone)
                     resultado_feegow = integrar_feegow(phone, info_atualizado)
-                    update_data = {"status": "pilates_pendente_recepcao"}
+                    update_data = {
+                        "status": "arquivado",
+                        "bot_pausado_recepcao": True,
+                        "ultima_resp_espera_em": "",
+                    }
                     if resultado_feegow:
                         update_data.update(resultado_feegow)
                     update_paciente(phone, update_data)
-                    marcar_precisa_recepcao(phone, "Atenção lead Pilates")
-                    responder_texto(phone, "Cadastro concluído! 🎉 Nossa equipe vai confirmar o seu horário de Pilates e logo retorna. 👩‍⚕️")
+
+                    nome_app = info_atualizado.get("convenio", "do seu aplicativo")
+                    responder_texto(phone,
+                        "Cadastro concluído! 🎉\n\n"
+                        f"📲 *O agendamento das aulas é feito direto pelo app do {nome_app}*. "
+                        "Nossa unidade aparece como *Conectifisio São Caetano* — "
+                        "escolha o horário disponível direto por lá.\n\n"
+                        "Qualquer dúvida, nossa equipe está à disposição. 😊"
+                    )
 
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
