@@ -1670,13 +1670,40 @@
                                 const safeTitle = p.title || 'Desconhecido';
                                 const safePhone = p.cellphone || p.id || '';
                                 const displayMsg = ultimaMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                                // 🛡️ Card de Pilates mostra "Experiência com Pilates" em vez de queixa
-                                // Ver mapa_fluxos.md → Experiência com Pilates
+                                // 🛡️ Card de Pilates: 4 sub-tipos diferentes
+                                // Ver mapa_fluxos.md → Experiência com Pilates / Fluxo Wellhub TotalPass
                                 const isPilates = p.servico === 'Pilates Studio';
-                                const tituloCampoClinico = isPilates ? 'Experiência com Pilates' : 'O que te trouxe aqui?';
-                                const valorCampoClinico = isPilates
-                                    ? (p.experiencia_pilates || 'Aguardando resposta...')
-                                    : (p.queixa || p.queixa_ia || 'Aguardando resposta...');
+                                let tituloCampoClinico, valorCampoClinico, emojiCampoClinico;
+                                if (isPilates) {
+                                    const isLeadMorno = p.status === 'pilates_lead_morno';
+                                    const isWellhub = p.convenio === 'Wellhub';
+                                    const isTotalpass = p.convenio === 'Totalpass';
+                                    if (isLeadMorno) {
+                                        // Lead morno: mostra origem (Wellhub/TotalPass) + motivo de não conversão
+                                        tituloCampoClinico = p.convenio || 'Pilates';
+                                        valorCampoClinico = p.motivo_lead_morno || 'Lead em recuperação';
+                                        emojiCampoClinico = '🔍';
+                                    } else if (isWellhub) {
+                                        // Wellhub Golden: mostra Wellhub ID
+                                        tituloCampoClinico = 'Wellhub';
+                                        valorCampoClinico = p.numCarteirinha ? `ID ${p.numCarteirinha}` : 'Aguardando ID...';
+                                        emojiCampoClinico = '🎟️';
+                                    } else if (isTotalpass) {
+                                        // TotalPass TP5: mostra plano
+                                        tituloCampoClinico = 'TotalPass';
+                                        valorCampoClinico = 'Plano TP5';
+                                        emojiCampoClinico = '🎟️';
+                                    } else {
+                                        // Particular: mostra experiência
+                                        tituloCampoClinico = 'Experiência com Pilates';
+                                        valorCampoClinico = p.experiencia_pilates || 'Aguardando resposta...';
+                                        emojiCampoClinico = '🧘';
+                                    }
+                                } else {
+                                    tituloCampoClinico = 'O que te trouxe aqui?';
+                                    valorCampoClinico = p.queixa || p.queixa_ia || 'Aguardando resposta...';
+                                    emojiCampoClinico = '🤖';
+                                }
                                 const displayQueixa = valorCampoClinico.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
                                 const isFlagged = flaggedCards.has(p.id);
@@ -1726,7 +1753,7 @@
                                     <div class="space-y-2 mt-auto">
                                         <div class="bg-blue-50/50 p-2 rounded-lg border border-blue-100">
                                             <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1 flex items-center gap-1">${tituloCampoClinico}</p>
-                                            <p class="text-[10px] text-blue-800 italic line-clamp-2">"${isPilates ? '🧘' : '🤖'} ${displayQueixa}"</p>
+                                            <p class="text-[10px] text-blue-800 italic line-clamp-2">"${emojiCampoClinico} ${displayQueixa}"</p>
                                         </div>
                                         <div class="bg-slate-50 p-2 rounded-lg border border-slate-200">
                                             <p class="text-[8px] text-slate-500 font-black uppercase tracking-widest mb-1 flex items-center gap-1">Última Interação do Cliente</p>
@@ -2198,21 +2225,46 @@
                 ].filter(Boolean).join('');
 
                 // 🛡️ Card de detalhes: Pilates mostra "Experiência com Pilates", outros mostram queixa
-                // Ver mapa_fluxos.md → Experiência com Pilates
+                // 🛡️ Card de detalhes: Pilates tem 4 sub-tipos (lead morno, Wellhub, TotalPass, Particular)
+                // Ver mapa_fluxos.md → Experiência com Pilates / Fluxo Wellhub TotalPass
                 const pspIsPilates = p.servico === 'Pilates Studio';
-                const pspQueixa = pspIsPilates ? (
-                    p.experiencia_pilates ? `
+                let pspQueixaTitle, pspQueixaValue, pspQueixaEmoji, pspShouldShow;
+                if (pspIsPilates) {
+                    const isLeadMorno = p.status === 'pilates_lead_morno';
+                    const isWellhub = p.convenio === 'Wellhub';
+                    const isTotalpass = p.convenio === 'Totalpass';
+                    if (isLeadMorno) {
+                        pspQueixaTitle = p.convenio || 'Pilates';
+                        pspQueixaValue = p.motivo_lead_morno || 'Lead em recuperação';
+                        pspQueixaEmoji = '🔍';
+                        pspShouldShow = true;
+                    } else if (isWellhub) {
+                        pspQueixaTitle = 'Wellhub';
+                        pspQueixaValue = p.numCarteirinha ? `ID ${p.numCarteirinha}` : 'Aguardando ID...';
+                        pspQueixaEmoji = '🎟️';
+                        pspShouldShow = true;
+                    } else if (isTotalpass) {
+                        pspQueixaTitle = 'TotalPass';
+                        pspQueixaValue = 'Plano TP5';
+                        pspQueixaEmoji = '🎟️';
+                        pspShouldShow = true;
+                    } else {
+                        pspQueixaTitle = 'Experiência com Pilates';
+                        pspQueixaValue = p.experiencia_pilates || '';
+                        pspQueixaEmoji = '🧘';
+                        pspShouldShow = !!p.experiencia_pilates;
+                    }
+                } else {
+                    pspQueixaTitle = 'O que te trouxe aqui?';
+                    pspQueixaValue = p.queixa || p.queixa_ia || '';
+                    pspQueixaEmoji = '🤖';
+                    pspShouldShow = !!(p.queixa || p.queixa_ia);
+                }
+                const pspQueixa = pspShouldShow ? `
                     <div class="psp-card-section bg-blue-50/50 border-blue-100">
-                        <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">Experiência com Pilates</p>
-                        <p class="text-[10px] text-blue-800 italic">"🧘 ${p.experiencia_pilates}"</p>
-                    </div>` : ''
-                ) : (
-                    (p.queixa || p.queixa_ia) ? `
-                    <div class="psp-card-section bg-blue-50/50 border-blue-100">
-                        <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">O que te trouxe aqui?</p>
-                        <p class="text-[10px] text-blue-800 italic">"🤖 ${p.queixa || p.queixa_ia}"</p>
-                    </div>` : ''
-                );
+                        <p class="text-[8px] text-blue-600 font-black uppercase tracking-widest mb-1">${pspQueixaTitle}</p>
+                        <p class="text-[10px] text-blue-800 italic">"${pspQueixaEmoji} ${pspQueixaValue}"</p>
+                    </div>` : '';
 
                 const pspImages = (p.carteirinha_media_id || p.pedido_media_id) ? `
                     <div class="psp-card-section">
