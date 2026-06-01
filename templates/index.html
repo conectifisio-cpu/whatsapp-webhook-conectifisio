@@ -1670,19 +1670,25 @@
                                 const safeTitle = p.title || 'Desconhecido';
                                 const safePhone = p.cellphone || p.id || '';
                                 const displayMsg = ultimaMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                                // 🛡️ Card de Pilates: 4 sub-tipos diferentes
-                                // Ver mapa_fluxos.md → Experiência com Pilates / Fluxo Wellhub TotalPass
+                                // 🛡️ Card de Pilates: 5 sub-tipos diferentes
+                                // Ver mapa_fluxos.md → Experiência com Pilates / Fluxo Wellhub TotalPass / Fluxo Saúde Caixa
                                 const isPilates = p.servico === 'Pilates Studio';
                                 let tituloCampoClinico, valorCampoClinico, emojiCampoClinico;
                                 if (isPilates) {
                                     const isLeadMorno = p.status === 'pilates_lead_morno';
                                     const isWellhub = p.convenio === 'Wellhub';
                                     const isTotalpass = p.convenio === 'Totalpass';
+                                    const isCaixa = p.modalidade === 'Convênio'; // Saúde Caixa
                                     if (isLeadMorno) {
                                         // Lead morno: mostra origem (Wellhub/TotalPass) + motivo de não conversão
                                         tituloCampoClinico = p.convenio || 'Pilates';
                                         valorCampoClinico = p.motivo_lead_morno || 'Lead em recuperação';
                                         emojiCampoClinico = '🔍';
+                                    } else if (isCaixa) {
+                                        // Saúde Caixa: igual convênio Fisio padrão (mostra queixa)
+                                        tituloCampoClinico = 'O que te trouxe aqui?';
+                                        valorCampoClinico = p.queixa || p.queixa_ia || 'Aguardando resposta...';
+                                        emojiCampoClinico = '🤖';
                                     } else if (isWellhub) {
                                         // Wellhub Golden: mostra Wellhub ID
                                         tituloCampoClinico = 'Wellhub';
@@ -2225,19 +2231,26 @@
                 ].filter(Boolean).join('');
 
                 // 🛡️ Card de detalhes: Pilates mostra "Experiência com Pilates", outros mostram queixa
-                // 🛡️ Card de detalhes: Pilates tem 4 sub-tipos (lead morno, Wellhub, TotalPass, Particular)
-                // Ver mapa_fluxos.md → Experiência com Pilates / Fluxo Wellhub TotalPass
+                // 🛡️ Card de detalhes: Pilates tem 5 sub-tipos (lead morno, Saúde Caixa, Wellhub, TotalPass, Particular)
+                // Ver mapa_fluxos.md → Experiência com Pilates / Fluxo Wellhub TotalPass / Fluxo Saúde Caixa
                 const pspIsPilates = p.servico === 'Pilates Studio';
                 let pspQueixaTitle, pspQueixaValue, pspQueixaEmoji, pspShouldShow;
                 if (pspIsPilates) {
                     const isLeadMorno = p.status === 'pilates_lead_morno';
                     const isWellhub = p.convenio === 'Wellhub';
                     const isTotalpass = p.convenio === 'Totalpass';
+                    const isCaixa = p.modalidade === 'Convênio'; // Saúde Caixa
                     if (isLeadMorno) {
                         pspQueixaTitle = p.convenio || 'Pilates';
                         pspQueixaValue = p.motivo_lead_morno || 'Lead em recuperação';
                         pspQueixaEmoji = '🔍';
                         pspShouldShow = true;
+                    } else if (isCaixa) {
+                        // Saúde Caixa: igual convênio Fisio padrão
+                        pspQueixaTitle = 'O que te trouxe aqui?';
+                        pspQueixaValue = p.queixa || p.queixa_ia || '';
+                        pspQueixaEmoji = '🤖';
+                        pspShouldShow = !!(p.queixa || p.queixa_ia);
                     } else if (isWellhub) {
                         pspQueixaTitle = 'Wellhub';
                         pspQueixaValue = p.numCarteirinha ? `ID ${p.numCarteirinha}` : 'Aguardando ID...';
