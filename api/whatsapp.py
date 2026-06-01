@@ -1906,8 +1906,9 @@ def webhook():
                     "pilates_app_confirma_plano", "pilates_app_cross_sell", "pilates_app_orientar",
                     "pilates_lead_morno",
                     "pilates_wellhub_id", "pilates_app_periodo", "pilates_app_pref",
+                    "pilates_caixa_queixa", "pilates_caixa_num_carteirinha", "pilates_caixa_foto_cart",
                     "pilates_caixa_nome", "pilates_caixa_cpf", "pilates_caixa_nasc",
-                    "pilates_caixa_email", "pilates_caixa_foto_pedido",
+                    "pilates_caixa_email", "pilates_caixa_foto_pedido", "pilates_caixa_periodo",
                     "instagram_pilates_q1", "instagram_pilates_q2",
                     "transferencia_pilates"
                 ]
@@ -3930,8 +3931,10 @@ def webhook():
                     update_paciente(phone, {"modalidade": "Parceria App", "status": "pilates_app"})
                     enviar_botoes(phone, "Atendemos *Wellhub (Golden)* e *TotalPass (TP5)*. Qual o seu?", [{"id": "w1", "title": "Wellhub"}, {"id": "t1", "title": "Totalpass"}])
                 elif "Saúde Caixa" in msg_recebida:
-                    update_paciente(phone, {"modalidade": "Convênio", "convenio": "Saúde Caixa", "status": "pilates_caixa_foto_pedido"})
-                    responder_texto(phone, "Entendido! 🏦 Para o plano Saúde Caixa, envie uma FOTO ou PDF do seu PEDIDO MÉDICO atualizado para seguirmos.")
+                    # 🛡️ Saúde Caixa Pilates: comporta-se como convênio Fisio padrão
+                    # Ver mapa_fluxos.md → Fluxo Pilates Saúde Caixa
+                    update_paciente(phone, {"modalidade": "Convênio", "convenio": "Saúde Caixa", "status": "pilates_caixa_queixa"})
+                    responder_texto(phone, "Entendido! 🏦 Para o plano Saúde Caixa, me conte brevemente: o que te trouxe à clínica hoje?")
                 elif "Particular" in msg_recebida:
                     # 🛡️ Pilates Particular: pergunta experiência ANTES da aula experimental
                     # Ver mapa_fluxos.md → Experiência com Pilates
@@ -4115,11 +4118,46 @@ def webhook():
                         "Qualquer dúvida, nossa equipe está à disposição. 😊"
                     )
 
+            elif status == "pilates_caixa_queixa":
+                # 🛡️ Saúde Caixa Pilates: captura queixa (igual convênio Fisio)
+                update_paciente(phone, {"queixa": msg_recebida, "status": "pilates_caixa_num_carteirinha"})
+                responder_texto(phone, "Anotado! ✅ Pode me informar o *número da sua carteirinha* do Saúde Caixa?")
+
+            elif status == "pilates_caixa_num_carteirinha":
+                num_limpo = re.sub(r'\D', '', msg_recebida)
+                _espera = ["momento", "aguarda", "agora não", "depois", "vou pegar", "não tenho", "nao tenho", "vou ver", "preciso ver"]
+                if any(e in msg_limpa for e in _espera) and len(num_limpo) < 4:
+                    update_paciente(phone, {"status": "pausado", "unread": True, "ultima_mensagem_paciente": msg_recebida})
+                    responder_texto(phone, "Sem problema! 😊 Quando tiver o número da carteirinha em mãos, é só me enviar aqui que continuamos.")
+                elif len(num_limpo) < 4:
+                    responder_texto(phone, "❌ Número de carteirinha inválido. Por favor, digite apenas os números da sua carteirinha (mínimo 4 dígitos):")
+                else:
+                    update_paciente(phone, {"numCarteirinha": num_limpo, "status": "pilates_caixa_foto_cart"})
+                    responder_texto(phone, "Anotado! ✅ Agora a parte documental:\n\nEnvie uma *FOTO NÍTIDA da sua carteirinha* do Saúde Caixa (use o ícone de clipe ou câmera do WhatsApp).")
+
+            elif status == "pilates_caixa_foto_cart":
+                if not tem_anexo: responder_texto(phone, "❌ Não recebi a imagem. Por favor, envie a foto da sua carteirinha.")
+                else:
+                    media_data = salvar_midia_imediata(phone, "carteirinha", media_id) if media_id else {}
+                    update_fields = {
+                        "status": "pilates_caixa_foto_pedido",
+                        "tem_foto_carteirinha": True,
+                    }
+                    update_fields.update(media_data)
+                    update_paciente(phone, update_fields)
+                    responder_texto(phone, "Foto recebida! ✅\n\nAgora, envie a *FOTO ou PDF do seu PEDIDO MÉDICO* atualizado.")
+
             elif status == "pilates_caixa_foto_pedido":
                 if not tem_anexo: responder_texto(phone, "❌ Por favor, envie o Pedido Médico.")
                 else:
-                    update_paciente(phone, {"status": "pilates_caixa_periodo", "tem_foto_pedido": True, "pedido_media_id": media_id})
-                    enviar_botoes(phone, "Documentação recebida com sucesso! ✅ Para agilizarmos o agendamento, qual o melhor período para você?", [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
+                    media_data = salvar_midia_imediata(phone, "pedido", media_id) if media_id else {}
+                    update_fields = {
+                        "status": "pilates_caixa_periodo",
+                        "tem_foto_pedido": True,
+                    }
+                    update_fields.update(media_data)
+                    update_paciente(phone, update_fields)
+                    enviar_botoes(phone, "Documentação completa! 🎉 ✅ Para agilizarmos o agendamento, qual o melhor período para você?", [{"id": "pe_m", "title": "☀️ Manhã"}, {"id": "pe_t", "title": "⛅ Tarde"}, {"id": "pe_n", "title": "🌙 Noite"}])
             
             elif status == "pilates_caixa_periodo":
                 update_paciente(phone, {"periodo": msg_recebida})
